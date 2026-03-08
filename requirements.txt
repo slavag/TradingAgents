@@ -15,8 +15,10 @@ tqdm
 pytz
 redis
 chainlit
+fastapi
 rich
 typer
 questionary
 langchain_anthropic
 langchain-google-genai
+uvicorn

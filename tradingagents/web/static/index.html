@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TradingAgents Web</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="pane topbar">
+      <div class="brand-block">
+        <p class="eyebrow">TradingAgents Web</p>
+        <h1>Research Desk</h1>
+        <p class="lede">
+          Run multi-ticker analysis, watch jobs complete live, and keep a market-chatter feed beside the workflow.
+        </p>
+      </div>
+      <div class="status-cluster">
+        <article class="status-tile">
+          <span>Backend</span>
+          <strong id="health-indicator">Checking…</strong>
+        </article>
+        <article class="status-tile">
+          <span>Current Job</span>
+          <strong id="job-indicator">Idle</strong>
+        </article>
+      </div>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="pane controls-pane">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Configuration</p>
+            <h2>Launch Analysis</h2>
+          </div>
+          <span class="chip neutral">Batch</span>
+        </div>
+
+        <form id="analysis-form" class="control-form">
+          <label class="field">
+            <span>Tickers</span>
+            <textarea id="tickers" name="tickers" rows="4" placeholder="ASTS, NVDA, SPY"></textarea>
+          </label>
+
+          <div class="compact-grid two">
+            <label class="field">
+              <span>Analysis Date</span>
+              <input id="analysis-date" name="analysis_date" type="date" />
+            </label>
+            <label class="field">
+              <span>Research Depth</span>
+              <select id="research-depth" name="research_depth">
+                <option value="1">Shallow</option>
+                <option value="3" selected>Medium</option>
+                <option value="5">Deep</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="field">
+            <span>Provider</span>
+            <select id="provider" name="llm_provider">
+              <option value="openai" selected>OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="google">Google</option>
+              <option value="xai">xAI</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="ollama">Ollama</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Backend URL</span>
+            <input id="backend-url" name="backend_url" type="text" placeholder="https://api.openai.com/v1" />
+          </label>
+
+          <div class="compact-grid two">
+            <label class="field">
+              <span>Quick Thinker</span>
+              <input id="quick-thinker" name="quick_thinker" type="text" value="gpt-5.4" />
+            </label>
+            <label class="field">
+              <span>Deep Thinker</span>
+              <input id="deep-thinker" name="deep_thinker" type="text" value="gpt-5.4" />
+            </label>
+          </div>
+
+          <div class="compact-grid two provider-grid">
+            <label id="openai-effort-wrap" class="field">
+              <span>OpenAI Reasoning</span>
+              <select id="openai-effort" name="openai_reasoning_effort">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+            <label id="google-thinking-wrap" class="field hidden">
+              <span>Gemini Thinking</span>
+              <select id="google-thinking" name="google_thinking_level">
+                <option value="">Default</option>
+                <option value="minimal">Minimal</option>
+                <option value="low">Low</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+          </div>
+
+          <fieldset class="analyst-block">
+            <legend>Analysts</legend>
+            <label><input type="checkbox" name="analyst" value="market" checked /> Market</label>
+            <label><input type="checkbox" name="analyst" value="social" checked /> Social</label>
+            <label><input type="checkbox" name="analyst" value="news" checked /> News</label>
+            <label><input type="checkbox" name="analyst" value="fundamentals" checked /> Fundamentals</label>
+          </fieldset>
+
+          <div class="toggle-line">
+            <label><input id="save-reports" name="save_reports" type="checkbox" checked /> Save reports to disk</label>
+          </div>
+
+          <label id="export-path-wrap" class="field">
+            <span>Export Path</span>
+            <input id="export-path" name="export_path" type="text" placeholder="/Users/slava/Documents/Development/private/investment/TradingAgents/reports/web_batch" />
+          </label>
+
+          <div class="button-row">
+            <button class="primary-button" type="submit">Start Run</button>
+            <button class="secondary-button" type="button" id="reset-form">Reset</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="center-column">
+        <section class="pane run-pane">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">Execution</p>
+              <h2>Run Status</h2>
+            </div>
+            <span id="status-badge" class="chip neutral">Idle</span>
+          </div>
+
+          <div class="summary-strip">
+            <article class="summary-card">
+              <span>Current Ticker</span>
+              <strong id="current-ticker">—</strong>
+            </article>
+            <article class="summary-card">
+              <span>Completed</span>
+              <strong id="completed-count">0 / 0</strong>
+            </article>
+            <article class="summary-card wide">
+              <span>Message</span>
+              <strong id="progress-message">Waiting for a run.</strong>
+            </article>
+          </div>
+
+          <div class="live-grid">
+            <section class="subpane progress-subpane">
+              <div class="subpane-head">
+                <h3>Execution Progress</h3>
+              </div>
+              <div class="table-wrap">
+                <table class="progress-table">
+                  <thead>
+                    <tr>
+                      <th>Team</th>
+                      <th>Agent</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="progress-body">
+                    <tr>
+                      <td colspan="3" class="placeholder-row">Progress table will update when the run starts.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="subpane activity-subpane">
+              <div class="subpane-head">
+                <h3>Messages &amp; Tools</h3>
+              </div>
+              <div id="recent-events" class="event-feed empty-state">Activity will appear here once agents start working.</div>
+              <div class="report-snippet">
+                <p class="section-kicker">Current Report</p>
+                <pre id="current-report">Waiting for report output.</pre>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="pane results-pane">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">Output</p>
+              <h2>Ticker Results</h2>
+            </div>
+          </div>
+          <div id="results-list" class="results-list empty-state">No analysis has been run yet.</div>
+        </section>
+      </section>
+
+      <aside class="right-column">
+        <section class="pane actions-pane">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">Reports</p>
+              <h2>Open and Export</h2>
+            </div>
+            <span id="report-state" class="chip neutral">Waiting</span>
+          </div>
+
+          <div class="report-actions">
+            <button id="open-html-report" class="primary-button" type="button" disabled>Open HTML Report</button>
+            <button id="download-markdown-report" class="secondary-button" type="button" disabled>Download Markdown</button>
+          </div>
+
+          <div class="report-notes">
+            <article class="note-card">
+              <span>Default Save</span>
+              <strong id="default-report-path">No report yet.</strong>
+            </article>
+            <article class="note-card">
+              <span>Custom Save</span>
+              <strong id="custom-report-path">Not written yet.</strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="pane speaking-pane">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">Chatter</p>
+              <h2>Speaking Stocks</h2>
+            </div>
+            <button id="refresh-speaking" class="ghost-button" type="button">Refresh</button>
+          </div>
+
+          <div class="compact-grid two">
+            <label class="field slim">
+              <span>Top N</span>
+              <input id="speaking-topn" type="number" min="1" max="50" value="10" />
+            </label>
+            <label class="field slim">
+              <span>Lookback</span>
+              <input id="speaking-lookback" type="number" min="5" max="120" value="30" />
+            </label>
+          </div>
+
+          <div id="speaking-list" class="speaking-list empty-state">Loading chatter universe…</div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

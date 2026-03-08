@@ -1110,6 +1110,69 @@ def build_consolidated_report(analysis_results, analysis_date: str) -> str:
 def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
     """Build an HTML version of the consolidated report."""
     generated_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    completed_results = [result for result in analysis_results if not result.get("error")]
+    avg_confidence = (
+        round(
+            sum(result.get("confidence_score", 0) for result in completed_results if result.get("confidence_score") is not None)
+            / max(1, len([result for result in completed_results if result.get("confidence_score") is not None]))
+        )
+        if any(result.get("confidence_score") is not None for result in completed_results)
+        else None
+    )
+    avg_target = (
+        round(
+            sum(result.get("price_target", 0) for result in completed_results if result.get("price_target") is not None)
+            / max(1, len([result for result in completed_results if result.get("price_target") is not None])),
+            2,
+        )
+        if any(result.get("price_target") is not None for result in completed_results)
+        else None
+    )
+
+    def decision_kind(decision: str | None) -> str:
+        text = (decision or "").lower()
+        if "buy" in text:
+            return "buy"
+        if "sell" in text:
+            return "sell"
+        if decision:
+            return "hold"
+        return "failed"
+
+    def decision_icon(kind: str) -> str:
+        if kind == "buy":
+            return (
+                "<svg viewBox='0 0 24 24' aria-hidden='true'>"
+                "<path d='M12 4l6 7h-4v9H10v-9H6z'/></svg>"
+            )
+        if kind == "sell":
+            return (
+                "<svg viewBox='0 0 24 24' aria-hidden='true'>"
+                "<path d='M12 20l-6-7h4V4h4v9h4z'/></svg>"
+            )
+        return (
+            "<svg viewBox='0 0 24 24' aria-hidden='true'>"
+            "<path d='M12 4l8 8-8 8-8-8z'/></svg>"
+        )
+
+    def metric_icon(kind: str) -> str:
+        icons = {
+            "target": "<svg viewBox='0 0 24 24'><path d='M12 3a9 9 0 109 9h-2a7 7 0 11-7-7V3zm0 4a5 5 0 105 5h2A7 7 0 1112 7V5zm8-2v6h-6l2.2-2.2-3.1-3.1 1.4-1.4 3.1 3.1z'/></svg>",
+            "confidence": "<svg viewBox='0 0 24 24'><path d='M3 13h3v8H3zm5-4h3v12H8zm5-6h3v18h-3zm5 9h3v9h-3z'/></svg>",
+            "reference": "<svg viewBox='0 0 24 24'><path d='M12 2l7 4v6c0 5-3.4 9.7-7 10-3.6-.3-7-5-7-10V6zm0 4a3 3 0 100 6 3 3 0 000-6z'/></svg>",
+            "delta": "<svg viewBox='0 0 24 24'><path d='M4 17l5-5 4 4 7-8v5h2V4h-9v2h5.4L13 13 9 9 2.6 15.4z'/></svg>",
+        }
+        return icons[kind]
+
+    def highlight_icon(kind: str) -> str:
+        icons = {
+            "market": "<svg viewBox='0 0 24 24'><path d='M4 18h16v2H4zm2-2V9h3v7zm5 0V5h3v11zm5 0v-4h3v4z'/></svg>",
+            "social": "<svg viewBox='0 0 24 24'><path d='M4 4h16v11H7l-3 3z'/></svg>",
+            "news": "<svg viewBox='0 0 24 24'><path d='M5 4h12v16H5zm14 3h2v13a2 2 0 01-2 2h-1v-2h1zM7 7h8v2H7zm0 4h8v2H7zm0 4h5v2H7z'/></svg>",
+            "fundamentals": "<svg viewBox='0 0 24 24'><path d='M3 19h18v2H3zm2-2V9h3v8zm5 0V5h3v12zm5 0v-6h3v6z'/></svg>",
+        }
+        return icons[kind]
+
     rows = []
     for result in analysis_results:
         status = "Failed" if result.get("error") else "Completed"
@@ -1131,39 +1194,67 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
             "</tr>"
         )
 
-    cards = []
+    sections = []
     for result in analysis_results:
+        kind = decision_kind(result.get("decision"))
+        confidence_value = result.get("confidence_score")
+        confidence_width = max(6, min(100, confidence_value)) if confidence_value is not None else 6
+
         if result.get("error"):
-            cards.append(
-                "<section class='card failed'>"
-                f"<h2>{escape(result['ticker'])}</h2>"
-                f"<p><strong>Analysis Date:</strong> {escape(result['analysis_date'])}</p>"
-                "<p><strong>Status:</strong> Failed</p>"
-                f"<p><strong>Error:</strong> {escape(compact_report_text(result['error'], max_chars=800))}</p>"
+            sections.append(
+                "<section class='stock stock-failed'>"
+                "<div class='stock-head'>"
+                f"<div class='stock-title'><span class='decision-glyph failed'>{decision_icon('failed')}</span><div><p class='stock-kicker'>Failed Run</p><h2>{escape(result['ticker'])}</h2></div></div>"
+                "<div class='decision-pill failed'>Failed</div>"
+                "</div>"
+                f"<p class='meta-line'>Analysis Date: {escape(result['analysis_date'])}</p>"
+                "<div class='narrative-block'>"
+                "<h3>Run Error</h3>"
+                f"<p>{escape(compact_report_text(result['error'], max_chars=800))}</p>"
+                "</div>"
                 "</section>"
             )
             continue
 
         final_state = result["final_state"]
-        cards.append(
-            "<section class='card'>"
-            f"<h2>{escape(result['ticker'])}</h2>"
-            f"<p><strong>Analysis Date:</strong> {escape(result['analysis_date'])}</p>"
-            f"<p><strong>Decision:</strong> {escape(result.get('decision') or 'Unknown')}</p>"
-            f"<p><strong>Average Price Target:</strong> {escape(format_price_target(result.get('price_target')))}</p>"
-            f"<p><strong>Confidence:</strong> {escape(str(result.get('confidence_score', '-')) + '/100' if result.get('confidence_score') is not None else '-')}</p>"
-            f"<p><strong>Horizon:</strong> {escape(result.get('target_horizon') or '-')}</p>"
-            f"<p><strong>Target Outlook:</strong> {escape(result.get('target_summary') or 'No target outlook generated.')}</p>"
-            f"<p><strong>Executive Summary:</strong> {escape(compact_report_text(final_state.get('final_trade_decision'), max_chars=900) or 'No portfolio decision generated.')}</p>"
-            "<h3>Analyst Highlights</h3>"
-            "<ul>"
-            f"<li><strong>Market:</strong> {escape(compact_report_text(final_state.get('market_report'), max_chars=220) or 'No market report generated.')}</li>"
-            f"<li><strong>Social:</strong> {escape(compact_report_text(final_state.get('sentiment_report'), max_chars=220) or 'No social sentiment report generated.')}</li>"
-            f"<li><strong>News:</strong> {escape(compact_report_text(final_state.get('news_report'), max_chars=220) or 'No news report generated.')}</li>"
-            f"<li><strong>Fundamentals:</strong> {escape(compact_report_text(final_state.get('fundamentals_report'), max_chars=220) or 'No fundamentals report generated.')}</li>"
-            "</ul>"
-            f"<p><strong>Trader Plan:</strong> {escape(compact_report_text(final_state.get('trader_investment_plan'), max_chars=500) or 'No trader plan generated.')}</p>"
-            f"<p><strong>Default Results:</strong> <code>{escape(result['results_dir'])}</code></p>"
+        reference_price = format_price_target(result.get("reference_price"))
+        if result.get("reference_price") is not None and result.get("price_target") is not None:
+            delta = result["price_target"] - result["reference_price"]
+            delta_label = f"{delta:+.2f}"
+        else:
+            delta_label = "-"
+
+        sections.append(
+            f"<section class='stock stock-{kind}'>"
+            "<div class='stock-head'>"
+            f"<div class='stock-title'><span class='decision-glyph {kind}'>{decision_icon(kind)}</span><div><p class='stock-kicker'>Sequential Stock Brief</p><h2>{escape(result['ticker'])}</h2></div></div>"
+            f"<div class='decision-pill {kind}'>{escape(result.get('decision') or 'Unknown')}</div>"
+            "</div>"
+            f"<p class='meta-line'>Analysis Date: {escape(result['analysis_date'])} · Horizon: {escape(result.get('target_horizon') or '-')} · Results: <code>{escape(result['results_dir'])}</code></p>"
+            "<div class='metric-ribbon'>"
+            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('target')}</span><div><span class='metric-label'>Average Price Target</span><strong>{escape(format_price_target(result.get('price_target')))}</strong></div></article>"
+            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('reference')}</span><div><span class='metric-label'>Reference Price</span><strong>{escape(reference_price)}</strong></div></article>"
+            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('delta')}</span><div><span class='metric-label'>Target Gap</span><strong>{escape(delta_label)}</strong></div></article>"
+            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('confidence')}</span><div><span class='metric-label'>Confidence</span><strong>{escape(str(confidence_value) + '/100' if confidence_value is not None else '-')}</strong></div></article>"
+            "</div>"
+            "<div class='confidence-strip'>"
+            f"<div class='confidence-bar'><span style='width:{confidence_width}%'></span></div>"
+            f"<div class='confidence-copy'>{escape(result.get('target_summary') or 'No target outlook generated.')}</div>"
+            "</div>"
+            "<div class='narrative-block'>"
+            "<h3>Executive Summary</h3>"
+            f"<p>{escape(compact_report_text(final_state.get('final_trade_decision'), max_chars=900) or 'No portfolio decision generated.')}</p>"
+            "</div>"
+            "<div class='highlight-stack'>"
+            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('market')}</span><h3>Market</h3></div><p>{escape(compact_report_text(final_state.get('market_report'), max_chars=220) or 'No market report generated.')}</p></article>"
+            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('social')}</span><h3>Social</h3></div><p>{escape(compact_report_text(final_state.get('sentiment_report'), max_chars=220) or 'No social sentiment report generated.')}</p></article>"
+            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('news')}</span><h3>News</h3></div><p>{escape(compact_report_text(final_state.get('news_report'), max_chars=220) or 'No news report generated.')}</p></article>"
+            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('fundamentals')}</span><h3>Fundamentals</h3></div><p>{escape(compact_report_text(final_state.get('fundamentals_report'), max_chars=220) or 'No fundamentals report generated.')}</p></article>"
+            "</div>"
+            "<div class='narrative-block accent'>"
+            "<h3>Trader Plan</h3>"
+            f"<p>{escape(compact_report_text(final_state.get('trader_investment_plan'), max_chars=500) or 'No trader plan generated.')}</p>"
+            "</div>"
             "</section>"
         )
 
@@ -1175,34 +1266,94 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
   <title>Consolidated Trading Analysis Report</title>
   <style>
     :root {{
-      --bg: #f5f1e8;
-      --panel: #fffdfa;
-      --ink: #1e2a2f;
-      --muted: #5c6b70;
-      --accent: #006b5f;
-      --line: #d8d0c2;
-      --failed: #7f1d1d;
+      --bg: #f3efe7;
+      --paper: #fffdf8;
+      --ink: #11222b;
+      --muted: #60727a;
+      --hero-start: #13252e;
+      --hero-end: #23505a;
+      --teal: #0f766e;
+      --coral: #ef6b4a;
+      --gold: #b68a14;
+      --slate: #2a3c45;
+      --line: rgba(17, 34, 43, 0.12);
+      --failed: #8d2f24;
+      --shadow: 0 22px 48px rgba(17, 34, 43, 0.10);
     }}
     body {{
       margin: 0;
       padding: 32px;
-      background: radial-gradient(circle at top, #fff8ec, var(--bg));
+      background:
+        radial-gradient(circle at top right, rgba(239, 107, 74, 0.18), transparent 34%),
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.18), transparent 30%),
+        linear-gradient(180deg, #fbf7f0, var(--bg));
       color: var(--ink);
-      font: 16px/1.5 Georgia, "Times New Roman", serif;
+      font: 16px/1.55 "Avenir Next", "Segoe UI", sans-serif;
     }}
-    h1, h2, h3 {{ margin-top: 0; }}
+    h1, h2, h3 {{
+      margin-top: 0;
+      font-family: Georgia, "Times New Roman", serif;
+    }}
     .shell {{
       max-width: 1200px;
       margin: 0 auto;
       display: grid;
       gap: 24px;
     }}
-    .hero, .card {{
-      background: var(--panel);
+    .hero {{
+      background: linear-gradient(135deg, var(--hero-start), var(--hero-end));
+      color: white;
+      border-radius: 28px;
+      padding: 30px;
+      box-shadow: var(--shadow);
+    }}
+    .hero h1 {{
+      margin-bottom: 8px;
+      font-size: 44px;
+      line-height: 0.96;
+      max-width: 12ch;
+    }}
+    .hero-grid {{
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 22px;
+      align-items: end;
+    }}
+    .hero p {{
+      margin: 0;
+      color: rgba(255,255,255,0.82);
+    }}
+    .kpi-strip {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }}
+    .kpi {{
+      background: rgba(255,255,255,0.10);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 18px;
+      padding: 14px 16px;
+    }}
+    .kpi span {{
+      display: block;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.65);
+      margin-bottom: 4px;
+    }}
+    .kpi strong {{
+      font-size: 24px;
+    }}
+    .summary-table,
+    .stock {{
+      background: var(--paper);
       border: 1px solid var(--line);
-      border-radius: 16px;
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+    }}
+    .summary-table {{
       padding: 24px;
-      box-shadow: 0 12px 32px rgba(30, 42, 47, 0.08);
     }}
     table {{
       width: 100%;
@@ -1216,40 +1367,245 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
       vertical-align: top;
     }}
     th {{
-      color: var(--accent);
+      color: var(--teal);
       font-size: 12px;
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }}
-    .grid {{
+    .stack {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 20px;
+      gap: 22px;
     }}
-    .card.failed {{
-      border-color: #e5b5b5;
+    .stock {{
+      padding: 24px;
+    }}
+    .stock-failed {{
+      border-color: rgba(141, 47, 36, 0.25);
       color: var(--failed);
+    }}
+    .stock-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: center;
+      margin-bottom: 10px;
+    }}
+    .stock-title {{
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }}
+    .stock-title h2 {{
+      margin-bottom: 0;
+      font-size: 34px;
+    }}
+    .stock-kicker {{
+      margin: 0 0 4px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--muted);
+    }}
+    .decision-glyph {{
+      width: 54px;
+      height: 54px;
+      border-radius: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(17, 34, 43, 0.06);
+    }}
+    .decision-glyph svg,
+    .metric-icon svg,
+    .highlight-icon svg {{
+      width: 26px;
+      height: 26px;
+      fill: currentColor;
+    }}
+    .decision-glyph.buy {{ color: var(--teal); background: rgba(15, 118, 110, 0.12); }}
+    .decision-glyph.sell {{ color: var(--coral); background: rgba(239, 107, 74, 0.12); }}
+    .decision-glyph.hold {{ color: var(--gold); background: rgba(182, 138, 20, 0.12); }}
+    .decision-glyph.failed {{ color: var(--failed); background: rgba(141, 47, 36, 0.12); }}
+    .decision-pill {{
+      display: inline-flex;
+      align-items: center;
+      padding: 9px 14px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }}
+    .decision-pill.buy {{ background: rgba(15, 118, 110, 0.12); color: var(--teal); }}
+    .decision-pill.sell {{ background: rgba(239, 107, 74, 0.12); color: var(--coral); }}
+    .decision-pill.hold {{ background: rgba(182, 138, 20, 0.14); color: var(--gold); }}
+    .decision-pill.failed {{ background: rgba(141, 47, 36, 0.12); color: var(--failed); }}
+    .meta-line {{
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 14px;
+    }}
+    .metric-ribbon {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 14px;
+    }}
+    .metric-card {{
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 14px;
+      border-radius: 18px;
+      background: rgba(17, 34, 43, 0.045);
+    }}
+    .metric-icon {{
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: white;
+      color: var(--slate);
+      box-shadow: inset 0 0 0 1px rgba(17,34,43,0.08);
+    }}
+    .metric-label {{
+      display: block;
+      margin-bottom: 3px;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }}
+    .metric-card strong {{
+      font-size: 22px;
+    }}
+    .confidence-strip {{
+      display: grid;
+      gap: 10px;
+      margin-bottom: 18px;
+    }}
+    .confidence-bar {{
+      width: 100%;
+      height: 14px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(17, 34, 43, 0.08);
+    }}
+    .confidence-bar span {{
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--coral), var(--gold), var(--teal));
+    }}
+    .confidence-copy {{
+      color: var(--slate);
+      font-size: 15px;
+    }}
+    .narrative-block {{
+      margin-bottom: 18px;
+      padding: 18px 20px;
+      border-radius: 20px;
+      background: rgba(17, 34, 43, 0.04);
+    }}
+    .narrative-block.accent {{
+      background: linear-gradient(135deg, rgba(15, 118, 110, 0.10), rgba(35, 80, 90, 0.08));
+    }}
+    .narrative-block h3 {{
+      margin-bottom: 8px;
+      font-size: 20px;
+    }}
+    .narrative-block p {{
+      margin: 0;
+      color: var(--slate);
+    }}
+    .highlight-stack {{
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-bottom: 18px;
+    }}
+    .highlight-card {{
+      padding: 16px;
+      border-radius: 20px;
+      border: 1px solid rgba(17,34,43,0.08);
+      background: white;
+    }}
+    .highlight-head {{
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 8px;
+    }}
+    .highlight-head h3 {{
+      margin-bottom: 0;
+      font-size: 18px;
+    }}
+    .highlight-icon {{
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(17, 34, 43, 0.05);
+      color: var(--teal);
+    }}
+    .highlight-card p {{
+      margin: 0;
+      color: var(--slate);
     }}
     code {{
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 12px;
     }}
-    ul {{
-      margin: 0 0 16px 18px;
-      padding: 0;
-    }}
     .meta {{
-      color: var(--muted);
+      color: rgba(255,255,255,0.72);
       margin-bottom: 8px;
+    }}
+    @media (max-width: 900px) {{
+      body {{ padding: 18px; }}
+      .hero-grid,
+      .metric-ribbon,
+      .highlight-stack {{
+        grid-template-columns: 1fr;
+      }}
+      .stock-head {{
+        align-items: flex-start;
+        flex-direction: column;
+      }}
     }}
   </style>
 </head>
 <body>
   <main class="shell">
     <section class="hero">
-      <h1>Consolidated Trading Analysis Report</h1>
-      <p class="meta">Generated: {escape(generated_at)}</p>
-      <p class="meta">Analysis Date: {escape(analysis_date)}</p>
+      <div class="hero-grid">
+        <div>
+          <h1>Consolidated Trading Analysis Report</h1>
+          <p class="meta">Generated: {escape(generated_at)}</p>
+          <p class="meta">Analysis Date: {escape(analysis_date)}</p>
+        </div>
+        <div class="kpi-strip">
+          <article class="kpi">
+            <span>Total Stocks</span>
+            <strong>{len(analysis_results)}</strong>
+          </article>
+          <article class="kpi">
+            <span>Completed Runs</span>
+            <strong>{len(completed_results)}</strong>
+          </article>
+          <article class="kpi">
+            <span>Avg Confidence</span>
+            <strong>{f"{avg_confidence}/100" if avg_confidence is not None else "-"}</strong>
+          </article>
+        </div>
+      </div>
+    </section>
+    <section class="summary-table">
+      <h2>Batch Summary</h2>
+      <p style="margin:0 0 18px;color:var(--muted);">Average target across completed runs: {escape(format_price_target(avg_target)) if avg_target is not None else '-'}</p>
       <table>
         <thead>
           <tr>
@@ -1266,8 +1622,8 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
         </tbody>
       </table>
     </section>
-    <section class="grid">
-      {''.join(cards)}
+    <section class="stack">
+      {''.join(sections)}
     </section>
   </main>
 </body>
@@ -1828,6 +2184,23 @@ def run_analysis():
 @app.command()
 def analyze():
     run_analysis()
+
+
+@app.command("serve-web")
+def serve_web(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    reload: bool = False,
+):
+    """Run the TradingAgents web application."""
+    import uvicorn
+
+    uvicorn.run(
+        "tradingagents.web.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )
 
 
 if __name__ == "__main__":

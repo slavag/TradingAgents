@@ -144,6 +144,34 @@ python -m cli.main
 ```
 You will see a screen where you can select your desired tickers, date, LLMs, research depth, etc.
 
+### Web App
+
+You can run the web UI in any of these ways:
+
+```bash
+python web.py
+```
+
+```bash
+python -m cli.main serve-web
+```
+
+```bash
+tradingagents-web
+```
+
+By default it serves on:
+
+```text
+http://127.0.0.1:8000
+```
+
+To bind a different host or port:
+
+```bash
+python -m cli.main serve-web --host 0.0.0.0 --port 8080
+```
+
 <p align="center">
   <img src="assets/cli/cli_init.png" width="100%" style="display: inline-block; margin: 0 2%;">
 </p>
