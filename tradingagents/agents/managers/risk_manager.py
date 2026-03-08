@@ -1,5 +1,6 @@
 import time
 import json
+from tradingagents.agents.utils.agent_utils import normalize_text_content
 
 
 def create_risk_manager(llm, memory):
@@ -44,9 +45,10 @@ Deliverables:
 Focus on actionable insights and continuous improvement. Build on past lessons, critically evaluate all perspectives, and ensure each decision advances better outcomes."""
 
         response = llm.invoke(prompt)
+        response_text = normalize_text_content(response.content)
 
         new_risk_debate_state = {
-            "judge_decision": response.content,
+            "judge_decision": response_text,
             "history": risk_debate_state["history"],
             "aggressive_history": risk_debate_state["aggressive_history"],
             "conservative_history": risk_debate_state["conservative_history"],
@@ -60,7 +62,7 @@ Focus on actionable insights and continuous improvement. Build on past lessons, 
 
         return {
             "risk_debate_state": new_risk_debate_state,
-            "final_trade_decision": response.content,
+            "final_trade_decision": response_text,
         }
 
     return risk_manager_node

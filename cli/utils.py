@@ -128,9 +128,11 @@ def select_shallow_thinking_agent(provider) -> str:
     # Define shallow thinking llm engine options with their corresponding model names
     SHALLOW_AGENT_OPTIONS = {
         "openai": [
+            ("GPT-5.4 - Latest flagship", "gpt-5.4"),
+            ("GPT-5.4 Pro - Highest quality, highest cost", "gpt-5.4-pro"),
             ("GPT-5 Mini - Cost-optimized reasoning", "gpt-5-mini"),
             ("GPT-5 Nano - Ultra-fast, high-throughput", "gpt-5-nano"),
-            ("GPT-5.2 - Latest flagship", "gpt-5.2"),
+            ("GPT-5.2 - Previous flagship", "gpt-5.2"),
             ("GPT-5.1 - Flexible reasoning", "gpt-5.1"),
             ("GPT-4.1 - Smartest non-reasoning, 1M context", "gpt-4.1"),
         ],
@@ -140,16 +142,17 @@ def select_shallow_thinking_agent(provider) -> str:
             ("Claude Sonnet 4 - High-performance", "claude-sonnet-4-20250514"),
         ],
         "google": [
-            ("Gemini 3 Flash - Next-gen fast", "gemini-3-flash-preview"),
-            ("Gemini 2.5 Flash - Balanced, recommended", "gemini-2.5-flash"),
-            ("Gemini 3 Pro - Reasoning-first", "gemini-3-pro-preview"),
-            ("Gemini 2.5 Flash Lite - Fast, low-cost", "gemini-2.5-flash-lite"),
+            ("Gemini 3 Flash Preview - Latest fast multimodal", "gemini-3-flash-preview"),
+            ("Gemini 3.1 Flash-Lite Preview - Latest low-cost fast", "gemini-3.1-flash-lite-preview"),
+            ("Gemini 2.5 Flash - Balanced, stable", "gemini-2.5-flash"),
+            ("Gemini 2.5 Flash Lite - Stable, low-cost", "gemini-2.5-flash-lite"),
+            ("Gemini 3.1 Pro Preview - Highest-quality reasoning", "gemini-3.1-pro-preview"),
         ],
         "xai": [
-            ("Grok 4.1 Fast (Non-Reasoning) - Speed optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
-            ("Grok 4 Fast (Non-Reasoning) - Speed optimized", "grok-4-fast-non-reasoning"),
-            ("Grok 4.1 Fast (Reasoning) - High-performance, 2M ctx", "grok-4-1-fast-reasoning"),
-            ("Grok 4 Fast (Reasoning) - High-performance", "grok-4-fast-reasoning"),
+            ("Grok 4.1 Fast (Non-Reasoning) - Latest speed-optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
+            ("Grok 4.1 Fast (Reasoning) - Latest high-performance, 2M ctx", "grok-4-1-fast-reasoning"),
+            ("Grok 4 Fast (Non-Reasoning) - Previous speed-optimized", "grok-4-fast-non-reasoning"),
+            ("Grok 4 Fast (Reasoning) - Previous high-performance", "grok-4-fast-reasoning"),
         ],
         "openrouter": [
             ("NVIDIA Nemotron 3 Nano 30B (free)", "nvidia/nemotron-3-nano-30b-a3b:free"),
@@ -193,7 +196,9 @@ def select_deep_thinking_agent(provider) -> str:
     # Define deep thinking llm engine options with their corresponding model names
     DEEP_AGENT_OPTIONS = {
         "openai": [
-            ("GPT-5.2 - Latest flagship", "gpt-5.2"),
+            ("GPT-5.4 - Latest flagship", "gpt-5.4"),
+            ("GPT-5.4 Pro - Highest quality, highest cost", "gpt-5.4-pro"),
+            ("GPT-5.2 - Previous flagship", "gpt-5.2"),
             ("GPT-5.1 - Flexible reasoning", "gpt-5.1"),
             ("GPT-5 - Advanced reasoning", "gpt-5"),
             ("GPT-4.1 - Smartest non-reasoning, 1M context", "gpt-4.1"),
@@ -208,16 +213,17 @@ def select_deep_thinking_agent(provider) -> str:
             ("Claude Sonnet 4 - High-performance", "claude-sonnet-4-20250514"),
         ],
         "google": [
-            ("Gemini 3 Pro - Reasoning-first", "gemini-3-pro-preview"),
-            ("Gemini 3 Flash - Next-gen fast", "gemini-3-flash-preview"),
-            ("Gemini 2.5 Flash - Balanced, recommended", "gemini-2.5-flash"),
+            ("Gemini 3.1 Pro Preview - Latest reasoning", "gemini-3.1-pro-preview"),
+            ("Gemini 3 Flash Preview - Latest fast multimodal", "gemini-3-flash-preview"),
+            ("Gemini 2.5 Pro - Stable reasoning", "gemini-2.5-pro"),
+            ("Gemini 2.5 Flash - Balanced, stable", "gemini-2.5-flash"),
         ],
         "xai": [
-            ("Grok 4.1 Fast (Reasoning) - High-performance, 2M ctx", "grok-4-1-fast-reasoning"),
-            ("Grok 4 Fast (Reasoning) - High-performance", "grok-4-fast-reasoning"),
-            ("Grok 4 - Flagship model", "grok-4-0709"),
-            ("Grok 4.1 Fast (Non-Reasoning) - Speed optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
-            ("Grok 4 Fast (Non-Reasoning) - Speed optimized", "grok-4-fast-non-reasoning"),
+            ("Grok 4.1 Fast (Reasoning) - Latest high-performance, 2M ctx", "grok-4-1-fast-reasoning"),
+            ("Grok 4 - Flagship model", "grok-4"),
+            ("Grok 4.1 Fast (Non-Reasoning) - Latest speed-optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
+            ("Grok 4 Fast (Reasoning) - Previous high-performance", "grok-4-fast-reasoning"),
+            ("Grok 4 Fast (Non-Reasoning) - Previous speed-optimized", "grok-4-fast-non-reasoning"),
         ],
         "openrouter": [
             ("Z.AI GLM 4.5 Air (free)", "z-ai/glm-4.5-air:free"),

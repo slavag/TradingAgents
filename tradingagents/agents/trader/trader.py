@@ -1,6 +1,7 @@
 import functools
 import time
 import json
+from tradingagents.agents.utils.agent_utils import normalize_text_content
 
 
 def create_trader(llm, memory):
@@ -36,10 +37,11 @@ def create_trader(llm, memory):
         ]
 
         result = llm.invoke(messages)
+        result_text = normalize_text_content(result.content)
 
         return {
             "messages": [result],
-            "trader_investment_plan": result.content,
+            "trader_investment_plan": result_text,
             "sender": name,
         }
 

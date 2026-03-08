@@ -1,6 +1,7 @@
 from langchain_core.messages import AIMessage
 import time
 import json
+from tradingagents.agents.utils.agent_utils import normalize_text_content
 
 
 def create_bear_researcher(llm, memory):
@@ -46,7 +47,7 @@ Use this information to deliver a compelling bear argument, refute the bull's cl
 
         response = llm.invoke(prompt)
 
-        argument = f"Bear Analyst: {response.content}"
+        argument = f"Bear Analyst: {normalize_text_content(response.content)}"
 
         new_investment_debate_state = {
             "history": history + "\n" + argument,

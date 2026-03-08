@@ -27,6 +27,27 @@ class UnifiedChatOpenAI(ChatOpenAI):
             or "gpt-5" in model_lower
         )
 
+    @staticmethod
+    def _normalize_content(response: Any) -> Any:
+        """Flatten Responses API content blocks into plain text for legacy callers."""
+        content = getattr(response, "content", None)
+        if isinstance(content, list):
+            texts = []
+            for item in content:
+                if isinstance(item, dict):
+                    item_type = item.get("type")
+                    if item_type == "text":
+                        texts.append(item.get("text", ""))
+                    elif item_type == "output_text":
+                        texts.append(item.get("text", ""))
+                elif isinstance(item, str):
+                    texts.append(item)
+            response.content = "\n".join(text for text in texts if text)
+        return response
+
+    def invoke(self, input, config=None, **kwargs):
+        return self._normalize_content(super().invoke(input, config, **kwargs))
+
 
 class OpenAIClient(BaseLLMClient):
     """Client for OpenAI, Ollama, OpenRouter, and xAI providers."""
@@ -61,9 +82,26 @@ class OpenAIClient(BaseLLMClient):
         elif self.base_url:
             llm_kwargs["base_url"] = self.base_url
 
-        for key in ("timeout", "max_retries", "reasoning_effort", "api_key", "callbacks"):
+        for key in ("timeout", "max_retries", "api_key", "callbacks"):
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
+
+        if (
+            self.provider == "openai"
+            and UnifiedChatOpenAI._is_reasoning_model(self.model)
+            and "reasoning_effort" in self.kwargs
+        ):
+            llm_kwargs["reasoning_effort"] = self.kwargs["reasoning_effort"]
+
+        # Newer OpenAI reasoning models need the Responses API when used with
+        # function tools. LangChain only auto-switches for built-in tools or
+        # explicit `reasoning`, so force the modern transport here.
+        if (
+            self.provider == "openai"
+            and UnifiedChatOpenAI._is_reasoning_model(self.model)
+        ):
+            llm_kwargs.setdefault("use_responses_api", True)
+            llm_kwargs.setdefault("output_version", "responses/v1")
 
         return UnifiedChatOpenAI(**llm_kwargs)
 

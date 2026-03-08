@@ -1,6 +1,7 @@
 # TradingAgents/graph/signal_processing.py
 
 from langchain_openai import ChatOpenAI
+from tradingagents.agents.utils.agent_utils import normalize_text_content
 
 
 class SignalProcessor:
@@ -28,4 +29,4 @@ class SignalProcessor:
             ("human", full_signal),
         ]
 
-        return self.quick_thinking_llm.invoke(messages).content
+        return normalize_text_content(self.quick_thinking_llm.invoke(messages).content)

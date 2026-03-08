@@ -2,6 +2,7 @@
 
 from typing import Dict, Any
 from langchain_openai import ChatOpenAI
+from tradingagents.agents.utils.agent_utils import normalize_text_content
 
 
 class Reflector:
@@ -67,8 +68,7 @@ Adhere strictly to these instructions, and ensure your output is detailed, accur
             ),
         ]
 
-        result = self.quick_thinking_llm.invoke(messages).content
-        return result
+        return normalize_text_content(self.quick_thinking_llm.invoke(messages).content)
 
     def reflect_bull_researcher(self, current_state, returns_losses, bull_memory):
         """Reflect on bull researcher's analysis and update memory."""

@@ -19,6 +19,40 @@ from tradingagents.agents.utils.news_data_tools import (
     get_global_news
 )
 
+
+def normalize_text_content(content) -> str:
+    """Flatten provider-specific content blocks into plain text."""
+    if content is None:
+        return ""
+
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, dict):
+        if "text" in content:
+            return normalize_text_content(content.get("text"))
+        if "content" in content:
+            return normalize_text_content(content.get("content"))
+        return ""
+
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                item_type = item.get("type")
+                if item_type in {"text", "output_text"}:
+                    text = normalize_text_content(item.get("text"))
+                    if text:
+                        parts.append(text)
+            else:
+                text = normalize_text_content(item)
+                if text:
+                    parts.append(text)
+        return "\n".join(parts).strip()
+
+    return str(content).strip()
+
+
 def create_msg_delete():
     def delete_messages(state):
         """Clear messages and add placeholder for Anthropic compatibility"""

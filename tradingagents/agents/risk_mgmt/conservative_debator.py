@@ -1,6 +1,7 @@
 from langchain_core.messages import AIMessage
 import time
 import json
+from tradingagents.agents.utils.agent_utils import normalize_text_content
 
 
 def create_conservative_debator(llm):
@@ -35,7 +36,7 @@ Engage by questioning their optimism and emphasizing the potential downsides the
 
         response = llm.invoke(prompt)
 
-        argument = f"Conservative Analyst: {response.content}"
+        argument = f"Conservative Analyst: {normalize_text_content(response.content)}"
 
         new_risk_debate_state = {
             "history": history + "\n" + argument,

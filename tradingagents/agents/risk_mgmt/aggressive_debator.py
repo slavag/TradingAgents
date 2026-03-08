@@ -1,5 +1,6 @@
 import time
 import json
+from tradingagents.agents.utils.agent_utils import normalize_text_content
 
 
 def create_aggressive_debator(llm):
@@ -34,7 +35,7 @@ Engage actively by addressing any specific concerns raised, refuting the weaknes
 
         response = llm.invoke(prompt)
 
-        argument = f"Aggressive Analyst: {response.content}"
+        argument = f"Aggressive Analyst: {normalize_text_content(response.content)}"
 
         new_risk_debate_state = {
             "history": history + "\n" + argument,

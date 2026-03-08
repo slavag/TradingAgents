@@ -1,5 +1,6 @@
 import time
 import json
+from tradingagents.agents.utils.agent_utils import normalize_text_content
 
 
 def create_research_manager(llm, memory):
@@ -37,19 +38,20 @@ Here is the debate:
 Debate History:
 {history}"""
         response = llm.invoke(prompt)
+        response_text = normalize_text_content(response.content)
 
         new_investment_debate_state = {
-            "judge_decision": response.content,
+            "judge_decision": response_text,
             "history": investment_debate_state.get("history", ""),
             "bear_history": investment_debate_state.get("bear_history", ""),
             "bull_history": investment_debate_state.get("bull_history", ""),
-            "current_response": response.content,
+            "current_response": response_text,
             "count": investment_debate_state["count"],
         }
 
         return {
             "investment_debate_state": new_investment_debate_state,
-            "investment_plan": response.content,
+            "investment_plan": response_text,
         }
 
     return research_manager_node
