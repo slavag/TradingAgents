@@ -1,6 +1,9 @@
 from typing import Optional
 import datetime
+import json
+import re
 import typer
+from html import escape
 from pathlib import Path
 from functools import wraps
 from rich.console import Console
@@ -499,13 +502,15 @@ def get_user_selections():
             box_content += f"\n[dim]Default: {default}[/dim]"
         return Panel(box_content, border_style="blue", padding=(1, 2))
 
-    # Step 1: Ticker symbol
+    # Step 1: Ticker symbols
     console.print(
         create_question_box(
-            "Step 1: Ticker Symbol", "Enter the ticker symbol to analyze", "SPY"
+            "Step 1: Ticker Symbols",
+            "Enter one or more ticker symbols (comma or space separated)",
+            "SPY",
         )
     )
-    selected_ticker = get_ticker()
+    selected_tickers = get_tickers()
 
     # Step 2: Analysis date
     default_date = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -577,7 +582,8 @@ def get_user_selections():
         reasoning_effort = ask_openai_reasoning_effort()
 
     return {
-        "ticker": selected_ticker,
+        "ticker": selected_tickers[0],
+        "tickers": selected_tickers,
         "analysis_date": analysis_date,
         "analysts": selected_analysts,
         "research_depth": selected_research_depth,
@@ -590,9 +596,30 @@ def get_user_selections():
     }
 
 
-def get_ticker():
-    """Get ticker symbol from user input."""
-    return typer.prompt("", default="SPY")
+def parse_tickers(raw_value: str) -> list[str]:
+    """Parse a ticker input string into a normalized unique list."""
+    seen = set()
+    tickers = []
+
+    for token in re.split(r"[\s,]+", raw_value.strip()):
+        ticker = token.strip().upper()
+        if ticker and ticker not in seen:
+            seen.add(ticker)
+            tickers.append(ticker)
+
+    return tickers
+
+
+def get_tickers():
+    """Get one or more ticker symbols from user input."""
+    while True:
+        raw_value = typer.prompt("", default="SPY")
+        tickers = parse_tickers(raw_value)
+        if tickers:
+            return tickers
+        console.print(
+            "[red]Error: Please enter at least one ticker symbol[/red]"
+        )
 
 
 def get_analysis_date():
@@ -612,6 +639,182 @@ def get_analysis_date():
             console.print(
                 "[red]Error: Invalid date format. Please use YYYY-MM-DD[/red]"
             )
+
+
+def get_save_preferences(selections):
+    """Ask export/save preferences before analysis starts."""
+    save_choice = typer.prompt("Save report?", default="Y").strip().upper()
+    save_enabled = save_choice in ("Y", "YES", "")
+    save_path = None
+
+    if save_enabled:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        tickers = selections["tickers"]
+        default_path = (
+            Path.cwd() / "reports" / f"{tickers[0]}_{timestamp}"
+            if len(tickers) == 1
+            else Path.cwd() / "reports" / f"batch_{selections['analysis_date']}_{timestamp}"
+        )
+        save_path_str = typer.prompt(
+            "Save path (press Enter for default)",
+            default=str(default_path),
+        ).strip()
+        save_path = Path(save_path_str)
+
+    return {
+        "save_enabled": save_enabled,
+        "save_path": save_path,
+    }
+
+
+def format_price_target(price_target) -> str:
+    """Format price target for display."""
+    if price_target is None:
+        return "-"
+    return f"${price_target:,.2f}"
+
+
+def parse_json_response(raw_content: str) -> dict | None:
+    """Extract a JSON object from model output."""
+    if not raw_content:
+        return None
+
+    content = raw_content.strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```(?:json)?\s*", "", content)
+        content = re.sub(r"\s*```$", "", content)
+
+    try:
+        parsed = json.loads(content)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"\{.*\}", content, re.DOTALL)
+    if not match:
+        return None
+
+    try:
+        parsed = json.loads(match.group(0))
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def fetch_reference_price(ticker: str, analysis_date: str) -> float | None:
+    """Fetch the latest close near the analysis date for target estimation."""
+    try:
+        import yfinance as yf
+
+        end_date = datetime.datetime.strptime(analysis_date, "%Y-%m-%d") + datetime.timedelta(days=1)
+        start_date = end_date - datetime.timedelta(days=30)
+        history = yf.Ticker(ticker).history(
+            start=start_date.strftime("%Y-%m-%d"),
+            end=end_date.strftime("%Y-%m-%d"),
+            auto_adjust=False,
+        )
+        if history.empty:
+            return None
+        close_values = history["Close"].dropna()
+        if close_values.empty:
+            return None
+        return round(float(close_values.iloc[-1]), 2)
+    except Exception:
+        return None
+
+
+def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, decision: str):
+    """Estimate a per-ticker target price and confidence score."""
+    current_price = fetch_reference_price(ticker, analysis_date)
+    decision_text = compact_report_text(final_state.get("final_trade_decision"), max_chars=1400)
+    market_text = compact_report_text(final_state.get("market_report"), max_chars=1200)
+    social_text = compact_report_text(final_state.get("sentiment_report"), max_chars=900)
+    news_text = compact_report_text(final_state.get("news_report"), max_chars=900)
+    fundamentals_text = compact_report_text(final_state.get("fundamentals_report"), max_chars=1000)
+    trader_text = compact_report_text(final_state.get("trader_investment_plan"), max_chars=900)
+
+    messages = [
+        (
+            "system",
+            "You summarize trading analysis. Return JSON only with keys "
+            'price_target, confidence_score, horizon, summary. '
+            "price_target must be a number in USD or null. "
+            "confidence_score must be an integer from 0 to 100 representing the probability "
+            "the stock reaches or exceeds the target within the stated horizon. "
+            "Use a realistic single target, not a range. Keep summary under 80 words.",
+        ),
+        (
+            "human",
+            f"""Ticker: {ticker}
+Analysis date: {analysis_date}
+Current reference price: {current_price if current_price is not None else 'unknown'}
+Decision: {decision}
+
+Portfolio decision summary:
+{decision_text}
+
+Market summary:
+{market_text}
+
+Social summary:
+{social_text}
+
+News summary:
+{news_text}
+
+Fundamentals summary:
+{fundamentals_text}
+
+Trader plan summary:
+{trader_text}
+
+Return strict JSON only.""",
+        ),
+    ]
+
+    try:
+        response = llm.invoke(messages)
+        payload = parse_json_response(extract_content_string(response.content) or "")
+    except Exception:
+        payload = None
+
+    price_target = None
+    confidence_score = 50
+    horizon = "12 months"
+    summary = "Target estimate unavailable."
+
+    if payload:
+        raw_target = payload.get("price_target")
+        if isinstance(raw_target, (int, float)):
+            price_target = round(float(raw_target), 2)
+        elif isinstance(raw_target, str):
+            match = re.search(r"-?\d+(?:\.\d+)?", raw_target.replace(",", ""))
+            if match:
+                price_target = round(float(match.group(0)), 2)
+
+        raw_confidence = payload.get("confidence_score")
+        if isinstance(raw_confidence, (int, float)):
+            confidence_score = int(round(float(raw_confidence)))
+        elif isinstance(raw_confidence, str):
+            match = re.search(r"\d+", raw_confidence)
+            if match:
+                confidence_score = int(match.group(0))
+
+        horizon = str(payload.get("horizon") or horizon).strip()
+        summary = str(payload.get("summary") or summary).strip()
+
+    confidence_score = max(0, min(100, confidence_score))
+
+    if price_target is None:
+        price_target = current_price
+
+    return {
+        "reference_price": current_price,
+        "price_target": price_target,
+        "confidence_score": confidence_score,
+        "target_horizon": horizon,
+        "target_summary": summary,
+    }
 
 
 def save_report_to_disk(final_state, ticker: str, save_path: Path):
@@ -789,6 +992,306 @@ def display_complete_report(final_state):
             console.print(Panel(Markdown(judge_decision), title="Portfolio Manager", border_style="blue", padding=(1, 2)))
 
 
+def compact_report_text(content, max_chars=280):
+    """Condense markdown-heavy report text into a short readable excerpt."""
+    text = extract_content_string(content) or ""
+    if not text:
+        return ""
+
+    cleaned_lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("|"):
+            continue
+        if set(stripped) <= {"-", ":", "|", " "}:
+            continue
+        stripped = stripped.lstrip("#").strip()
+        cleaned_lines.append(stripped)
+
+    cleaned = " ".join(cleaned_lines) if cleaned_lines else text
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    truncated = cleaned[:max_chars].rsplit(" ", 1)[0].strip()
+    return f"{truncated}..." if truncated else f"{cleaned[:max_chars]}..."
+
+
+def build_consolidated_report(analysis_results, analysis_date: str) -> str:
+    """Build a consolidated markdown report for a batch of tickers."""
+    lines = [
+        "# Consolidated Trading Analysis Report",
+        "",
+        f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Analysis Date: {analysis_date}",
+        "",
+        "## Batch Summary",
+        "",
+        "| Ticker | Decision | Price Target | Confidence | Status | Default Results |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+
+    for result in analysis_results:
+        status = "Failed" if result.get("error") else "Completed"
+        decision = result.get("decision") or "-"
+        price_target = format_price_target(result.get("price_target"))
+        confidence = (
+            f"{result['confidence_score']}/100"
+            if result.get("confidence_score") is not None
+            else "-"
+        )
+        default_results = result.get("results_dir", "-")
+        lines.append(
+            f"| {result['ticker']} | {decision} | {price_target} | {confidence} | {status} | `{default_results}` |"
+        )
+
+    for result in analysis_results:
+        lines.extend(
+            [
+                "",
+                "---",
+                "",
+                f"## {result['ticker']}",
+                "",
+                f"Analysis Date: {result['analysis_date']}",
+                f"Average Price Target: {format_price_target(result.get('price_target'))}",
+                f"Confidence: {result.get('confidence_score', '-')}/100"
+                if result.get("confidence_score") is not None
+                else "Confidence: -",
+                f"Horizon: {result.get('target_horizon') or '-'}",
+            ]
+        )
+
+        if result.get("error"):
+            lines.extend(
+                [
+                    "",
+                    "### Status",
+                    "Analysis failed.",
+                    "",
+                    "### Error",
+                    compact_report_text(result["error"], max_chars=800),
+                ]
+            )
+            continue
+
+        final_state = result["final_state"]
+        lines.extend(
+            [
+                f"Decision: {result.get('decision') or 'Unknown'}",
+                "",
+                "### Target Outlook",
+                result.get("target_summary") or "No target outlook generated.",
+                "",
+                "### Executive Summary",
+                compact_report_text(final_state.get("final_trade_decision"), max_chars=900)
+                or "No portfolio decision generated.",
+                "",
+                "### Analyst Highlights",
+                f"- Market: {compact_report_text(final_state.get('market_report'), max_chars=220) or 'No market report generated.'}",
+                f"- Social: {compact_report_text(final_state.get('sentiment_report'), max_chars=220) or 'No social sentiment report generated.'}",
+                f"- News: {compact_report_text(final_state.get('news_report'), max_chars=220) or 'No news report generated.'}",
+                f"- Fundamentals: {compact_report_text(final_state.get('fundamentals_report'), max_chars=220) or 'No fundamentals report generated.'}",
+                "",
+                "### Trader Plan",
+                compact_report_text(final_state.get("trader_investment_plan"), max_chars=500)
+                or "No trader plan generated.",
+                "",
+                "### Default Results",
+                f"`{result['results_dir']}`",
+            ]
+        )
+
+    return "\n".join(lines) + "\n"
+
+
+def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
+    """Build an HTML version of the consolidated report."""
+    generated_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    rows = []
+    for result in analysis_results:
+        status = "Failed" if result.get("error") else "Completed"
+        decision = escape(result.get("decision") or "-")
+        price_target = escape(format_price_target(result.get("price_target")))
+        confidence = (
+            f"{result['confidence_score']}/100"
+            if result.get("confidence_score") is not None
+            else "-"
+        )
+        rows.append(
+            "<tr>"
+            f"<td>{escape(result['ticker'])}</td>"
+            f"<td>{decision}</td>"
+            f"<td>{price_target}</td>"
+            f"<td>{escape(confidence)}</td>"
+            f"<td>{escape(status)}</td>"
+            f"<td><code>{escape(result.get('results_dir', '-'))}</code></td>"
+            "</tr>"
+        )
+
+    cards = []
+    for result in analysis_results:
+        if result.get("error"):
+            cards.append(
+                "<section class='card failed'>"
+                f"<h2>{escape(result['ticker'])}</h2>"
+                f"<p><strong>Analysis Date:</strong> {escape(result['analysis_date'])}</p>"
+                "<p><strong>Status:</strong> Failed</p>"
+                f"<p><strong>Error:</strong> {escape(compact_report_text(result['error'], max_chars=800))}</p>"
+                "</section>"
+            )
+            continue
+
+        final_state = result["final_state"]
+        cards.append(
+            "<section class='card'>"
+            f"<h2>{escape(result['ticker'])}</h2>"
+            f"<p><strong>Analysis Date:</strong> {escape(result['analysis_date'])}</p>"
+            f"<p><strong>Decision:</strong> {escape(result.get('decision') or 'Unknown')}</p>"
+            f"<p><strong>Average Price Target:</strong> {escape(format_price_target(result.get('price_target')))}</p>"
+            f"<p><strong>Confidence:</strong> {escape(str(result.get('confidence_score', '-')) + '/100' if result.get('confidence_score') is not None else '-')}</p>"
+            f"<p><strong>Horizon:</strong> {escape(result.get('target_horizon') or '-')}</p>"
+            f"<p><strong>Target Outlook:</strong> {escape(result.get('target_summary') or 'No target outlook generated.')}</p>"
+            f"<p><strong>Executive Summary:</strong> {escape(compact_report_text(final_state.get('final_trade_decision'), max_chars=900) or 'No portfolio decision generated.')}</p>"
+            "<h3>Analyst Highlights</h3>"
+            "<ul>"
+            f"<li><strong>Market:</strong> {escape(compact_report_text(final_state.get('market_report'), max_chars=220) or 'No market report generated.')}</li>"
+            f"<li><strong>Social:</strong> {escape(compact_report_text(final_state.get('sentiment_report'), max_chars=220) or 'No social sentiment report generated.')}</li>"
+            f"<li><strong>News:</strong> {escape(compact_report_text(final_state.get('news_report'), max_chars=220) or 'No news report generated.')}</li>"
+            f"<li><strong>Fundamentals:</strong> {escape(compact_report_text(final_state.get('fundamentals_report'), max_chars=220) or 'No fundamentals report generated.')}</li>"
+            "</ul>"
+            f"<p><strong>Trader Plan:</strong> {escape(compact_report_text(final_state.get('trader_investment_plan'), max_chars=500) or 'No trader plan generated.')}</p>"
+            f"<p><strong>Default Results:</strong> <code>{escape(result['results_dir'])}</code></p>"
+            "</section>"
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Consolidated Trading Analysis Report</title>
+  <style>
+    :root {{
+      --bg: #f5f1e8;
+      --panel: #fffdfa;
+      --ink: #1e2a2f;
+      --muted: #5c6b70;
+      --accent: #006b5f;
+      --line: #d8d0c2;
+      --failed: #7f1d1d;
+    }}
+    body {{
+      margin: 0;
+      padding: 32px;
+      background: radial-gradient(circle at top, #fff8ec, var(--bg));
+      color: var(--ink);
+      font: 16px/1.5 Georgia, "Times New Roman", serif;
+    }}
+    h1, h2, h3 {{ margin-top: 0; }}
+    .shell {{
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      gap: 24px;
+    }}
+    .hero, .card {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 12px 32px rgba(30, 42, 47, 0.08);
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }}
+    th, td {{
+      text-align: left;
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }}
+    th {{
+      color: var(--accent);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+    }}
+    .card.failed {{
+      border-color: #e5b5b5;
+      color: var(--failed);
+    }}
+    code {{
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }}
+    ul {{
+      margin: 0 0 16px 18px;
+      padding: 0;
+    }}
+    .meta {{
+      color: var(--muted);
+      margin-bottom: 8px;
+    }}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <h1>Consolidated Trading Analysis Report</h1>
+      <p class="meta">Generated: {escape(generated_at)}</p>
+      <p class="meta">Analysis Date: {escape(analysis_date)}</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Decision</th>
+            <th>Price Target</th>
+            <th>Confidence</th>
+            <th>Status</th>
+            <th>Default Results</th>
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(rows)}
+        </tbody>
+      </table>
+    </section>
+    <section class="grid">
+      {''.join(cards)}
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+
+def save_consolidated_report(analysis_results, analysis_date: str, save_path: Path) -> dict[str, Path]:
+    """Write the consolidated batch report to disk in markdown and HTML."""
+    save_path.mkdir(parents=True, exist_ok=True)
+    markdown_path = save_path / "consolidated_report.md"
+    html_path = save_path / "consolidated_report.html"
+    markdown_path.write_text(build_consolidated_report(analysis_results, analysis_date))
+    html_path.write_text(build_consolidated_report_html(analysis_results, analysis_date))
+    return {"markdown": markdown_path, "html": html_path}
+
+
+def display_consolidated_report(analysis_results, analysis_date: str):
+    """Render the consolidated batch report in the terminal."""
+    console.print()
+    console.print(Rule("Consolidated Analysis Report", style="bold green"))
+    console.print(Markdown(build_consolidated_report(analysis_results, analysis_date)))
+
+
 def update_research_team_status(status):
     """Update status for research team members (not Trader)."""
     research_team = ["Bull Researcher", "Bear Researcher", "Research Manager"]
@@ -922,10 +1425,8 @@ def format_tool_args(args, max_length=80) -> str:
         return result[:max_length - 3] + "..."
     return result
 
-def run_analysis():
-    # First get all user selections
-    selections = get_user_selections()
-
+def run_single_analysis(selections, ticker: str, batch_index: int | None = None, batch_total: int | None = None):
+    """Run the full TradingAgents workflow for a single ticker."""
     # Create config with selected research depth
     config = DEFAULT_CONFIG.copy()
     config["max_debate_rounds"] = selections["research_depth"]
@@ -955,12 +1456,15 @@ def run_analysis():
 
     # Initialize message buffer with selected analysts
     message_buffer.init_for_analysis(selected_analyst_keys)
+    message_buffer.add_message = MessageBuffer.add_message.__get__(message_buffer, MessageBuffer)
+    message_buffer.add_tool_call = MessageBuffer.add_tool_call.__get__(message_buffer, MessageBuffer)
+    message_buffer.update_report_section = MessageBuffer.update_report_section.__get__(message_buffer, MessageBuffer)
 
     # Track start time for elapsed display
     start_time = time.time()
 
     # Create result directory
-    results_dir = Path(config["results_dir"]) / selections["ticker"] / selections["analysis_date"]
+    results_dir = Path(config["results_dir"]) / ticker / selections["analysis_date"]
     results_dir.mkdir(parents=True, exist_ok=True)
     report_dir = results_dir / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -1015,7 +1519,11 @@ def run_analysis():
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
         # Add initial messages
-        message_buffer.add_message("System", f"Selected ticker: {selections['ticker']}")
+        if batch_index is not None and batch_total is not None:
+            message_buffer.add_message(
+                "System", f"Batch progress: {batch_index}/{batch_total}"
+            )
+        message_buffer.add_message("System", f"Selected ticker: {ticker}")
         message_buffer.add_message(
             "System", f"Analysis date: {selections['analysis_date']}"
         )
@@ -1032,13 +1540,13 @@ def run_analysis():
 
         # Create spinner text
         spinner_text = (
-            f"Analyzing {selections['ticker']} on {selections['analysis_date']}..."
+            f"Analyzing {ticker} on {selections['analysis_date']}..."
         )
         update_display(layout, spinner_text, stats_handler=stats_handler, start_time=start_time)
 
         # Initialize state and get graph args with callbacks
         init_agent_state = graph.propagator.create_initial_state(
-            selections["ticker"], selections["analysis_date"]
+            ticker, selections["analysis_date"]
         )
         # Pass callbacks to graph config for tool execution tracking
         # (LLM tracking is handled separately via LLM constructor)
@@ -1170,30 +1678,151 @@ def run_analysis():
 
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
-    # Post-analysis prompts (outside Live context for clean interaction)
-    console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")
+    console.print(f"\n[bold cyan]Analysis Complete for {ticker}![/bold cyan]\n")
+    target_profile = estimate_target_profile(
+        graph.quick_thinking_llm,
+        ticker,
+        selections["analysis_date"],
+        final_state,
+        decision,
+    )
+    return {
+        "ticker": ticker,
+        "analysis_date": selections["analysis_date"],
+        "decision": decision,
+        "final_state": final_state,
+        "results_dir": str(results_dir.resolve()),
+        **target_profile,
+    }
 
-    # Prompt to save report
-    save_choice = typer.prompt("Save report?", default="Y").strip().upper()
-    if save_choice in ("Y", "YES", ""):
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_path = Path.cwd() / "reports" / f"{selections['ticker']}_{timestamp}"
-        save_path_str = typer.prompt(
-            "Save path (press Enter for default)",
-            default=str(default_path)
-        ).strip()
-        save_path = Path(save_path_str)
+
+def run_analysis():
+    # First get all user selections
+    selections = get_user_selections()
+    save_preferences = get_save_preferences(selections)
+    tickers = selections["tickers"]
+    analysis_results = []
+
+    if len(tickers) > 1:
+        console.print(
+            f"\n[bold cyan]Starting batch analysis for {len(tickers)} tickers:[/bold cyan] "
+            f"{', '.join(tickers)}\n"
+        )
+
+    for index, ticker in enumerate(tickers, start=1):
+        if len(tickers) > 1:
+            console.print(
+                Rule(
+                    f"Ticker {index}/{len(tickers)}: {ticker}",
+                    style="bold cyan",
+                )
+            )
         try:
-            report_file = save_report_to_disk(final_state, selections["ticker"], save_path)
-            console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
-            console.print(f"  [dim]Complete report:[/dim] {report_file.name}")
+            analysis_results.append(
+                run_single_analysis(
+                    selections,
+                    ticker,
+                    batch_index=index if len(tickers) > 1 else None,
+                    batch_total=len(tickers) if len(tickers) > 1 else None,
+                )
+            )
+        except Exception as exc:
+            console.print(f"[red]Analysis failed for {ticker}: {exc}[/red]")
+            analysis_results.append(
+                {
+                    "ticker": ticker,
+                    "analysis_date": selections["analysis_date"],
+                    "decision": None,
+                    "final_state": None,
+                    "results_dir": str(
+                        (Path(DEFAULT_CONFIG["results_dir"]) / ticker / selections["analysis_date"]).resolve()
+                    ),
+                    "price_target": None,
+                    "confidence_score": None,
+                    "target_horizon": None,
+                    "target_summary": None,
+                    "reference_price": None,
+                    "error": str(exc),
+                }
+            )
+
+    consolidated_default_report = None
+    if len(analysis_results) > 1:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        consolidated_default_dir = (
+            Path(DEFAULT_CONFIG["results_dir"])
+            / "batch"
+            / selections["analysis_date"]
+            / timestamp
+        )
+        try:
+            consolidated_default_report = save_consolidated_report(
+                analysis_results,
+                selections["analysis_date"],
+                consolidated_default_dir,
+            )
+            console.print(
+                f"[green]✓ Default consolidated reports saved to:[/green] {consolidated_default_dir.resolve()}"
+            )
+            console.print(
+                f"  [dim]Markdown:[/dim] {consolidated_default_report['markdown'].name}"
+            )
+            console.print(
+                f"  [dim]HTML:[/dim] {consolidated_default_report['html'].name}"
+            )
+        except Exception as exc:
+            console.print(f"[red]Error saving default consolidated report: {exc}[/red]")
+
+    # Post-analysis prompts (outside Live context for clean interaction)
+    console.print("\n[bold cyan]Batch Analysis Complete![/bold cyan]\n" if len(tickers) > 1 else "\n[bold cyan]Analysis Complete![/bold cyan]\n")
+    successful_results = [result for result in analysis_results if result.get("final_state")]
+
+    if not successful_results and len(tickers) == 1:
+        console.print("[yellow]No successful report was generated to save or display.[/yellow]")
+    if save_preferences["save_enabled"] and successful_results:
+        save_path = save_preferences["save_path"]
+        try:
+            if len(tickers) == 1:
+                report_file = save_report_to_disk(
+                    successful_results[0]["final_state"],
+                    successful_results[0]["ticker"],
+                    save_path,
+                )
+                console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
+                console.print(f"  [dim]Complete report:[/dim] {report_file.name}")
+            else:
+                save_path.mkdir(parents=True, exist_ok=True)
+                for result in analysis_results:
+                    if result.get("error") or not result.get("final_state"):
+                        continue
+                    save_report_to_disk(
+                        result["final_state"],
+                        result["ticker"],
+                        save_path / result["ticker"],
+                    )
+                report_file = save_consolidated_report(
+                    analysis_results,
+                    selections["analysis_date"],
+                    save_path,
+                )
+                console.print(f"\n[green]✓ Batch reports saved to:[/green] {save_path.resolve()}")
+                console.print(f"  [dim]Markdown:[/dim] {report_file['markdown'].name}")
+                console.print(f"  [dim]HTML:[/dim] {report_file['html'].name}")
         except Exception as e:
             console.print(f"[red]Error saving report: {e}[/red]")
 
     # Prompt to display full report
-    display_choice = typer.prompt("\nDisplay full report on screen?", default="Y").strip().upper()
+    display_prompt = (
+        "\nDisplay full report on screen?"
+        if len(tickers) == 1
+        else "\nDisplay consolidated report on screen?"
+    )
+    display_choice = typer.prompt(display_prompt, default="Y").strip().upper() if successful_results else "N"
     if display_choice in ("Y", "YES", ""):
-        display_complete_report(final_state)
+        if len(tickers) == 1:
+            display_complete_report(successful_results[0]["final_state"])
+        else:
+            display_consolidated_report(analysis_results, selections["analysis_date"])
 
 
 @app.command()
