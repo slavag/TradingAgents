@@ -71,28 +71,21 @@ class TradingAgentsGraph:
             exist_ok=True,
         )
 
-        # Initialize LLMs with provider-specific thinking configuration
-        llm_kwargs = self._get_provider_kwargs()
-
-        # Add callbacks to kwargs if provided (passed to LLM constructor)
-        if self.callbacks:
-            llm_kwargs["callbacks"] = self.callbacks
-
-        deep_client = create_llm_client(
-            provider=self.config["llm_provider"],
-            model=self.config["deep_think_llm"],
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
+        self.deep_thinking_llm = self._create_role_llm(
+            provider_key="deep_think_provider",
+            model_key="deep_think_llm",
+            base_url_key="deep_backend_url",
         )
-        quick_client = create_llm_client(
-            provider=self.config["llm_provider"],
-            model=self.config["quick_think_llm"],
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
+        self.quick_thinking_llm = self._create_role_llm(
+            provider_key="quick_think_provider",
+            model_key="quick_think_llm",
+            base_url_key="quick_backend_url",
         )
-
-        self.deep_thinking_llm = deep_client.get_llm()
-        self.quick_thinking_llm = quick_client.get_llm()
+        self.final_report_llm = self._create_role_llm(
+            provider_key="final_report_provider",
+            model_key="final_report_llm",
+            base_url_key="final_report_backend_url",
+        )
         
         # Initialize memories
         self.bull_memory = FinancialSituationMemory("bull_memory", self.config)
@@ -119,8 +112,8 @@ class TradingAgentsGraph:
         )
 
         self.propagator = Propagator()
-        self.reflector = Reflector(self.quick_thinking_llm)
-        self.signal_processor = SignalProcessor(self.quick_thinking_llm)
+        self.reflector = Reflector(self.final_report_llm)
+        self.signal_processor = SignalProcessor(self.final_report_llm)
 
         # State tracking
         self.curr_state = None
@@ -130,10 +123,10 @@ class TradingAgentsGraph:
         # Set up the graph
         self.graph = self.graph_setup.setup_graph(selected_analysts)
 
-    def _get_provider_kwargs(self) -> Dict[str, Any]:
-        """Get provider-specific kwargs for LLM client creation."""
+    def _get_provider_kwargs(self, provider: str) -> Dict[str, Any]:
+        """Get provider-specific kwargs for an individual LLM role."""
         kwargs = {}
-        provider = self.config.get("llm_provider", "").lower()
+        provider = provider.lower()
 
         if provider == "google":
             thinking_level = self.config.get("google_thinking_level")
@@ -146,6 +139,32 @@ class TradingAgentsGraph:
                 kwargs["reasoning_effort"] = reasoning_effort
 
         return kwargs
+
+    def _create_role_llm(
+        self,
+        provider_key: str,
+        model_key: str,
+        base_url_key: str,
+    ):
+        provider = (
+            self.config.get(provider_key)
+            or self.config.get("llm_provider")
+            or DEFAULT_CONFIG["llm_provider"]
+        )
+        model = self.config.get(model_key)
+        base_url = self.config.get(base_url_key) or self.config.get("backend_url")
+
+        llm_kwargs = self._get_provider_kwargs(provider)
+        if self.callbacks:
+            llm_kwargs["callbacks"] = self.callbacks
+
+        client = create_llm_client(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            **llm_kwargs,
+        )
+        return client.get_llm()
 
     def _create_tool_nodes(self) -> Dict[str, ToolNode]:
         """Create tool nodes for different data sources using abstract methods."""

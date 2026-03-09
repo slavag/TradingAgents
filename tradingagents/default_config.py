@@ -11,7 +11,14 @@ DEFAULT_CONFIG = {
     "llm_provider": "openai",
     "deep_think_llm": "gpt-5.4",
     "quick_think_llm": "gpt-5-mini",
+    "final_report_llm": "gpt-5-mini",
     "backend_url": "https://api.openai.com/v1",
+    "deep_think_provider": None,
+    "quick_think_provider": None,
+    "final_report_provider": None,
+    "deep_backend_url": None,
+    "quick_backend_url": None,
+    "final_report_backend_url": None,
     # Provider-specific thinking configuration
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"

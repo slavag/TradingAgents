@@ -28,6 +28,7 @@
 # TradingAgents: Multi-Agents LLM Financial Trading Framework
 
 ## News
+- [2026-03] Added a full **web app** with a multi-pane dashboard, multi-ticker batch analysis, per-ticker report actions, a bottom market-chatter ticker tape, ticker detail modal, cache-safe asset versioning, and file-based web server logging.
 - [2026-02] **TradingAgents v0.2.0** released with multi-provider LLM support (GPT-5.4, Gemini 3.1, Claude 4.5, Grok 4.1) and improved system architecture.
 - [2026-01] **Trading-R1** [Technical Report](https://arxiv.org/abs/2509.11420) released, with [Terminal](https://github.com/TauricResearch/Trading-R1) expected to land soon.
 
@@ -127,6 +128,7 @@ export ANTHROPIC_API_KEY=...       # Anthropic (Claude)
 export XAI_API_KEY=...             # xAI (Grok)
 export OPENROUTER_API_KEY=...      # OpenRouter
 export ALPHA_VANTAGE_API_KEY=...   # Alpha Vantage
+export ALPHAVANTAGE_API_KEY=...    # Alpha Vantage compatibility alias for the MyAgent chatter import
 ```
 
 For local models, configure Ollama with `llm_provider: "ollama"` in your config.
@@ -143,6 +145,12 @@ You can also try out the CLI directly by running:
 python -m cli.main
 ```
 You will see a screen where you can select your desired tickers, date, LLMs, research depth, etc.
+
+Current CLI enhancements:
+- Step 1 accepts **multiple tickers** separated by commas or spaces
+- Batch mode preserves per-ticker default reports and also writes a **consolidated markdown + HTML report**
+- OpenAI GPT-5 Responses API models are normalized so report output does not break downstream file writes
+- Latest provider menus are updated for OpenAI, Anthropic, Google, and xAI
 
 ### Web App
 
@@ -171,6 +179,50 @@ To bind a different host or port:
 ```bash
 python -m cli.main serve-web --host 0.0.0.0 --port 8080
 ```
+
+Web app highlights:
+- Fixed-height responsive dashboard with internal pane scrolling
+- Multi-ticker batch analysis
+- Live execution table showing **Team / Agent / Status**
+- Recent **Messages & Tools** feed plus current report snippet
+- Separate **provider + model selectors** for:
+  - Quick Thinker
+  - Deep Thinker
+  - Final Report
+- Report actions:
+  - Open HTML report
+  - Download markdown
+- Bottom **market chatter ticker tape**
+- Click any ticker in the tape to open a **floating detail modal** and optionally add it into the analysis ticker list
+
+Web server logging:
+- Default log file:
+  - `logs/tradingagents-web.log`
+- Default level:
+  - `WARNING`
+- Configurable launch example:
+
+```bash
+python -m cli.main serve-web --log-level ERROR --log-file /tmp/tradingagents-web.log
+```
+
+### Chatter Tape
+
+The bottom chatter tape is intentionally optimized for speed:
+- It ranks symbols from the **ApeWisdom ∩ StockTwits** universe
+- It shows fast market data in the tape itself:
+  - ticker
+  - score
+  - price
+  - 5d return
+  - trend score
+- Richer company information is loaded **on demand** in the ticker modal to avoid slowing down the tape refresh
+
+The web integration also bridges:
+- `ALPHA_VANTAGE_API_KEY`
+- `ALPHAVANTAGE_API_KEY`
+
+so the chatter import can use either name from `.env`.
 
 <p align="center">
   <img src="assets/cli/cli_init.png" width="100%" style="display: inline-block; margin: 0 2%;">
@@ -217,7 +269,13 @@ config = DEFAULT_CONFIG.copy()
 config["llm_provider"] = "openai"        # openai, google, anthropic, xai, openrouter, ollama
 config["deep_think_llm"] = "gpt-5.4"     # Model for complex reasoning
 config["quick_think_llm"] = "gpt-5-mini" # Model for quick tasks
+config["final_report_llm"] = "gpt-5-mini"
 config["max_debate_rounds"] = 2
+
+# Optional role-specific provider overrides
+config["quick_think_provider"] = "openai"
+config["deep_think_provider"] = "anthropic"
+config["final_report_provider"] = "google"
 
 ta = TradingAgentsGraph(debug=True, config=config)
 _, decision = ta.propagate("NVDA", "2026-01-15")

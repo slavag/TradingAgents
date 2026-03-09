@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import json
+import logging
+import os
 import threading
 import traceback
 import uuid
@@ -10,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from dotenv import load_dotenv
 
 from cli.main import (
     ANALYST_AGENT_NAMES,
@@ -29,10 +32,13 @@ from cli.stats_handler import StatsCallbackHandler
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
+logger = logging.getLogger("tradingagents.web.service")
+
 RESULTS_ROOT = Path(DEFAULT_CONFIG["results_dir"]).resolve()
 MYAGENT_SCRIPT = Path(
     "/Users/slava/Documents/Development/private/investment/MyAgent/social_topn_aw_stwt_only_with_ta_cli.py"
 )
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 _JOB_LOCK = threading.Lock()
 _JOBS: dict[str, dict[str, Any]] = {}
@@ -41,6 +47,8 @@ _SPEAKING_CACHE: dict[str, Any] = {
     "key": None,
     "data": None,
 }
+_MYAGENT_MODULE = None
+_TICKER_DETAIL_CACHE: dict[str, dict[str, Any]] = {}
 
 TEAM_ORDER = [
     ("Analyst Team", ["Market Analyst", "Social Analyst", "News Analyst", "Fundamentals Analyst"]),
@@ -59,6 +67,44 @@ REPORT_TITLES = {
     "trader_investment_plan": "Trading Team Plan",
     "final_trade_decision": "Portfolio Management Decision",
 }
+
+
+def classify_runtime_error(exc: Exception) -> dict[str, Any]:
+    """Classify provider/runtime exceptions into user-facing error types."""
+    raw_message = str(exc).strip()
+    lowered = raw_message.lower()
+
+    if (
+        "insufficient_quota" in lowered
+        or "exceeded your current quota" in lowered
+        or "check your plan and billing details" in lowered
+    ):
+        return {
+            "kind": "quota_exceeded",
+            "fatal_for_batch": True,
+            "user_message": (
+                "Provider quota exceeded. The API account has no remaining quota or credits. "
+                "Check billing, top up credits, or switch provider/model before retrying."
+            ),
+            "raw_message": raw_message,
+        }
+
+    if "error code: 429" in lowered or "rate limit" in lowered:
+        return {
+            "kind": "rate_limited",
+            "fatal_for_batch": True,
+            "user_message": (
+                "Provider rate limit reached. Wait and retry, reduce concurrency, or use another provider."
+            ),
+            "raw_message": raw_message,
+        }
+
+    return {
+        "kind": "runtime_error",
+        "fatal_for_batch": False,
+        "user_message": raw_message,
+        "raw_message": raw_message,
+    }
 
 
 def _now_iso() -> str:
@@ -314,8 +360,21 @@ def build_graph_config(payload: dict[str, Any]) -> dict[str, Any]:
     config["max_risk_discuss_rounds"] = payload.get("research_depth", 3)
     config["quick_think_llm"] = payload.get("quick_thinker", "gpt-5.4")
     config["deep_think_llm"] = payload.get("deep_thinker", "gpt-5.4")
+    config["final_report_llm"] = payload.get("final_report_model", config["quick_think_llm"])
     config["llm_provider"] = payload.get("llm_provider", "openai").lower()
     config["backend_url"] = payload.get("backend_url")
+    config["quick_think_provider"] = (
+        payload.get("quick_provider") or config["llm_provider"]
+    ).lower()
+    config["deep_think_provider"] = (
+        payload.get("deep_provider") or config["llm_provider"]
+    ).lower()
+    config["final_report_provider"] = (
+        payload.get("final_report_provider") or config["llm_provider"]
+    ).lower()
+    config["quick_backend_url"] = payload.get("quick_backend_url")
+    config["deep_backend_url"] = payload.get("deep_backend_url")
+    config["final_report_backend_url"] = payload.get("final_report_backend_url")
     config["google_thinking_level"] = payload.get("google_thinking_level")
     config["openai_reasoning_effort"] = payload.get("openai_reasoning_effort")
     return config
@@ -336,6 +395,7 @@ def serialize_result(result: dict[str, Any]) -> dict[str, Any]:
             "results_dir": result["results_dir"],
             "report_path": None,
             "custom_report_path": result.get("custom_report_path"),
+            "error_kind": result.get("error_kind"),
             "error": result["error"],
         }
 
@@ -373,15 +433,32 @@ def serialize_result(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_myagent_module():
+    global _MYAGENT_MODULE
+    if _MYAGENT_MODULE is not None:
+        logger.warning("Speaking stocks: reusing cached MyAgent module")
+        return _MYAGENT_MODULE
+
     if not MYAGENT_SCRIPT.exists():
         raise FileNotFoundError(f"MyAgent script not found: {MYAGENT_SCRIPT}")
 
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+    if not os.getenv("ALPHAVANTAGE_API_KEY") and os.getenv("ALPHA_VANTAGE_API_KEY"):
+        os.environ["ALPHAVANTAGE_API_KEY"] = os.environ["ALPHA_VANTAGE_API_KEY"]
+        logger.warning(
+            "Speaking stocks: mapped ALPHA_VANTAGE_API_KEY to ALPHAVANTAGE_API_KEY for MyAgent compatibility"
+        )
+
+    started_at = dt.datetime.now()
+    logger.warning("Speaking stocks: loading MyAgent module from %s", MYAGENT_SCRIPT)
     spec = importlib.util.spec_from_file_location("myagent_social", MYAGENT_SCRIPT)
     if spec is None or spec.loader is None:
         raise RuntimeError("Unable to load MyAgent speaking stocks module.")
 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    elapsed = (dt.datetime.now() - started_at).total_seconds()
+    logger.warning("Speaking stocks: MyAgent module loaded in %.2fs", elapsed)
+    _MYAGENT_MODULE = module
     return module
 
 
@@ -400,21 +477,72 @@ def fetch_speaking_stocks(
         and _SPEAKING_CACHE["expires_at"] is not None
         and now < _SPEAKING_CACHE["expires_at"]
     ):
+        logger.warning("Speaking stocks: cache hit for key=%s", cache_key)
         return _SPEAKING_CACHE["data"]
 
+    logger.warning(
+        "Speaking stocks: refresh started top_n=%s lookback_days=%s ape_pages=%s",
+        top_n,
+        lookback_days,
+        ape_pages,
+    )
+    started_at = dt.datetime.now()
     module = _load_myagent_module()
+
+    step_started = dt.datetime.now()
     aw_set = module.aw_symbol_set(pages=ape_pages)
+    logger.warning(
+        "Speaking stocks: ApeWisdom returned %s symbols in %.2fs",
+        len(aw_set),
+        (dt.datetime.now() - step_started).total_seconds(),
+    )
+
+    step_started = dt.datetime.now()
     stwt_set = module.stwt_symbol_set()
+    logger.warning(
+        "Speaking stocks: StockTwits returned %s symbols in %.2fs",
+        len(stwt_set),
+        (dt.datetime.now() - step_started).total_seconds(),
+    )
+
     intersection = sorted(list(aw_set & stwt_set))
-    if not intersection:
+    union = sorted(list(aw_set | stwt_set))
+    logger.warning(
+        "Speaking stocks: intersection size=%s union size=%s",
+        len(intersection),
+        len(union),
+    )
+
+    if not union:
+        logger.warning("Speaking stocks: no symbols available from ApeWisdom/StockTwits")
         return []
 
-    prices = module.fetch_prices(intersection, lookback=lookback_days)
+    backfill_candidates = [symbol for symbol in union if symbol not in intersection]
+    candidate_symbols = intersection + backfill_candidates
+    if len(candidate_symbols) > max(top_n * 3, 60):
+        candidate_symbols = candidate_symbols[: max(top_n * 3, 60)]
+
+    if len(intersection) < top_n:
+        logger.warning(
+            "Speaking stocks: intersection below requested top_n, backfilling with %s union-only symbols",
+            min(len(backfill_candidates), top_n - len(intersection)),
+        )
+
+    step_started = dt.datetime.now()
+    prices = module.fetch_prices(candidate_symbols, lookback=lookback_days)
+    logger.warning(
+        "Speaking stocks: yfinance fetched prices for %s tickers in %.2fs",
+        len(candidate_symbols),
+        (dt.datetime.now() - step_started).total_seconds(),
+    )
     if prices.empty:
+        logger.warning("Speaking stocks: price frame empty, refresh finished early")
         return []
 
     momentum_5d = prices.pct_change(5, fill_method=None).tail(1).T
     momentum_5d.columns = ["ret_5d"]
+    momentum_1d = prices.pct_change(1, fill_method=None).tail(1).T
+    momentum_1d.columns = ["ret_1d"]
     sma50 = prices.rolling(50, min_periods=10).mean().tail(1).T
     sma50.columns = ["sma50"]
     sma200 = prices.rolling(200, min_periods=30).mean().tail(1).T
@@ -422,7 +550,10 @@ def fetch_speaking_stocks(
     latest = prices.tail(1).T
     latest.columns = ["price"]
 
-    tech = latest.join([momentum_5d, sma50, sma200], how="outer")
+    tech = latest.join([momentum_1d, momentum_5d, sma50, sma200], how="outer")
+    tech["source_priority"] = [
+        1 if symbol in intersection else 0 for symbol in tech.index
+    ]
     tech["sma_trend"] = (
         (tech["price"] > tech["sma50"]).astype("Int64").fillna(0).astype(int)
         + (tech["sma50"] > tech["sma200"]).astype("Int64").fillna(0).astype(int)
@@ -430,47 +561,148 @@ def fetch_speaking_stocks(
     tech.index.name = "symbol"
 
     frame = tech.reset_index()
+    frame["ret_1d"] = pd.to_numeric(frame["ret_1d"], errors="coerce").fillna(0.0)
     frame["ret_5d"] = pd.to_numeric(frame["ret_5d"], errors="coerce").fillna(0.0)
     frame["sma_trend"] = pd.to_numeric(frame["sma_trend"], errors="coerce").fillna(0).astype(int)
+    frame["source_priority"] = pd.to_numeric(frame["source_priority"], errors="coerce").fillna(0).astype(int)
     frame["z_ret5"] = module._zscore(frame["ret_5d"])
-    frame["score"] = w_ret5 * frame["z_ret5"] + w_trend * frame["sma_trend"]
+    frame["score"] = (
+        w_ret5 * frame["z_ret5"]
+        + w_trend * frame["sma_trend"]
+        + 0.5 * frame["source_priority"]
+    )
 
     top = frame.sort_values("score", ascending=False).head(top_n).copy()
+    logger.warning(
+        "Speaking stocks: ranked top %s tickers=%s",
+        len(top),
+        top["symbol"].tolist(),
+    )
 
-    fundamentals = []
-    for symbol in top["symbol"]:
-        overview = module.alpha_overview(symbol)
-        fundamentals.append(
-            {
-                "symbol": symbol,
-                "pe_ratio": overview.get("PERatio", ""),
-                "market_cap": overview.get("MarketCapitalization", ""),
-                "sector": overview.get("Sector", ""),
-            }
-        )
-    top = top.merge(pd.DataFrame(fundamentals), on="symbol", how="left")
+    logger.warning(
+        "Speaking stocks: skipping Alpha Vantage fundamentals for fast ticker-tape refresh"
+    )
 
     records = []
     for row in top.itertuples():
         price = float(row.price) if pd.notna(row.price) else None
         ret_5d = float(row.ret_5d) * 100.0 if pd.notna(row.ret_5d) else None
+        ret_1d = float(row.ret_1d) * 100.0 if pd.notna(row.ret_1d) else None
         records.append(
             {
                 "ticker": row.symbol,
                 "score": round(float(row.score), 2),
                 "price": round(price, 2) if price is not None else None,
+                "ret_1d_pct": round(ret_1d, 1) if ret_1d is not None else None,
                 "ret_5d_pct": round(ret_5d, 1) if ret_5d is not None else None,
                 "trend_score": int(row.sma_trend) if pd.notna(row.sma_trend) else 0,
-                "pe_ratio": row.pe_ratio or None,
-                "market_cap": row.market_cap or None,
-                "sector": row.sector or None,
+                "z_ret5": round(float(row.z_ret5), 2) if pd.notna(row.z_ret5) else None,
+                "lookback_days": lookback_days,
+                "pe_ratio": None,
+                "market_cap": None,
+                "sector": None,
             }
         )
 
     _SPEAKING_CACHE["key"] = cache_key
     _SPEAKING_CACHE["data"] = records
     _SPEAKING_CACHE["expires_at"] = now + dt.timedelta(minutes=10)
+    logger.warning(
+        "Speaking stocks: refresh completed in %.2fs with %s records",
+        (dt.datetime.now() - started_at).total_seconds(),
+        len(records),
+    )
     return records
+
+
+def fetch_ticker_detail(ticker: str) -> dict[str, Any]:
+    symbol = ticker.strip().upper()
+    now = dt.datetime.now()
+    cached = _TICKER_DETAIL_CACHE.get(symbol)
+    if cached and cached.get("expires_at") and now < cached["expires_at"]:
+        logger.warning("Ticker detail: cache hit for %s", symbol)
+        return cached["data"]
+
+    logger.warning("Ticker detail: fetching company snapshot for %s", symbol)
+    import yfinance as yf
+
+    yf_ticker = yf.Ticker(symbol)
+    fast_info = {}
+    info = {}
+    try:
+        fast_info = dict(getattr(yf_ticker, "fast_info", {}) or {})
+    except Exception:
+        fast_info = {}
+    try:
+        info = yf_ticker.info or {}
+    except Exception:
+        info = {}
+
+    long_name = (
+        info.get("longName")
+        or info.get("shortName")
+        or info.get("displayName")
+        or symbol
+    )
+    sector = info.get("sectorDisp") or info.get("sector") or "—"
+    industry = info.get("industryDisp") or info.get("industry") or "—"
+    market_cap = (
+        info.get("marketCap")
+        or fast_info.get("market_cap")
+        or fast_info.get("marketCap")
+    )
+    current_price = (
+        fast_info.get("lastPrice")
+        or fast_info.get("last_price")
+        or info.get("currentPrice")
+        or info.get("regularMarketPrice")
+    )
+    pe_ratio = (
+        info.get("trailingPE")
+        or info.get("forwardPE")
+        or "—"
+    )
+    fifty_two_week_high = (
+        fast_info.get("yearHigh")
+        or fast_info.get("year_high")
+        or info.get("fiftyTwoWeekHigh")
+    )
+    fifty_two_week_low = (
+        fast_info.get("yearLow")
+        or fast_info.get("year_low")
+        or info.get("fiftyTwoWeekLow")
+    )
+    average_volume = (
+        info.get("averageVolume")
+        or info.get("averageDailyVolume10Day")
+        or fast_info.get("tenDayAverageVolume")
+    )
+    employees = info.get("fullTimeEmployees")
+    website = info.get("website")
+    summary = info.get("longBusinessSummary") or ""
+
+    data = {
+        "ticker": symbol,
+        "company_name": long_name,
+        "sector": sector,
+        "industry": industry,
+        "market_cap": market_cap,
+        "current_price": current_price,
+        "pe_ratio": pe_ratio,
+        "fifty_two_week_high": fifty_two_week_high,
+        "fifty_two_week_low": fifty_two_week_low,
+        "average_volume": average_volume,
+        "employees": employees,
+        "website": website,
+        "summary": summary[:900].strip() if summary else "Company profile summary unavailable.",
+    }
+
+    _TICKER_DETAIL_CACHE[symbol] = {
+        "data": data,
+        "expires_at": now + dt.timedelta(minutes=30),
+    }
+    logger.warning("Ticker detail: snapshot ready for %s", symbol)
+    return data
 
 
 def _run_job(job_id: str, payload: dict[str, Any]):
@@ -489,6 +721,13 @@ def _run_job(job_id: str, payload: dict[str, Any]):
     raw_results: list[dict[str, Any]] = []
     serialized_results: list[dict[str, Any]] = []
     _update_job(job_id, status="running", total=len(tickers), completed=0)
+    logger.info(
+        "Job %s started (provider=%s, tickers=%s, analysis_date=%s)",
+        job_id,
+        payload.get("llm_provider"),
+        tickers,
+        analysis_date,
+    )
 
     try:
         for index, ticker in enumerate(tickers, start=1):
@@ -535,7 +774,7 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                 )
                 decision_text = decision if isinstance(decision, str) else json.dumps(decision)
                 target_profile = estimate_target_profile(
-                    graph.quick_thinking_llm,
+                    graph.final_report_llm,
                     ticker,
                     analysis_date,
                     final_state,
@@ -561,7 +800,27 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     else None,
                     **target_profile,
                 }
+                logger.info(
+                    "Job %s completed ticker %s (%s/%s) decision=%s",
+                    job_id,
+                    ticker,
+                    index,
+                    len(tickers),
+                    decision_text,
+                )
             except Exception as exc:
+                error_info = classify_runtime_error(exc)
+                tracker.add_event("System", error_info["user_message"])
+                tracker.current_report = error_info["user_message"]
+                logger.warning(
+                    "Job %s failed ticker %s (%s/%s) kind=%s message=%s",
+                    job_id,
+                    ticker,
+                    index,
+                    len(tickers),
+                    error_info["kind"],
+                    error_info["user_message"],
+                )
                 result = {
                     "ticker": ticker,
                     "analysis_date": analysis_date,
@@ -575,7 +834,9 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     "target_horizon": None,
                     "target_summary": None,
                     "reference_price": None,
-                    "error": str(exc),
+                    "error_kind": error_info["kind"],
+                    "error": error_info["user_message"],
+                    "raw_error": error_info["raw_message"],
                 }
 
             raw_results.append(result)
@@ -584,9 +845,53 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                 job_id,
                 completed=index,
                 results=serialized_results,
-                progress_message=f"Completed {ticker} ({index}/{len(tickers)})",
+                progress_message=(
+                    f"Completed {ticker} ({index}/{len(tickers)})"
+                    if not result.get("error")
+                    else result["error"]
+                ),
                 **tracker.snapshot(),
             )
+
+            if result.get("error_kind") in {"quota_exceeded", "rate_limited"}:
+                for remaining_ticker in tickers[index:]:
+                    skipped = {
+                        "ticker": remaining_ticker,
+                        "analysis_date": analysis_date,
+                        "decision": None,
+                        "final_state": None,
+                        "results_dir": str((RESULTS_ROOT / remaining_ticker / analysis_date).resolve()),
+                        "report_path": None,
+                        "custom_report_path": None,
+                        "price_target": None,
+                        "confidence_score": None,
+                        "target_horizon": None,
+                        "target_summary": None,
+                        "reference_price": None,
+                        "error_kind": "skipped_after_provider_error",
+                        "error": (
+                            f"Skipped because the batch stopped after {ticker} hit "
+                            f"{result['error_kind']}."
+                        ),
+                    }
+                    raw_results.append(skipped)
+                    serialized_results.append(serialize_result(skipped))
+                logger.warning(
+                    "Job %s stopped early due to %s; skipped remaining tickers=%s",
+                    job_id,
+                    result["error_kind"],
+                    tickers[index:],
+                )
+
+                _update_job(
+                    job_id,
+                    completed=len(raw_results),
+                    results=serialized_results,
+                    progress_message=result["error"],
+                    current_ticker=None,
+                    **tracker.snapshot(),
+                )
+                break
 
         consolidated_markdown = None
         consolidated_html = None
@@ -606,12 +911,25 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     export_root,
                 )
 
+        fatal_provider_error = next(
+            (
+                item
+                for item in raw_results
+                if item.get("error_kind") in {"quota_exceeded", "rate_limited"}
+            ),
+            None,
+        )
+
         _update_job(
             job_id,
-            status="completed",
-            completed=len(tickers),
+            status="failed" if fatal_provider_error else "completed",
+            completed=len(raw_results),
             current_ticker=None,
-            progress_message="Analysis complete.",
+            progress_message=(
+                fatal_provider_error["error"]
+                if fatal_provider_error
+                else "Analysis complete."
+            ),
             results=serialized_results,
             consolidated_markdown=consolidated_markdown,
             consolidated_html=consolidated_html,
@@ -623,6 +941,15 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                 if custom_consolidated_paths
                 else None,
             },
+            error_kind=fatal_provider_error.get("error_kind") if fatal_provider_error else None,
+            error=fatal_provider_error.get("error") if fatal_provider_error else None,
+        )
+        logger.info(
+            "Job %s finished status=%s completed=%s/%s",
+            job_id,
+            "failed" if fatal_provider_error else "completed",
+            len(raw_results),
+            len(tickers),
         )
     except Exception as exc:
         _update_job(
@@ -632,6 +959,7 @@ def _run_job(job_id: str, payload: dict[str, Any]):
             traceback=traceback.format_exc(),
             current_ticker=None,
         )
+        logger.exception("Job %s crashed", job_id)
 
 
 def create_job(payload: dict[str, Any]) -> dict[str, Any]:
@@ -665,6 +993,7 @@ def create_job(payload: dict[str, Any]) -> dict[str, Any]:
 
     thread = threading.Thread(target=_run_job, args=(job_id, payload), daemon=True)
     thread.start()
+    logger.info("Job %s queued", job_id)
     return _job_snapshot(job_id)
 
 

@@ -3,16 +3,64 @@ const state = {
   pollHandle: null,
   htmlBlobUrl: null,
   markdownBlobUrl: null,
+  speakingItems: [],
+  activeTickerItem: null,
+};
+
+const MODEL_OPTIONS = {
+  openai: [
+    ["GPT-5.4 - Latest flagship", "gpt-5.4"],
+    ["GPT-5.4 Pro - Highest quality, highest cost", "gpt-5.4-pro"],
+    ["GPT-5.2 - Previous flagship", "gpt-5.2"],
+    ["GPT-5.1 - Flexible reasoning", "gpt-5.1"],
+    ["GPT-5 - Advanced reasoning", "gpt-5"],
+    ["GPT-5 Mini - Cost-optimized reasoning", "gpt-5-mini"],
+    ["GPT-5 Nano - Ultra-fast, high-throughput", "gpt-5-nano"],
+    ["GPT-4.1 - Smartest non-reasoning, 1M context", "gpt-4.1"],
+  ],
+  anthropic: [
+    ["Claude Opus 4.5 - Premium, max intelligence", "claude-opus-4-5"],
+    ["Claude Opus 4.1 - Most capable model", "claude-opus-4-1-20250805"],
+    ["Claude Sonnet 4.5 - Best for agents/coding", "claude-sonnet-4-5"],
+    ["Claude Haiku 4.5 - Fast + extended thinking", "claude-haiku-4-5"],
+    ["Claude Sonnet 4 - High-performance", "claude-sonnet-4-20250514"],
+  ],
+  google: [
+    ["Gemini 3.1 Pro Preview - Latest reasoning", "gemini-3.1-pro-preview"],
+    ["Gemini 3 Flash Preview - Latest fast multimodal", "gemini-3-flash-preview"],
+    ["Gemini 3.1 Flash-Lite Preview - Latest low-cost fast", "gemini-3.1-flash-lite-preview"],
+    ["Gemini 2.5 Pro - Stable reasoning", "gemini-2.5-pro"],
+    ["Gemini 2.5 Flash - Balanced, stable", "gemini-2.5-flash"],
+    ["Gemini 2.5 Flash Lite - Stable, low-cost", "gemini-2.5-flash-lite"],
+  ],
+  xai: [
+    ["Grok 4 - Flagship model", "grok-4"],
+    ["Grok 4.1 Fast (Reasoning) - Latest high-performance, 2M ctx", "grok-4-1-fast-reasoning"],
+    ["Grok 4.1 Fast (Non-Reasoning) - Latest speed-optimized, 2M ctx", "grok-4-1-fast-non-reasoning"],
+    ["Grok 4 Fast (Reasoning) - Previous high-performance", "grok-4-fast-reasoning"],
+    ["Grok 4 Fast (Non-Reasoning) - Previous speed-optimized", "grok-4-fast-non-reasoning"],
+  ],
+  openrouter: [
+    ["Z.AI GLM 4.5 Air (free)", "z-ai/glm-4.5-air:free"],
+    ["NVIDIA Nemotron 3 Nano 30B (free)", "nvidia/nemotron-3-nano-30b-a3b:free"],
+  ],
+  ollama: [
+    ["GLM-4.7-Flash:latest (30B, local)", "glm-4.7-flash:latest"],
+    ["GPT-OSS:latest (20B, local)", "gpt-oss:latest"],
+    ["Qwen3:latest (8B, local)", "qwen3:latest"],
+  ],
 };
 
 const elements = {
   form: document.getElementById("analysis-form"),
   tickers: document.getElementById("tickers"),
   analysisDate: document.getElementById("analysis-date"),
-  provider: document.getElementById("provider"),
-  backendUrl: document.getElementById("backend-url"),
+  quickProvider: document.getElementById("quick-provider"),
   quickThinker: document.getElementById("quick-thinker"),
+  deepProvider: document.getElementById("deep-provider"),
   deepThinker: document.getElementById("deep-thinker"),
+  finalReportProvider: document.getElementById("final-report-provider"),
+  finalReportModel: document.getElementById("final-report-model"),
   researchDepth: document.getElementById("research-depth"),
   openaiEffortWrap: document.getElementById("openai-effort-wrap"),
   openaiEffort: document.getElementById("openai-effort"),
@@ -31,7 +79,30 @@ const elements = {
   recentEvents: document.getElementById("recent-events"),
   currentReport: document.getElementById("current-report"),
   resultsList: document.getElementById("results-list"),
-  speakingList: document.getElementById("speaking-list"),
+  tickerTrack: document.getElementById("ticker-track"),
+  tickerStatus: document.getElementById("ticker-status"),
+  tickerModal: document.getElementById("ticker-modal"),
+  closeTickerModal: document.getElementById("close-ticker-modal"),
+  addTickerToAnalysis: document.getElementById("add-ticker-to-analysis"),
+  modalTitle: document.getElementById("ticker-modal-title"),
+  modalScore: document.getElementById("modal-score"),
+  modalPrice: document.getElementById("modal-price"),
+  modalRet5: document.getElementById("modal-ret5"),
+  modalTrend: document.getElementById("modal-trend"),
+  modalDescription: document.getElementById("modal-description"),
+  modalLookback: document.getElementById("modal-lookback"),
+  modalZret5: document.getElementById("modal-zret5"),
+  modalCompanyName: document.getElementById("modal-company-name"),
+  modalSector: document.getElementById("modal-sector"),
+  modalIndustry: document.getElementById("modal-industry"),
+  modalMarketCap: document.getElementById("modal-market-cap"),
+  modalCurrentPrice: document.getElementById("modal-current-price"),
+  modal52wHigh: document.getElementById("modal-52w-high"),
+  modal52wLow: document.getElementById("modal-52w-low"),
+  modalVolume: document.getElementById("modal-volume"),
+  modalEmployees: document.getElementById("modal-employees"),
+  modalWebsite: document.getElementById("modal-website"),
+  modalPe: document.getElementById("modal-pe"),
   refreshSpeaking: document.getElementById("refresh-speaking"),
   speakingTopn: document.getElementById("speaking-topn"),
   speakingLookback: document.getElementById("speaking-lookback"),
@@ -56,17 +127,36 @@ function setToday() {
   elements.analysisDate.value = new Date().toISOString().slice(0, 10);
 }
 
+function populateModelSelect(selectElement, options, preferredValue = null) {
+  const previousValue = preferredValue || selectElement.value;
+  selectElement.innerHTML = options
+    .map(([label, value]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`)
+    .join("");
+
+  const hasPreferred = options.some(([, value]) => value === previousValue);
+  selectElement.value = hasPreferred ? previousValue : options[0][1];
+}
+
+function updateModelOptions(provider, selectElement) {
+  const options = MODEL_OPTIONS[provider] || MODEL_OPTIONS.openai;
+  populateModelSelect(selectElement, options);
+}
+
 function updateProviderFields() {
-  const provider = elements.provider.value;
-  const isOpenAI = provider === "openai";
-  const isGoogle = provider === "google";
+  const providers = [
+    elements.quickProvider.value,
+    elements.deepProvider.value,
+    elements.finalReportProvider.value,
+  ];
+  const isOpenAI = providers.includes("openai");
+  const isGoogle = providers.includes("google");
 
   elements.openaiEffortWrap.classList.toggle("hidden", !isOpenAI);
   elements.googleThinkingWrap.classList.toggle("hidden", !isGoogle);
 
-  if (provider === "openai" && !elements.backendUrl.value.trim()) {
-    elements.backendUrl.value = "https://api.openai.com/v1";
-  }
+  updateModelOptions(elements.quickProvider.value, elements.quickThinker);
+  updateModelOptions(elements.deepProvider.value, elements.deepThinker);
+  updateModelOptions(elements.finalReportProvider.value, elements.finalReportModel);
 }
 
 function updateExportToggle() {
@@ -135,32 +225,41 @@ function setReportButtons(job) {
     : "Not written yet.";
 }
 
-function speakingCard(item, rank) {
-  const price = item.price != null ? `$${Number(item.price).toFixed(2)}` : "—";
+function tickerItem(item) {
+  const daily = item.ret_1d_pct != null ? `${item.ret_1d_pct.toFixed(1)}%` : "—";
   const ret5 = item.ret_5d_pct != null ? `${item.ret_5d_pct.toFixed(1)}%` : "—";
+  const trend = item.trend_score != null ? `trend ${item.trend_score}/2` : "trend —";
   return `
-    <article class="speaking-card">
-      <div class="speaking-topline">
-        <div>
-          <div class="ticker-mark">${escapeHtml(item.ticker)}</div>
-          <p class="speaking-text">Rank #${rank}</p>
-        </div>
-        <div class="decision-pill hold">Score ${escapeHtml(item.score)}</div>
+    <article class="ticker-item clickable" data-ticker-symbol="${escapeHtml(item.ticker)}" role="button" tabindex="0">
+      <div class="ticker-row">
+        <span class="ticker-symbol">${escapeHtml(item.ticker)}</span>
+        <span class="ticker-metric daily">${daily}</span>
       </div>
-      <div class="speaking-metrics">
-        <div class="metric-box"><span>Price</span><strong>${price}</strong></div>
-        <div class="metric-box"><span>5D</span><strong>${ret5}</strong></div>
-        <div class="metric-box"><span>Trend</span><strong>${escapeHtml(item.trend_score)}/2</strong></div>
-        <div class="metric-box"><span>Sector</span><strong>${escapeHtml(item.sector || "—")}</strong></div>
+      <div class="ticker-row ticker-row-sub">
+        <span class="ticker-metric">5d ${ret5}</span>
+        <span class="ticker-metric">${escapeHtml(trend)}</span>
       </div>
-      <p class="speaking-text">P/E: ${escapeHtml(item.pe_ratio || "—")} · Market Cap: ${escapeHtml(item.market_cap || "—")}</p>
     </article>
   `;
 }
 
+function tickerGroup(items) {
+  return `<div class="ticker-group">${items.map(tickerItem).join("")}</div>`;
+}
+
+function fillTickerSlots(items, targetCount) {
+  if (!items.length || targetCount <= 0) return [];
+  const filled = [];
+  for (let index = 0; index < targetCount; index += 1) {
+    filled.push(items[index % items.length]);
+  }
+  return filled;
+}
+
 async function fetchSpeakingStocks() {
-  elements.speakingList.className = "speaking-list empty-state";
-  elements.speakingList.textContent = "Refreshing chatter feed…";
+  elements.tickerStatus.textContent = "Refreshing chatter tape…";
+  elements.tickerTrack.innerHTML = '<div class="ticker-item placeholder">Refreshing chatter feed…</div>';
+  state.speakingItems = [];
 
   const topN = Number(elements.speakingTopn.value || 10);
   const lookback = Number(elements.speakingLookback.value || 30);
@@ -171,17 +270,137 @@ async function fetchSpeakingStocks() {
     const items = payload.items || [];
 
     if (!items.length) {
-      elements.speakingList.className = "speaking-list empty-state";
-      elements.speakingList.textContent = "No speaking stocks available right now.";
+      elements.tickerStatus.textContent = "No speaking stocks available right now.";
+      elements.tickerTrack.innerHTML = '<div class="ticker-item placeholder">No speaking stocks available right now.</div>';
       return;
     }
 
-    elements.speakingList.className = "speaking-list";
-    elements.speakingList.innerHTML = items.map((item, index) => speakingCard(item, index + 1)).join("");
+    state.speakingItems = items;
+    const visibleItems = fillTickerSlots(items, topN);
+    elements.tickerTrack.style.setProperty("--visible-tickers", String(topN));
+    elements.tickerTrack.innerHTML = tickerGroup(visibleItems) + tickerGroup(visibleItems);
+    elements.tickerStatus.textContent = `Showing ${visibleItems.length} slots from ${items.length} unique speaking stocks`;
   } catch (error) {
-    elements.speakingList.className = "speaking-list empty-state";
-    elements.speakingList.textContent = `Unable to load speaking stocks: ${error.message}`;
+    elements.tickerStatus.textContent = `Unable to load chatter feed: ${error.message}`;
+    elements.tickerTrack.innerHTML = `<div class="ticker-item placeholder">${escapeHtml(error.message)}</div>`;
   }
+}
+
+function appendTickerToTextarea(ticker) {
+  const current = elements.tickers.value
+    .split(/[\s,]+/)
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean);
+  if (!current.includes(ticker)) {
+    current.push(ticker);
+    elements.tickers.value = current.join(", ");
+  }
+}
+
+function openTickerModal(item) {
+  if (!item) return;
+  state.activeTickerItem = item;
+  elements.modalTitle.textContent = item.ticker;
+  elements.modalCompanyName.textContent = item.ticker;
+  elements.modalScore.textContent = String(item.score ?? "—");
+  elements.modalPrice.textContent = item.price != null ? `$${Number(item.price).toFixed(2)}` : "—";
+  elements.modalRet5.textContent = item.ret_5d_pct != null ? `${item.ret_5d_pct.toFixed(1)}%` : "—";
+  elements.modalTrend.textContent = item.trend_score != null ? `${item.trend_score}/2` : "—";
+  elements.modalLookback.textContent = item.lookback_days != null ? `${item.lookback_days} trading days` : "—";
+  elements.modalZret5.textContent = item.z_ret5 != null ? String(item.z_ret5) : "—";
+  elements.modalSector.textContent = "Loading…";
+  elements.modalIndustry.textContent = "Loading…";
+  elements.modalMarketCap.textContent = "Loading…";
+  elements.modalCurrentPrice.textContent = "Loading…";
+  elements.modal52wHigh.textContent = "Loading…";
+  elements.modal52wLow.textContent = "Loading…";
+  elements.modalVolume.textContent = "Loading…";
+  elements.modalEmployees.textContent = "Loading…";
+  elements.modalWebsite.textContent = "Loading…";
+  elements.modalPe.textContent = "Loading…";
+  elements.modalDescription.textContent =
+    `${item.ticker} is currently on the speaking-stocks tape because it ranks highly in the ` +
+    `ApeWisdom ∩ StockTwits universe, then gets scored by 5-day momentum and trend structure.`;
+
+  elements.tickerModal.classList.remove("hidden");
+  elements.tickerModal.setAttribute("aria-hidden", "false");
+  hydrateTickerModal(item.ticker);
+}
+
+function formatLargeNumber(value) {
+  if (value == null || value === "") return "—";
+  const num = Number(value);
+  if (Number.isNaN(num)) return String(value);
+  if (Math.abs(num) >= 1_000_000_000_000) return `${(num / 1_000_000_000_000).toFixed(2)}T`;
+  if (Math.abs(num) >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(2)}B`;
+  if (Math.abs(num) >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
+  if (Math.abs(num) >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
+  return num.toLocaleString();
+}
+
+async function hydrateTickerModal(symbol) {
+  try {
+    const response = await fetch(`/api/speaking-stocks/${encodeURIComponent(symbol)}`);
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || "Unable to load company snapshot.");
+    }
+
+    if (!state.activeTickerItem || state.activeTickerItem.ticker !== symbol) {
+      return;
+    }
+
+    elements.modalCompanyName.textContent = payload.company_name || symbol;
+    elements.modalSector.textContent = payload.sector || "—";
+    elements.modalIndustry.textContent = payload.industry || "—";
+    elements.modalMarketCap.textContent = formatLargeNumber(payload.market_cap);
+    elements.modalCurrentPrice.textContent =
+      payload.current_price != null ? `$${Number(payload.current_price).toFixed(2)}` : "—";
+    elements.modal52wHigh.textContent =
+      payload.fifty_two_week_high != null ? `$${Number(payload.fifty_two_week_high).toFixed(2)}` : "—";
+    elements.modal52wLow.textContent =
+      payload.fifty_two_week_low != null ? `$${Number(payload.fifty_two_week_low).toFixed(2)}` : "—";
+    elements.modalVolume.textContent = formatLargeNumber(payload.average_volume);
+    elements.modalEmployees.textContent = formatLargeNumber(payload.employees);
+    elements.modalWebsite.textContent = payload.website || "—";
+    elements.modalPe.textContent = payload.pe_ratio != null ? String(payload.pe_ratio) : "—";
+    elements.modalDescription.textContent = payload.summary || elements.modalDescription.textContent;
+  } catch (error) {
+    if (!state.activeTickerItem || state.activeTickerItem.ticker !== symbol) {
+      return;
+    }
+    elements.modalDescription.textContent = `Unable to load company snapshot: ${error.message}`;
+    elements.modalSector.textContent = "—";
+    elements.modalIndustry.textContent = "—";
+    elements.modalMarketCap.textContent = "—";
+    elements.modalCurrentPrice.textContent = "—";
+    elements.modal52wHigh.textContent = "—";
+    elements.modal52wLow.textContent = "—";
+    elements.modalVolume.textContent = "—";
+    elements.modalEmployees.textContent = "—";
+    elements.modalWebsite.textContent = "—";
+    elements.modalPe.textContent = "—";
+  }
+}
+
+function closeTickerModal() {
+  state.activeTickerItem = null;
+  elements.tickerModal.classList.add("hidden");
+  elements.tickerModal.setAttribute("aria-hidden", "true");
+}
+
+function handleTickerTrackClick(event) {
+  const trigger = event.target.closest("[data-ticker-symbol]");
+  if (!trigger) return;
+  const symbol = trigger.getAttribute("data-ticker-symbol");
+  const item = state.speakingItems.find((entry) => entry.ticker === symbol);
+  openTickerModal(item);
+}
+
+function addActiveTickerToAnalysis() {
+  if (!state.activeTickerItem) return;
+  appendTickerToTextarea(state.activeTickerItem.ticker);
+  closeTickerModal();
 }
 
 function decisionClass(decision) {
@@ -217,7 +436,7 @@ function resultCard(result) {
         <div class="metric-box"><span>Confidence</span><strong>${escapeHtml(result.confidence_label || "—")}</strong></div>
       </div>
       <p class="result-text"><strong>Outlook:</strong> ${escapeHtml(result.target_summary || "—")}</p>
-      <p class="result-text">${escapeHtml(result.executive_summary || "")}</p>
+      <p class="result-text">${escapeHtml(result.executiveSummary || result.executive_summary || "")}</p>
       <p class="result-text">
         <strong>Market:</strong> ${escapeHtml(highlights.market || "—")}<br />
         <strong>Social:</strong> ${escapeHtml(highlights.social || "—")}<br />
@@ -335,14 +554,17 @@ function collectPayload() {
     analysis_date: elements.analysisDate.value,
     analysts,
     research_depth: Number(elements.researchDepth.value),
-    llm_provider: elements.provider.value,
-    backend_url: elements.backendUrl.value.trim() || null,
+    llm_provider: elements.quickProvider.value,
+    quick_provider: elements.quickProvider.value,
     quick_thinker: elements.quickThinker.value.trim(),
+    deep_provider: elements.deepProvider.value,
     deep_thinker: elements.deepThinker.value.trim(),
-    openai_reasoning_effort: elements.provider.value === "openai"
+    final_report_provider: elements.finalReportProvider.value,
+    final_report_model: elements.finalReportModel.value.trim(),
+    openai_reasoning_effort: [elements.quickProvider.value, elements.deepProvider.value, elements.finalReportProvider.value].includes("openai")
       ? elements.openaiEffort.value
       : null,
-    google_thinking_level: elements.provider.value === "google"
+    google_thinking_level: [elements.quickProvider.value, elements.deepProvider.value, elements.finalReportProvider.value].includes("google")
       ? (elements.googleThinking.value || null)
       : null,
     save_reports: elements.saveReports.checked,
@@ -387,9 +609,9 @@ async function submitAnalysis(event) {
 function resetForm() {
   elements.form.reset();
   setToday();
-  elements.provider.value = "openai";
-  elements.quickThinker.value = "gpt-5.4";
-  elements.deepThinker.value = "gpt-5.4";
+  elements.quickProvider.value = "openai";
+  elements.deepProvider.value = "openai";
+  elements.finalReportProvider.value = "openai";
   elements.researchDepth.value = "3";
   elements.saveReports.checked = true;
   updateProviderFields();
@@ -418,13 +640,42 @@ function boot() {
   fetchHealth();
   fetchSpeakingStocks();
 
-  elements.provider.addEventListener("change", updateProviderFields);
+  document.querySelectorAll(".sidebar-toggle").forEach((toggle) => {
+    const section = toggle.parentElement;
+    const isExpanded = section.classList.contains("expanded");
+    section.classList.toggle("collapsed", !isExpanded);
+    toggle.setAttribute("aria-expanded", String(isExpanded));
+    toggle.addEventListener("click", (event) => {
+      event.preventDefault();
+      const nextExpanded = section.classList.contains("collapsed");
+      section.classList.toggle("collapsed", !nextExpanded);
+      section.classList.toggle("expanded", nextExpanded);
+      toggle.setAttribute("aria-expanded", String(nextExpanded));
+    });
+  });
+
+  elements.quickProvider.addEventListener("change", updateProviderFields);
+  elements.deepProvider.addEventListener("change", updateProviderFields);
+  elements.finalReportProvider.addEventListener("change", updateProviderFields);
   elements.saveReports.addEventListener("change", updateExportToggle);
   elements.refreshSpeaking.addEventListener("click", fetchSpeakingStocks);
+  elements.tickerTrack.addEventListener("click", handleTickerTrackClick);
   elements.form.addEventListener("submit", submitAnalysis);
   elements.resetForm.addEventListener("click", resetForm);
   elements.openHtmlReport.addEventListener("click", openHtmlReport);
   elements.downloadMarkdownReport.addEventListener("click", downloadMarkdownReport);
+  elements.closeTickerModal.addEventListener("click", closeTickerModal);
+  elements.addTickerToAnalysis.addEventListener("click", addActiveTickerToAnalysis);
+  elements.tickerModal.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.closeModal === "true") {
+      closeTickerModal();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !elements.tickerModal.classList.contains("hidden")) {
+      closeTickerModal();
+    }
+  });
 }
 
 boot();

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>TradingAgents Web</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
 </head>
 <body>
   <div class="app-shell">
@@ -12,11 +12,13 @@
       <div class="brand-block">
         <p class="eyebrow">TradingAgents Web</p>
         <h1>Research Desk</h1>
-        <p class="lede">
-          Run multi-ticker analysis, watch jobs complete live, and keep a market-chatter feed beside the workflow.
-        </p>
+        <p class="lede">Multi-ticker analysis with live execution tracking, report actions, and a streaming market chatter tape.</p>
       </div>
       <div class="status-cluster">
+        <article class="status-tile">
+          <span>Build</span>
+          <strong>sidebar-accordion-v2</strong>
+        </article>
         <article class="status-tile">
           <span>Backend</span>
           <strong id="health-indicator">Checking…</strong>
@@ -28,7 +30,7 @@
       </div>
     </header>
 
-    <main class="dashboard-grid">
+    <main class="workspace-grid">
       <section class="pane controls-pane">
         <div class="section-head">
           <div>
@@ -39,12 +41,12 @@
         </div>
 
         <form id="analysis-form" class="control-form">
-          <label class="field">
+          <label class="field field-wide">
             <span>Tickers</span>
             <textarea id="tickers" name="tickers" rows="4" placeholder="ASTS, NVDA, SPY"></textarea>
           </label>
 
-          <div class="compact-grid two">
+          <div class="form-row">
             <label class="field">
               <span>Analysis Date</span>
               <input id="analysis-date" name="analysis_date" type="date" />
@@ -59,35 +61,76 @@
             </label>
           </div>
 
-          <label class="field">
-            <span>Provider</span>
-            <select id="provider" name="llm_provider">
-              <option value="openai" selected>OpenAI</option>
-              <option value="anthropic">Anthropic</option>
-              <option value="google">Google</option>
-              <option value="xai">xAI</option>
-              <option value="openrouter">OpenRouter</option>
-              <option value="ollama">Ollama</option>
-            </select>
-          </label>
+          <section class="sidebar-section expanded">
+            <button class="sidebar-toggle" type="button" aria-expanded="true">Quick Thinker</button>
+            <div class="section-body role-card">
+              <div class="field">
+                <span>Provider</span>
+                <select id="quick-provider" name="quick_provider">
+                  <option value="openai" selected>OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="google">Google</option>
+                  <option value="xai">xAI</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="ollama">Ollama</option>
+                </select>
+              </div>
+              <div class="field">
+                <span>Model</span>
+                <div class="select-shell">
+                  <select id="quick-thinker" name="quick_thinker" class="model-select"></select>
+                </div>
+              </div>
+            </div>
+          </section>
 
-          <label class="field">
-            <span>Backend URL</span>
-            <input id="backend-url" name="backend_url" type="text" placeholder="https://api.openai.com/v1" />
-          </label>
+          <section class="sidebar-section expanded">
+            <button class="sidebar-toggle" type="button" aria-expanded="true">Deep Thinker</button>
+            <div class="section-body role-card">
+              <div class="field">
+                <span>Provider</span>
+                <select id="deep-provider" name="deep_provider">
+                  <option value="openai" selected>OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="google">Google</option>
+                  <option value="xai">xAI</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="ollama">Ollama</option>
+                </select>
+              </div>
+              <div class="field">
+                <span>Model</span>
+                <div class="select-shell">
+                  <select id="deep-thinker" name="deep_thinker" class="model-select"></select>
+                </div>
+              </div>
+            </div>
+          </section>
 
-          <div class="compact-grid two">
-            <label class="field">
-              <span>Quick Thinker</span>
-              <input id="quick-thinker" name="quick_thinker" type="text" value="gpt-5.4" />
-            </label>
-            <label class="field">
-              <span>Deep Thinker</span>
-              <input id="deep-thinker" name="deep_thinker" type="text" value="gpt-5.4" />
-            </label>
-          </div>
+          <section class="sidebar-section expanded">
+            <button class="sidebar-toggle" type="button" aria-expanded="true">Final Report</button>
+            <div class="section-body role-card">
+              <div class="field">
+                <span>Provider</span>
+                <select id="final-report-provider" name="final_report_provider">
+                  <option value="openai" selected>OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="google">Google</option>
+                  <option value="xai">xAI</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="ollama">Ollama</option>
+                </select>
+              </div>
+              <div class="field">
+                <span>Model</span>
+                <div class="select-shell">
+                  <select id="final-report-model" name="final_report_model" class="model-select"></select>
+                </div>
+              </div>
+            </div>
+          </section>
 
-          <div class="compact-grid two provider-grid">
+          <div class="form-row provider-row">
             <label id="openai-effort-wrap" class="field">
               <span>OpenAI Reasoning</span>
               <select id="openai-effort" name="openai_reasoning_effort">
@@ -115,14 +158,52 @@
             <label><input type="checkbox" name="analyst" value="fundamentals" checked /> Fundamentals</label>
           </fieldset>
 
-          <div class="toggle-line">
-            <label><input id="save-reports" name="save_reports" type="checkbox" checked /> Save reports to disk</label>
-          </div>
+          <section class="sidebar-section expanded">
+            <button class="sidebar-toggle" type="button" aria-expanded="true">Reports</button>
+            <div class="section-body reports-body">
+              <span id="report-state" class="chip neutral">Waiting</span>
+              <div class="save-block">
+                <label class="toggle-line"><input id="save-reports" name="save_reports" type="checkbox" checked /> Save reports to disk</label>
+                <label id="export-path-wrap" class="field field-wide">
+                  <span>Export Path</span>
+                  <input id="export-path" name="export_path" type="text" placeholder="/Users/slava/Documents/Development/private/investment/TradingAgents/reports/web_batch" />
+                </label>
+              </div>
 
-          <label id="export-path-wrap" class="field">
-            <span>Export Path</span>
-            <input id="export-path" name="export_path" type="text" placeholder="/Users/slava/Documents/Development/private/investment/TradingAgents/reports/web_batch" />
-          </label>
+              <div class="report-actions">
+                <button id="open-html-report" class="primary-button" type="button" disabled>Open HTML Report</button>
+                <button id="download-markdown-report" class="secondary-button" type="button" disabled>Download Markdown</button>
+              </div>
+
+              <div class="report-notes">
+                <article class="note-card">
+                  <span>Default Save</span>
+                  <strong id="default-report-path">No report yet.</strong>
+                </article>
+                <article class="note-card">
+                  <span>Custom Save</span>
+                  <strong id="custom-report-path">Not written yet.</strong>
+                </article>
+              </div>
+            </div>
+          </section>
+
+          <section class="sidebar-section expanded">
+            <button class="sidebar-toggle" type="button" aria-expanded="true">Chatter Feed Controls</button>
+            <div class="section-body ticker-config">
+              <div class="form-row">
+                <label class="field slim">
+                  <span>Top N</span>
+                  <input id="speaking-topn" type="number" min="1" max="50" value="20" />
+                </label>
+                <label class="field slim">
+                  <span>Lookback</span>
+                  <input id="speaking-lookback" type="number" min="5" max="120" value="30" />
+                </label>
+              </div>
+              <button id="refresh-speaking" class="ghost-button wide-button" type="button">Refresh Ticker Tape</button>
+            </div>
+          </section>
 
           <div class="button-row">
             <button class="primary-button" type="submit">Start Run</button>
@@ -135,61 +216,21 @@
         <section class="pane run-pane">
           <div class="section-head">
             <div>
-              <p class="section-kicker">Execution</p>
-              <h2>Run Status</h2>
+              <p class="section-kicker">Activity</p>
+              <h2>Messages &amp; Current Report</h2>
             </div>
-            <span id="status-badge" class="chip neutral">Idle</span>
           </div>
 
-          <div class="summary-strip">
-            <article class="summary-card">
-              <span>Current Ticker</span>
-              <strong id="current-ticker">—</strong>
-            </article>
-            <article class="summary-card">
-              <span>Completed</span>
-              <strong id="completed-count">0 / 0</strong>
-            </article>
-            <article class="summary-card wide">
-              <span>Message</span>
-              <strong id="progress-message">Waiting for a run.</strong>
-            </article>
-          </div>
-
-          <div class="live-grid">
-            <section class="subpane progress-subpane">
-              <div class="subpane-head">
-                <h3>Execution Progress</h3>
-              </div>
-              <div class="table-wrap">
-                <table class="progress-table">
-                  <thead>
-                    <tr>
-                      <th>Team</th>
-                      <th>Agent</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody id="progress-body">
-                    <tr>
-                      <td colspan="3" class="placeholder-row">Progress table will update when the run starts.</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <section class="subpane activity-subpane">
-              <div class="subpane-head">
-                <h3>Messages &amp; Tools</h3>
-              </div>
-              <div id="recent-events" class="event-feed empty-state">Activity will appear here once agents start working.</div>
-              <div class="report-snippet">
-                <p class="section-kicker">Current Report</p>
-                <pre id="current-report">Waiting for report output.</pre>
-              </div>
-            </section>
-          </div>
+          <section class="subpane activity-subpane activity-subpane-full">
+            <div class="subpane-head">
+              <h3>Messages &amp; Tools</h3>
+            </div>
+            <div id="recent-events" class="event-feed empty-state">Activity will appear here once agents start working.</div>
+            <div class="report-snippet">
+              <p class="section-kicker">Current Report</p>
+              <pre id="current-report">Waiting for report output.</pre>
+            </div>
+          </section>
         </section>
 
         <section class="pane results-pane">
@@ -203,59 +244,113 @@
         </section>
       </section>
 
-      <aside class="right-column">
-        <section class="pane actions-pane">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Reports</p>
-              <h2>Open and Export</h2>
-            </div>
-            <span id="report-state" class="chip neutral">Waiting</span>
+      <aside class="pane progress-sidebar">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Execution</p>
+            <h2>Run Status</h2>
           </div>
+          <span id="status-badge" class="chip neutral">Idle</span>
+        </div>
 
-          <div class="report-actions">
-            <button id="open-html-report" class="primary-button" type="button" disabled>Open HTML Report</button>
-            <button id="download-markdown-report" class="secondary-button" type="button" disabled>Download Markdown</button>
+        <div class="summary-strip summary-strip-vertical">
+          <article class="summary-card">
+            <span>Current Ticker</span>
+            <strong id="current-ticker">—</strong>
+          </article>
+          <article class="summary-card">
+            <span>Completed</span>
+            <strong id="completed-count">0 / 0</strong>
+          </article>
+          <article class="summary-card wide">
+            <span>Message</span>
+            <strong id="progress-message">Waiting for a run.</strong>
+          </article>
+        </div>
+
+        <section class="subpane progress-subpane progress-subpane-full">
+          <div class="subpane-head">
+            <h3>Execution Progress</h3>
           </div>
-
-          <div class="report-notes">
-            <article class="note-card">
-              <span>Default Save</span>
-              <strong id="default-report-path">No report yet.</strong>
-            </article>
-            <article class="note-card">
-              <span>Custom Save</span>
-              <strong id="custom-report-path">Not written yet.</strong>
-            </article>
+          <div class="table-wrap">
+            <table class="progress-table">
+              <thead>
+                <tr>
+                  <th>Team</th>
+                  <th>Agent</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="progress-body">
+                <tr>
+                  <td colspan="3" class="placeholder-row">Progress table will update when the run starts.</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-        </section>
-
-        <section class="pane speaking-pane">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Chatter</p>
-              <h2>Speaking Stocks</h2>
-            </div>
-            <button id="refresh-speaking" class="ghost-button" type="button">Refresh</button>
-          </div>
-
-          <div class="compact-grid two">
-            <label class="field slim">
-              <span>Top N</span>
-              <input id="speaking-topn" type="number" min="1" max="50" value="10" />
-            </label>
-            <label class="field slim">
-              <span>Lookback</span>
-              <input id="speaking-lookback" type="number" min="5" max="120" value="30" />
-            </label>
-          </div>
-
-          <div id="speaking-list" class="speaking-list empty-state">Loading chatter universe…</div>
         </section>
       </aside>
+
     </main>
+
+    <section class="pane ticker-pane">
+      <div class="ticker-pane-head">
+        <div>
+          <p class="section-kicker">Market Chatter</p>
+          <h2>Speaking Stocks</h2>
+        </div>
+        <p id="ticker-status" class="ticker-status">Loading chatter tape…</p>
+      </div>
+      <div class="ticker-marquee">
+        <div id="ticker-track" class="ticker-track">
+          <div class="ticker-item placeholder">Refreshing chatter feed…</div>
+        </div>
+      </div>
+    </section>
   </div>
 
-  <script src="/static/app.js" defer></script>
+  <div id="ticker-modal" class="modal-shell hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="true"></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ticker-modal-title">
+      <div class="modal-head">
+        <div>
+          <p class="section-kicker">Ticker Detail</p>
+          <h2 id="ticker-modal-title">Ticker</h2>
+        </div>
+        <button id="close-ticker-modal" class="ghost-button icon-button" type="button" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-metrics">
+          <article class="metric-box"><span>Score</span><strong id="modal-score">—</strong></article>
+          <article class="metric-box"><span>Price</span><strong id="modal-price">—</strong></article>
+          <article class="metric-box"><span>5D Return</span><strong id="modal-ret5">—</strong></article>
+          <article class="metric-box"><span>Trend</span><strong id="modal-trend">—</strong></article>
+        </div>
+        <div class="modal-copy">
+          <div class="company-at-a-glance">
+            <article class="note-card"><span>Company</span><strong id="modal-company-name">—</strong></article>
+            <article class="note-card"><span>Sector</span><strong id="modal-sector">—</strong></article>
+            <article class="note-card"><span>Industry</span><strong id="modal-industry">—</strong></article>
+            <article class="note-card"><span>Market Cap</span><strong id="modal-market-cap">—</strong></article>
+            <article class="note-card"><span>P/E</span><strong id="modal-pe">—</strong></article>
+            <article class="note-card"><span>Current Price</span><strong id="modal-current-price">—</strong></article>
+            <article class="note-card"><span>52W High</span><strong id="modal-52w-high">—</strong></article>
+            <article class="note-card"><span>52W Low</span><strong id="modal-52w-low">—</strong></article>
+            <article class="note-card"><span>Avg Volume</span><strong id="modal-volume">—</strong></article>
+            <article class="note-card"><span>Employees</span><strong id="modal-employees">—</strong></article>
+            <article class="note-card"><span>Website</span><strong id="modal-website">—</strong></article>
+            <article class="note-card"><span>Lookback Window</span><strong id="modal-lookback">—</strong></article>
+            <article class="note-card"><span>Momentum Z-Score</span><strong id="modal-zret5">—</strong></article>
+          </div>
+          <p id="modal-description">No ticker selected.</p>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="add-ticker-to-analysis" class="primary-button" type="button">Add to Analysis</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=__ASSET_VERSION__" defer></script>
 </body>
 </html>

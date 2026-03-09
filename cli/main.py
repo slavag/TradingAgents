@@ -2191,15 +2191,20 @@ def serve_web(
     host: str = "127.0.0.1",
     port: int = 8000,
     reload: bool = False,
+    open_browser: bool = True,
+    log_level: str = "WARNING",
+    log_file: str | None = None,
 ):
     """Run the TradingAgents web application."""
-    import uvicorn
+    from tradingagents.web.app import run
 
-    uvicorn.run(
-        "tradingagents.web.app:app",
+    run(
         host=host,
         port=port,
         reload=reload,
+        open_browser=open_browser,
+        log_level=log_level,
+        log_file=log_file,
     )
 
 
