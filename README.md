@@ -1,3 +1,5 @@
+<img width="2559" height="1290" alt="image" src="https://github.com/user-attachments/assets/a6b967e3-73e9-460d-9311-ac8482ac5ba8" />
+
 <p align="center">
   <img src="assets/TauricResearch.png" style="width: 60%; height: auto;">
 </p>
@@ -28,8 +30,9 @@
 # TradingAgents: Multi-Agents LLM Financial Trading Framework
 
 ## News
+- [2026-03] **TradingAgents v0.2.1** released with GPT-5.4, Gemini 3.1, Claude 4.6 model coverage and improved system stability.
 - [2026-03] Added a full **web app** with a multi-pane dashboard, multi-ticker batch analysis, per-ticker report actions, a bottom market-chatter ticker tape, ticker detail modal, cache-safe asset versioning, and file-based web server logging.
-- [2026-02] **TradingAgents v0.2.0** released with multi-provider LLM support (GPT-5.4, Gemini 3.1, Claude 4.5, Grok 4.1) and improved system architecture.
+- [2026-02] **TradingAgents v0.2.0** released with multi-provider LLM support (GPT-5.x, Gemini 3.x, Claude 4.x, Grok 4.x) and improved system architecture.
 - [2026-01] **Trading-R1** [Technical Report](https://arxiv.org/abs/2509.11420) released, with [Terminal](https://github.com/TauricResearch/Trading-R1) expected to land soon.
 
 <div align="center">

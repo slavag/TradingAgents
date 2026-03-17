@@ -1,7 +1,11 @@
 import questionary
 from typing import List, Optional, Tuple, Dict
 
+from rich.console import Console
+
 from cli.models import AnalystType
+
+console = Console()
 
 ANALYST_ORDER = [
     ("Market Analyst", AnalystType.MARKET),
@@ -126,20 +130,22 @@ def select_shallow_thinking_agent(provider) -> str:
     """Select shallow thinking llm engine using an interactive selection."""
 
     # Define shallow thinking llm engine options with their corresponding model names
+    # Ordering: medium → light → heavy (balanced first for quick tasks)
+    # Within same tier, newer models first
     SHALLOW_AGENT_OPTIONS = {
         "openai": [
-            ("GPT-5.4 - Latest flagship", "gpt-5.4"),
+            ("GPT-5.4 - Latest frontier, 1M context", "gpt-5.4"),
             ("GPT-5.4 Pro - Highest quality, highest cost", "gpt-5.4-pro"),
-            ("GPT-5 Mini - Cost-optimized reasoning", "gpt-5-mini"),
-            ("GPT-5 Nano - Ultra-fast, high-throughput", "gpt-5-nano"),
+            ("GPT-5 Mini - Balanced speed, cost, and capability", "gpt-5-mini"),
+            ("GPT-5 Nano - High-throughput, simple tasks", "gpt-5-nano"),
             ("GPT-5.2 - Previous flagship", "gpt-5.2"),
             ("GPT-5.1 - Flexible reasoning", "gpt-5.1"),
-            ("GPT-4.1 - Smartest non-reasoning, 1M context", "gpt-4.1"),
+            ("GPT-4.1 - Smartest non-reasoning model", "gpt-4.1"),
         ],
         "anthropic": [
-            ("Claude Haiku 4.5 - Fast + extended thinking", "claude-haiku-4-5"),
-            ("Claude Sonnet 4.5 - Best for agents/coding", "claude-sonnet-4-5"),
-            ("Claude Sonnet 4 - High-performance", "claude-sonnet-4-20250514"),
+            ("Claude Sonnet 4.6 - Best speed and intelligence balance", "claude-sonnet-4-6"),
+            ("Claude Haiku 4.5 - Fast, near-instant responses", "claude-haiku-4-5"),
+            ("Claude Sonnet 4.5 - Agents and coding", "claude-sonnet-4-5"),
         ],
         "google": [
             ("Gemini 3 Flash Preview - Latest fast multimodal", "gemini-3-flash-preview"),
@@ -151,6 +157,7 @@ def select_shallow_thinking_agent(provider) -> str:
         "xai": [
             ("Grok 4.1 Fast (Non-Reasoning) - Latest speed-optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
             ("Grok 4.1 Fast (Reasoning) - Latest high-performance, 2M ctx", "grok-4-1-fast-reasoning"),
+            ("Grok 4 - Flagship model", "grok-4-0709"),
             ("Grok 4 Fast (Non-Reasoning) - Previous speed-optimized", "grok-4-fast-non-reasoning"),
             ("Grok 4 Fast (Reasoning) - Previous high-performance", "grok-4-fast-reasoning"),
         ],
@@ -194,23 +201,24 @@ def select_deep_thinking_agent(provider) -> str:
     """Select deep thinking llm engine using an interactive selection."""
 
     # Define deep thinking llm engine options with their corresponding model names
+    # Ordering: heavy → medium → light (most capable first for deep tasks)
+    # Within same tier, newer models first
     DEEP_AGENT_OPTIONS = {
         "openai": [
-            ("GPT-5.4 - Latest flagship", "gpt-5.4"),
-            ("GPT-5.4 Pro - Highest quality, highest cost", "gpt-5.4-pro"),
-            ("GPT-5.2 - Previous flagship", "gpt-5.2"),
+            ("GPT-5.4 - Latest frontier, 1M context", "gpt-5.4"),
+            ("GPT-5.4 Pro - Most capable, expensive ($30/$180 per 1M tokens)", "gpt-5.4-pro"),
+            ("GPT-5.2 - Strong reasoning, cost-effective", "gpt-5.2"),
             ("GPT-5.1 - Flexible reasoning", "gpt-5.1"),
             ("GPT-5 - Advanced reasoning", "gpt-5"),
             ("GPT-4.1 - Smartest non-reasoning, 1M context", "gpt-4.1"),
-            ("GPT-5 Mini - Cost-optimized reasoning", "gpt-5-mini"),
+            ("GPT-5 Mini - Balanced speed, cost, and capability", "gpt-5-mini"),
             ("GPT-5 Nano - Ultra-fast, high-throughput", "gpt-5-nano"),
         ],
         "anthropic": [
-            ("Claude Sonnet 4.5 - Best for agents/coding", "claude-sonnet-4-5"),
+            ("Claude Opus 4.6 - Most intelligent, agents and coding", "claude-opus-4-6"),
             ("Claude Opus 4.5 - Premium, max intelligence", "claude-opus-4-5"),
-            ("Claude Opus 4.1 - Most capable model", "claude-opus-4-1-20250805"),
-            ("Claude Haiku 4.5 - Fast + extended thinking", "claude-haiku-4-5"),
-            ("Claude Sonnet 4 - High-performance", "claude-sonnet-4-20250514"),
+            ("Claude Sonnet 4.6 - Best speed and intelligence balance", "claude-sonnet-4-6"),
+            ("Claude Sonnet 4.5 - Agents and coding", "claude-sonnet-4-5"),
         ],
         "google": [
             ("Gemini 3.1 Pro Preview - Latest reasoning", "gemini-3.1-pro-preview"),
@@ -219,10 +227,10 @@ def select_deep_thinking_agent(provider) -> str:
             ("Gemini 2.5 Flash - Balanced, stable", "gemini-2.5-flash"),
         ],
         "xai": [
+            ("Grok 4 - Flagship model", "grok-4-0709"),
             ("Grok 4.1 Fast (Reasoning) - Latest high-performance, 2M ctx", "grok-4-1-fast-reasoning"),
-            ("Grok 4 - Flagship model", "grok-4"),
-            ("Grok 4.1 Fast (Non-Reasoning) - Latest speed-optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
             ("Grok 4 Fast (Reasoning) - Previous high-performance", "grok-4-fast-reasoning"),
+            ("Grok 4.1 Fast (Non-Reasoning) - Latest speed-optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
             ("Grok 4 Fast (Non-Reasoning) - Previous speed-optimized", "grok-4-fast-non-reasoning"),
         ],
         "openrouter": [
