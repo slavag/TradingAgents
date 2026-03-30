@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import hashlib
 import logging
 import logging.config
@@ -19,6 +20,7 @@ from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from tradingagents.llm_clients.model_catalog import get_web_model_options
 from tradingagents.web.service import (
     create_job,
     fetch_market_tickers,
@@ -177,7 +179,7 @@ class AnalysisRequest(BaseModel):
     deep_provider: str = "openai"
     deep_thinker: str = "gpt-5.4"
     final_report_provider: str = "openai"
-    final_report_model: str = "gpt-5-mini"
+    final_report_model: str = "gpt-5.4-mini"
     google_thinking_level: str | None = None
     openai_reasoning_effort: str | None = "medium"
     save_reports: bool = True
@@ -187,8 +189,13 @@ class AnalysisRequest(BaseModel):
 def _render_index_response() -> HTMLResponse:
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
-        html = index_path.read_text(encoding="utf-8").replace(
-            "__ASSET_VERSION__", ASSET_VERSION
+        html = (
+            index_path.read_text(encoding="utf-8")
+            .replace("__ASSET_VERSION__", ASSET_VERSION)
+            .replace(
+                "__MODEL_OPTIONS_JSON__",
+                json.dumps(get_web_model_options()),
+            )
         )
         return HTMLResponse(
             html,

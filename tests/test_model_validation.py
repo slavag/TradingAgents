@@ -1,8 +1,10 @@
 import unittest
 import warnings
+from unittest.mock import patch
 
 from tradingagents.llm_clients.base_client import BaseLLMClient
 from tradingagents.llm_clients.model_catalog import get_known_models
+from tradingagents.llm_clients.openai_client import OpenAIClient
 from tradingagents.llm_clients.validators import validate_model
 
 
@@ -50,3 +52,22 @@ class ModelValidationTests(unittest.TestCase):
                     client.get_llm()
 
                 self.assertEqual(caught, [])
+
+    @patch("tradingagents.llm_clients.openai_client.NormalizedChatOpenAI")
+    def test_openai_legacy_gpt5_aliases_are_normalized_without_warning(self, mock_chat):
+        aliases = {
+            "gpt-5-mini": "gpt-5.4-mini",
+            "gpt-5-nano": "gpt-5.4-nano",
+        }
+
+        for legacy_name, canonical_name in aliases.items():
+            with self.subTest(model=legacy_name):
+                mock_chat.reset_mock()
+
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always")
+                    client = OpenAIClient(legacy_name, provider="openai")
+                    client.get_llm()
+
+                self.assertEqual(caught, [])
+                self.assertEqual(mock_chat.call_args.kwargs["model"], canonical_name)

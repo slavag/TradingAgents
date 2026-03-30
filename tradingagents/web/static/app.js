@@ -13,49 +13,7 @@ const state = {
 const MARKET_TAPE_REFRESH_MS = 10 * 60 * 1000;
 const SPEAKING_TAPE_REFRESH_MS = 30 * 60 * 1000;
 
-const MODEL_OPTIONS = {
-  openai: [
-    ["GPT-5.4 - Latest flagship", "gpt-5.4"],
-    ["GPT-5.4 Pro - Highest quality, highest cost", "gpt-5.4-pro"],
-    ["GPT-5.2 - Previous flagship", "gpt-5.2"],
-    ["GPT-5.1 - Flexible reasoning", "gpt-5.1"],
-    ["GPT-5 - Advanced reasoning", "gpt-5"],
-    ["GPT-5 Mini - Cost-optimized reasoning", "gpt-5-mini"],
-    ["GPT-5 Nano - Ultra-fast, high-throughput", "gpt-5-nano"],
-    ["GPT-4.1 - Smartest non-reasoning, 1M context", "gpt-4.1"],
-  ],
-  anthropic: [
-    ["Claude Opus 4.5 - Premium, max intelligence", "claude-opus-4-5"],
-    ["Claude Opus 4.1 - Most capable model", "claude-opus-4-1-20250805"],
-    ["Claude Sonnet 4.5 - Best for agents/coding", "claude-sonnet-4-5"],
-    ["Claude Haiku 4.5 - Fast + extended thinking", "claude-haiku-4-5"],
-    ["Claude Sonnet 4 - High-performance", "claude-sonnet-4-20250514"],
-  ],
-  google: [
-    ["Gemini 3.1 Pro Preview - Latest reasoning", "gemini-3.1-pro-preview"],
-    ["Gemini 3 Flash Preview - Latest fast multimodal", "gemini-3-flash-preview"],
-    ["Gemini 3.1 Flash-Lite Preview - Latest low-cost fast", "gemini-3.1-flash-lite-preview"],
-    ["Gemini 2.5 Pro - Stable reasoning", "gemini-2.5-pro"],
-    ["Gemini 2.5 Flash - Balanced, stable", "gemini-2.5-flash"],
-    ["Gemini 2.5 Flash Lite - Stable, low-cost", "gemini-2.5-flash-lite"],
-  ],
-  xai: [
-    ["Grok 4 - Flagship model", "grok-4"],
-    ["Grok 4.1 Fast (Reasoning) - Latest high-performance, 2M ctx", "grok-4-1-fast-reasoning"],
-    ["Grok 4.1 Fast (Non-Reasoning) - Latest speed-optimized, 2M ctx", "grok-4-1-fast-non-reasoning"],
-    ["Grok 4 Fast (Reasoning) - Previous high-performance", "grok-4-fast-reasoning"],
-    ["Grok 4 Fast (Non-Reasoning) - Previous speed-optimized", "grok-4-fast-non-reasoning"],
-  ],
-  openrouter: [
-    ["Z.AI GLM 4.5 Air (free)", "z-ai/glm-4.5-air:free"],
-    ["NVIDIA Nemotron 3 Nano 30B (free)", "nvidia/nemotron-3-nano-30b-a3b:free"],
-  ],
-  ollama: [
-    ["GLM-4.7-Flash:latest (30B, local)", "glm-4.7-flash:latest"],
-    ["GPT-OSS:latest (20B, local)", "gpt-oss:latest"],
-    ["Qwen3:latest (8B, local)", "qwen3:latest"],
-  ],
-};
+const MODEL_OPTIONS = window.TRADINGAGENTS_MODEL_OPTIONS || {};
 
 const elements = {
   form: document.getElementById("analysis-form"),
@@ -135,6 +93,10 @@ function setToday() {
 
 function populateModelSelect(selectElement, options, preferredValue = null) {
   const previousValue = preferredValue || selectElement.value;
+  if (!options.length) {
+    selectElement.innerHTML = "";
+    return;
+  }
   selectElement.innerHTML = options
     .map(([label, value]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`)
     .join("");
@@ -144,7 +106,7 @@ function populateModelSelect(selectElement, options, preferredValue = null) {
 }
 
 function updateModelOptions(provider, selectElement) {
-  const options = MODEL_OPTIONS[provider] || MODEL_OPTIONS.openai;
+  const options = MODEL_OPTIONS[provider] || MODEL_OPTIONS.openai || [];
   populateModelSelect(selectElement, options);
 }
 

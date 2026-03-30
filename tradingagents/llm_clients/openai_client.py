@@ -4,6 +4,7 @@ from typing import Any, Optional
 from langchain_openai import ChatOpenAI
 
 from .base_client import BaseLLMClient, normalize_content
+from .model_catalog import normalize_model_name
 from .validators import validate_model
 
 
@@ -48,8 +49,8 @@ class OpenAIClient(BaseLLMClient):
         provider: str = "openai",
         **kwargs,
     ):
-        super().__init__(model, base_url, **kwargs)
         self.provider = provider.lower()
+        super().__init__(normalize_model_name(self.provider, model), base_url, **kwargs)
 
     def get_llm(self) -> Any:
         """Return configured ChatOpenAI instance."""

@@ -6,6 +6,12 @@ from typing import Dict, List, Tuple
 
 ModelOption = Tuple[str, str]
 ProviderModeOptions = Dict[str, Dict[str, List[ModelOption]]]
+WebProviderOptions = Dict[str, List[ModelOption]]
+
+OPENAI_MODEL_ALIASES = {
+    "gpt-5-mini": "gpt-5.4-mini",
+    "gpt-5-nano": "gpt-5.4-nano",
+}
 
 
 MODEL_OPTIONS: ProviderModeOptions = {
@@ -25,15 +31,14 @@ MODEL_OPTIONS: ProviderModeOptions = {
     },
     "anthropic": {
         "quick": [
-            ("Claude Sonnet 4.6 - Best speed and intelligence balance", "claude-sonnet-4-6"),
-            ("Claude Haiku 4.5 - Fast, near-instant responses", "claude-haiku-4-5"),
             ("Claude Sonnet 4.5 - Agents and coding", "claude-sonnet-4-5"),
+            ("Claude Haiku 4.5 - Fast, near-instant responses", "claude-haiku-4-5"),
+            ("Claude Opus 4.6 - Most intelligent, agents and coding", "claude-opus-4-6"),
         ],
         "deep": [
             ("Claude Opus 4.6 - Most intelligent, agents and coding", "claude-opus-4-6"),
-            ("Claude Opus 4.5 - Premium, max intelligence", "claude-opus-4-5"),
-            ("Claude Sonnet 4.6 - Best speed and intelligence balance", "claude-sonnet-4-6"),
             ("Claude Sonnet 4.5 - Agents and coding", "claude-sonnet-4-5"),
+            ("Claude Haiku 4.5 - Fast, near-instant responses", "claude-haiku-4-5"),
         ],
     },
     "google": {
@@ -93,6 +98,26 @@ def get_model_options(provider: str, mode: str) -> List[ModelOption]:
     return MODEL_OPTIONS[provider.lower()][mode]
 
 
+def get_web_model_options() -> WebProviderOptions:
+    """Build a de-duplicated provider -> options mapping for the web UI."""
+    payload: WebProviderOptions = {}
+
+    for provider, mode_options in MODEL_OPTIONS.items():
+        seen: set[str] = set()
+        merged: List[ModelOption] = []
+
+        for mode in ("quick", "deep"):
+            for label, value in mode_options[mode]:
+                if value in seen:
+                    continue
+                seen.add(value)
+                merged.append((label, value))
+
+        payload[provider] = merged
+
+    return payload
+
+
 def get_known_models() -> Dict[str, List[str]]:
     """Build known model names from the shared CLI catalog."""
     return {
@@ -105,3 +130,10 @@ def get_known_models() -> Dict[str, List[str]]:
         )
         for provider, mode_options in MODEL_OPTIONS.items()
     }
+
+
+def normalize_model_name(provider: str, model: str) -> str:
+    """Return the canonical model name for a provider-specific alias."""
+    if provider.lower() == "openai":
+        return OPENAI_MODEL_ALIASES.get(model, model)
+    return model
