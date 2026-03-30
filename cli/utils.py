@@ -1,7 +1,14 @@
 import questionary
 from typing import List, Optional, Tuple, Dict
 
+from rich.console import Console
+
 from cli.models import AnalystType
+from tradingagents.llm_clients.model_catalog import get_model_options
+
+console = Console()
+
+TICKER_INPUT_EXAMPLES = "Examples: SPY, CNC.TO, 7203.T, 0700.HK"
 
 ANALYST_ORDER = [
     ("Market Analyst", AnalystType.MARKET),
@@ -14,7 +21,7 @@ ANALYST_ORDER = [
 def get_ticker() -> str:
     """Prompt the user to enter a ticker symbol."""
     ticker = questionary.text(
-        "Enter the ticker symbol to analyze:",
+        f"Enter the exact ticker symbol to analyze ({TICKER_INPUT_EXAMPLES}):",
         validate=lambda x: len(x.strip()) > 0 or "Please enter a valid ticker symbol.",
         style=questionary.Style(
             [
@@ -28,6 +35,11 @@ def get_ticker() -> str:
         console.print("\n[red]No ticker symbol provided. Exiting...[/red]")
         exit(1)
 
+    return normalize_ticker_symbol(ticker)
+
+
+def normalize_ticker_symbol(ticker: str) -> str:
+    """Normalize ticker input while preserving exchange suffixes."""
     return ticker.strip().upper()
 
 
@@ -125,51 +137,11 @@ def select_research_depth() -> int:
 def select_shallow_thinking_agent(provider) -> str:
     """Select shallow thinking llm engine using an interactive selection."""
 
-    # Define shallow thinking llm engine options with their corresponding model names
-    SHALLOW_AGENT_OPTIONS = {
-        "openai": [
-            ("GPT-5.4 - Latest flagship", "gpt-5.4"),
-            ("GPT-5.4 Pro - Highest quality, highest cost", "gpt-5.4-pro"),
-            ("GPT-5 Mini - Cost-optimized reasoning", "gpt-5-mini"),
-            ("GPT-5 Nano - Ultra-fast, high-throughput", "gpt-5-nano"),
-            ("GPT-5.2 - Previous flagship", "gpt-5.2"),
-            ("GPT-5.1 - Flexible reasoning", "gpt-5.1"),
-            ("GPT-4.1 - Smartest non-reasoning, 1M context", "gpt-4.1"),
-        ],
-        "anthropic": [
-            ("Claude Haiku 4.5 - Fast + extended thinking", "claude-haiku-4-5"),
-            ("Claude Sonnet 4.5 - Best for agents/coding", "claude-sonnet-4-5"),
-            ("Claude Sonnet 4 - High-performance", "claude-sonnet-4-20250514"),
-        ],
-        "google": [
-            ("Gemini 3 Flash Preview - Latest fast multimodal", "gemini-3-flash-preview"),
-            ("Gemini 3.1 Flash-Lite Preview - Latest low-cost fast", "gemini-3.1-flash-lite-preview"),
-            ("Gemini 2.5 Flash - Balanced, stable", "gemini-2.5-flash"),
-            ("Gemini 2.5 Flash Lite - Stable, low-cost", "gemini-2.5-flash-lite"),
-            ("Gemini 3.1 Pro Preview - Highest-quality reasoning", "gemini-3.1-pro-preview"),
-        ],
-        "xai": [
-            ("Grok 4.1 Fast (Non-Reasoning) - Latest speed-optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
-            ("Grok 4.1 Fast (Reasoning) - Latest high-performance, 2M ctx", "grok-4-1-fast-reasoning"),
-            ("Grok 4 Fast (Non-Reasoning) - Previous speed-optimized", "grok-4-fast-non-reasoning"),
-            ("Grok 4 Fast (Reasoning) - Previous high-performance", "grok-4-fast-reasoning"),
-        ],
-        "openrouter": [
-            ("NVIDIA Nemotron 3 Nano 30B (free)", "nvidia/nemotron-3-nano-30b-a3b:free"),
-            ("Z.AI GLM 4.5 Air (free)", "z-ai/glm-4.5-air:free"),
-        ],
-        "ollama": [
-            ("Qwen3:latest (8B, local)", "qwen3:latest"),
-            ("GPT-OSS:latest (20B, local)", "gpt-oss:latest"),
-            ("GLM-4.7-Flash:latest (30B, local)", "glm-4.7-flash:latest"),
-        ],
-    }
-
     choice = questionary.select(
         "Select Your [Quick-Thinking LLM Engine]:",
         choices=[
             questionary.Choice(display, value=value)
-            for display, value in SHALLOW_AGENT_OPTIONS[provider.lower()]
+            for display, value in get_model_options(provider, "quick")
         ],
         instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
         style=questionary.Style(
@@ -193,54 +165,11 @@ def select_shallow_thinking_agent(provider) -> str:
 def select_deep_thinking_agent(provider) -> str:
     """Select deep thinking llm engine using an interactive selection."""
 
-    # Define deep thinking llm engine options with their corresponding model names
-    DEEP_AGENT_OPTIONS = {
-        "openai": [
-            ("GPT-5.4 - Latest flagship", "gpt-5.4"),
-            ("GPT-5.4 Pro - Highest quality, highest cost", "gpt-5.4-pro"),
-            ("GPT-5.2 - Previous flagship", "gpt-5.2"),
-            ("GPT-5.1 - Flexible reasoning", "gpt-5.1"),
-            ("GPT-5 - Advanced reasoning", "gpt-5"),
-            ("GPT-4.1 - Smartest non-reasoning, 1M context", "gpt-4.1"),
-            ("GPT-5 Mini - Cost-optimized reasoning", "gpt-5-mini"),
-            ("GPT-5 Nano - Ultra-fast, high-throughput", "gpt-5-nano"),
-        ],
-        "anthropic": [
-            ("Claude Sonnet 4.5 - Best for agents/coding", "claude-sonnet-4-5"),
-            ("Claude Opus 4.5 - Premium, max intelligence", "claude-opus-4-5"),
-            ("Claude Opus 4.1 - Most capable model", "claude-opus-4-1-20250805"),
-            ("Claude Haiku 4.5 - Fast + extended thinking", "claude-haiku-4-5"),
-            ("Claude Sonnet 4 - High-performance", "claude-sonnet-4-20250514"),
-        ],
-        "google": [
-            ("Gemini 3.1 Pro Preview - Latest reasoning", "gemini-3.1-pro-preview"),
-            ("Gemini 3 Flash Preview - Latest fast multimodal", "gemini-3-flash-preview"),
-            ("Gemini 2.5 Pro - Stable reasoning", "gemini-2.5-pro"),
-            ("Gemini 2.5 Flash - Balanced, stable", "gemini-2.5-flash"),
-        ],
-        "xai": [
-            ("Grok 4.1 Fast (Reasoning) - Latest high-performance, 2M ctx", "grok-4-1-fast-reasoning"),
-            ("Grok 4 - Flagship model", "grok-4"),
-            ("Grok 4.1 Fast (Non-Reasoning) - Latest speed-optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
-            ("Grok 4 Fast (Reasoning) - Previous high-performance", "grok-4-fast-reasoning"),
-            ("Grok 4 Fast (Non-Reasoning) - Previous speed-optimized", "grok-4-fast-non-reasoning"),
-        ],
-        "openrouter": [
-            ("Z.AI GLM 4.5 Air (free)", "z-ai/glm-4.5-air:free"),
-            ("NVIDIA Nemotron 3 Nano 30B (free)", "nvidia/nemotron-3-nano-30b-a3b:free"),
-        ],
-        "ollama": [
-            ("GLM-4.7-Flash:latest (30B, local)", "glm-4.7-flash:latest"),
-            ("GPT-OSS:latest (20B, local)", "gpt-oss:latest"),
-            ("Qwen3:latest (8B, local)", "qwen3:latest"),
-        ],
-    }
-
     choice = questionary.select(
         "Select Your [Deep-Thinking LLM Engine]:",
         choices=[
             questionary.Choice(display, value=value)
-            for display, value in DEEP_AGENT_OPTIONS[provider.lower()]
+            for display, value in get_model_options(provider, "deep")
         ],
         instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
         style=questionary.Style(
@@ -314,6 +243,26 @@ def ask_openai_reasoning_effort() -> str:
     ).ask()
 
 
+def ask_anthropic_effort() -> str | None:
+    """Ask for Anthropic effort level.
+
+    Controls token usage and response thoroughness on Claude 4.5+ and 4.6 models.
+    """
+    return questionary.select(
+        "Select Effort Level:",
+        choices=[
+            questionary.Choice("High (recommended)", "high"),
+            questionary.Choice("Medium (balanced)", "medium"),
+            questionary.Choice("Low (faster, cheaper)", "low"),
+        ],
+        style=questionary.Style([
+            ("selected", "fg:cyan noinherit"),
+            ("highlighted", "fg:cyan noinherit"),
+            ("pointer", "fg:cyan noinherit"),
+        ]),
+    ).ask()
+
+
 def ask_gemini_thinking_config() -> str | None:
     """Ask for Gemini thinking configuration.
 
@@ -332,3 +281,37 @@ def ask_gemini_thinking_config() -> str | None:
             ("pointer", "fg:green noinherit"),
         ]),
     ).ask()
+
+
+def ask_output_language() -> str:
+    """Ask for report output language."""
+    choice = questionary.select(
+        "Select Output Language:",
+        choices=[
+            questionary.Choice("English (default)", "English"),
+            questionary.Choice("Chinese (中文)", "Chinese"),
+            questionary.Choice("Japanese (日本語)", "Japanese"),
+            questionary.Choice("Korean (한국어)", "Korean"),
+            questionary.Choice("Hindi (हिन्दी)", "Hindi"),
+            questionary.Choice("Spanish (Español)", "Spanish"),
+            questionary.Choice("Portuguese (Português)", "Portuguese"),
+            questionary.Choice("French (Français)", "French"),
+            questionary.Choice("German (Deutsch)", "German"),
+            questionary.Choice("Arabic (العربية)", "Arabic"),
+            questionary.Choice("Russian (Русский)", "Russian"),
+            questionary.Choice("Custom language", "custom"),
+        ],
+        style=questionary.Style([
+            ("selected", "fg:yellow noinherit"),
+            ("highlighted", "fg:yellow noinherit"),
+            ("pointer", "fg:yellow noinherit"),
+        ]),
+    ).ask()
+
+    if choice == "custom":
+        return questionary.text(
+            "Enter language name (e.g. Turkish, Vietnamese, Thai, Indonesian):",
+            validate=lambda x: len(x.strip()) > 0 or "Please enter a language name.",
+        ).ask().strip()
+
+    return choice
