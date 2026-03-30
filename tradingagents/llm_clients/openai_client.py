@@ -32,7 +32,6 @@ _PROVIDER_CONFIG = {
     "ollama": ("http://localhost:11434/v1", None),
 }
 
-
 class OpenAIClient(BaseLLMClient):
     """Client for OpenAI, Ollama, OpenRouter, and xAI providers.
 

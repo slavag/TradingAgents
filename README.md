@@ -1,3 +1,5 @@
+<img width="2559" height="1290" alt="image" src="https://github.com/user-attachments/assets/a6b967e3-73e9-460d-9311-ac8482ac5ba8" />
+
 <p align="center">
   <img src="assets/TauricResearch.png" style="width: 60%; height: auto;">
 </p>
