@@ -1019,7 +1019,153 @@ def compact_report_text(content, max_chars=280):
     return f"{truncated}..." if truncated else f"{cleaned[:max_chars]}..."
 
 
-def build_consolidated_report(analysis_results, analysis_date: str) -> str:
+def format_target_gap_percent(reference_price, price_target) -> str:
+    """Format target gap as a percentage versus the reference price."""
+    if reference_price in (None, 0) or price_target is None:
+        return "-"
+    gap_pct = ((price_target - reference_price) / reference_price) * 100.0
+    return f"{gap_pct:+.2f}%"
+
+
+def full_report_text(content, fallback: str) -> str:
+    """Return the full extracted report text with no truncation."""
+    text = extract_content_string(content)
+    return text if text else fallback
+
+
+REPORT_CHATTER_PATTERNS = (
+    "if you want, i can",
+    "if you want, i will",
+    "if you want to",
+    "which follow-up would you like",
+    "which follow up would you like",
+    "would you like me to",
+    "if you'd like",
+    "if you’d like",
+    "let me know if you want",
+)
+
+
+def sanitize_report_language(content) -> str:
+    """Remove interactive assistant phrasing so text reads like a report."""
+    text = extract_content_string(content) or str(content or "")
+    if not text:
+        return ""
+
+    filtered_lines = []
+    for line in text.splitlines():
+        lowered = line.strip().lower()
+        if any(pattern in lowered for pattern in REPORT_CHATTER_PATTERNS):
+            continue
+        filtered_lines.append(line)
+
+    cleaned = "\n".join(filtered_lines).strip()
+    return re.sub(r"\n{3,}", "\n\n", cleaned)
+
+
+def fallback_bullet_summary(content, max_bullets: int = 5) -> str:
+    """Build a concise markdown bullet summary when the LLM is unavailable."""
+    cleaned = sanitize_report_language(content)
+    if not cleaned:
+        return "- No report generated."
+
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9(])", cleaned.replace("\n", " "))
+    bullets = []
+    for sentence in sentences:
+        line = sentence.strip().lstrip("#").strip()
+        if not line:
+            continue
+        if len(line) > 260:
+            line = line[:257].rsplit(" ", 1)[0].strip() + "..."
+        bullets.append(f"- {line}")
+        if len(bullets) >= max_bullets:
+            break
+
+    return "\n".join(bullets) if bullets else "- No report generated."
+
+
+def summarize_consolidated_section(llm, ticker: str, section_name: str, content) -> str:
+    """Summarize a full section into report-ready markdown bullets."""
+    cleaned = sanitize_report_language(content)
+    if not cleaned:
+        return "- No report generated."
+
+    if llm is None:
+        return fallback_bullet_summary(cleaned)
+
+    messages = [
+        (
+            "system",
+            "You rewrite trading analysis into finished report bullets. "
+            "Return markdown bullets only. Use 4 to 6 bullets. "
+            "Each bullet must be a complete report-ready statement. "
+            "Do not ask the reader questions. Do not offer follow-up work. "
+            "Do not use phrases like 'If you want', 'Would you like', or 'I can now'.",
+        ),
+        (
+            "human",
+            f"""Ticker: {ticker}
+Section: {section_name}
+
+Source analysis:
+{cleaned}
+
+Return only markdown bullet points.""",
+        ),
+    ]
+
+    try:
+        response = llm.invoke(messages)
+        summary = sanitize_report_language(extract_content_string(response.content) or "")
+        bullet_lines = [
+            line.strip()
+            for line in summary.splitlines()
+            if line.strip().startswith(("-", "*"))
+        ]
+        if bullet_lines:
+            return "\n".join(bullet_lines)
+    except Exception:
+        pass
+
+    return fallback_bullet_summary(cleaned)
+
+
+def get_consolidated_section_summaries(result, summary_llm=None) -> dict[str, str]:
+    """Cache per-result section summaries for consolidated report output."""
+    cached = result.get("_consolidated_section_summaries")
+    if isinstance(cached, dict):
+        return cached
+
+    final_state = result["final_state"]
+    section_map = {
+        "Portfolio Management Decision": final_state.get("final_trade_decision"),
+        "Market": final_state.get("market_report"),
+        "Social": final_state.get("sentiment_report"),
+        "News": final_state.get("news_report"),
+        "Fundamentals": final_state.get("fundamentals_report"),
+    }
+    summaries = {
+        name: summarize_consolidated_section(summary_llm, result["ticker"], name, content)
+        for name, content in section_map.items()
+    }
+    result["_consolidated_section_summaries"] = summaries
+    return summaries
+
+
+def bullet_markdown_to_html(summary: str) -> str:
+    """Convert simple markdown bullets into HTML list markup."""
+    bullets = []
+    for line in summary.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("- ", "* ")):
+            bullets.append(f"<li>{escape(stripped[2:].strip())}</li>")
+    if not bullets:
+        fallback = sanitize_report_language(summary) or "No report generated."
+        bullets.append(f"<li>{escape(fallback)}</li>")
+    return "<ul>" + "".join(bullets) + "</ul>"
+
+
+def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=None) -> str:
     """Build a consolidated markdown report for a batch of tickers."""
     lines = [
         "# Consolidated Trading Analysis Report",
@@ -1029,14 +1175,18 @@ def build_consolidated_report(analysis_results, analysis_date: str) -> str:
         "",
         "## Batch Summary",
         "",
-        "| Ticker | Decision | Price Target | Confidence | Status | Default Results |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Ticker | Decision | Price Target | Target Gap | Confidence | Status | Default Results |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
 
     for result in analysis_results:
         status = "Failed" if result.get("error") else "Completed"
         decision = result.get("decision") or "-"
         price_target = format_price_target(result.get("price_target"))
+        target_gap = format_target_gap_percent(
+            result.get("reference_price"),
+            result.get("price_target"),
+        )
         confidence = (
             f"{result['confidence_score']}/100"
             if result.get("confidence_score") is not None
@@ -1044,7 +1194,7 @@ def build_consolidated_report(analysis_results, analysis_date: str) -> str:
         )
         default_results = result.get("results_dir", "-")
         lines.append(
-            f"| {result['ticker']} | {decision} | {price_target} | {confidence} | {status} | `{default_results}` |"
+            f"| {result['ticker']} | {decision} | {price_target} | {target_gap} | {confidence} | {status} | `{default_results}` |"
         )
 
     for result in analysis_results:
@@ -1057,6 +1207,8 @@ def build_consolidated_report(analysis_results, analysis_date: str) -> str:
                 "",
                 f"Analysis Date: {result['analysis_date']}",
                 f"Average Price Target: {format_price_target(result.get('price_target'))}",
+                f"Reference Price: {format_price_target(result.get('reference_price'))}",
+                f"Target Gap: {format_target_gap_percent(result.get('reference_price'), result.get('price_target'))}",
                 f"Confidence: {result.get('confidence_score', '-')}/100"
                 if result.get("confidence_score") is not None
                 else "Confidence: -",
@@ -1072,32 +1224,37 @@ def build_consolidated_report(analysis_results, analysis_date: str) -> str:
                     "Analysis failed.",
                     "",
                     "### Error",
-                    compact_report_text(result["error"], max_chars=800),
+                    extract_content_string(result["error"]) or str(result["error"]),
                 ]
             )
             continue
 
         final_state = result["final_state"]
+        section_summaries = get_consolidated_section_summaries(result, summary_llm=summary_llm)
         lines.extend(
             [
                 f"Decision: {result.get('decision') or 'Unknown'}",
                 "",
                 "### Target Outlook",
-                result.get("target_summary") or "No target outlook generated.",
+                sanitize_report_language(result.get("target_summary") or "No target outlook generated."),
                 "",
-                "### Executive Summary",
-                compact_report_text(final_state.get("final_trade_decision"), max_chars=900)
-                or "No portfolio decision generated.",
+                "### Portfolio Management Decision",
+                section_summaries["Portfolio Management Decision"],
                 "",
-                "### Analyst Highlights",
-                f"- Market: {compact_report_text(final_state.get('market_report'), max_chars=220) or 'No market report generated.'}",
-                f"- Social: {compact_report_text(final_state.get('sentiment_report'), max_chars=220) or 'No social sentiment report generated.'}",
-                f"- News: {compact_report_text(final_state.get('news_report'), max_chars=220) or 'No news report generated.'}",
-                f"- Fundamentals: {compact_report_text(final_state.get('fundamentals_report'), max_chars=220) or 'No fundamentals report generated.'}",
+                "### Market Report",
+                section_summaries["Market"],
+                "",
+                "### Social Report",
+                section_summaries["Social"],
+                "",
+                "### News Report",
+                section_summaries["News"],
+                "",
+                "### Fundamentals Report",
+                section_summaries["Fundamentals"],
                 "",
                 "### Trader Plan",
-                compact_report_text(final_state.get("trader_investment_plan"), max_chars=500)
-                or "No trader plan generated.",
+                sanitize_report_language(full_report_text(final_state.get("trader_investment_plan"), "No trader plan generated.")),
                 "",
                 "### Default Results",
                 f"`{result['results_dir']}`",
@@ -1107,18 +1264,10 @@ def build_consolidated_report(analysis_results, analysis_date: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
+def build_consolidated_report_html(analysis_results, analysis_date: str, summary_llm=None) -> str:
     """Build an HTML version of the consolidated report."""
     generated_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     completed_results = [result for result in analysis_results if not result.get("error")]
-    avg_confidence = (
-        round(
-            sum(result.get("confidence_score", 0) for result in completed_results if result.get("confidence_score") is not None)
-            / max(1, len([result for result in completed_results if result.get("confidence_score") is not None]))
-        )
-        if any(result.get("confidence_score") is not None for result in completed_results)
-        else None
-    )
     avg_target = (
         round(
             sum(result.get("price_target", 0) for result in completed_results if result.get("price_target") is not None)
@@ -1178,6 +1327,12 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
         status = "Failed" if result.get("error") else "Completed"
         decision = escape(result.get("decision") or "-")
         price_target = escape(format_price_target(result.get("price_target")))
+        target_gap = escape(
+            format_target_gap_percent(
+                result.get("reference_price"),
+                result.get("price_target"),
+            )
+        )
         confidence = (
             f"{result['confidence_score']}/100"
             if result.get("confidence_score") is not None
@@ -1188,6 +1343,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
             f"<td>{escape(result['ticker'])}</td>"
             f"<td>{decision}</td>"
             f"<td>{price_target}</td>"
+            f"<td>{target_gap}</td>"
             f"<td>{escape(confidence)}</td>"
             f"<td>{escape(status)}</td>"
             f"<td><code>{escape(result.get('results_dir', '-'))}</code></td>"
@@ -1210,19 +1366,19 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
                 f"<p class='meta-line'>Analysis Date: {escape(result['analysis_date'])}</p>"
                 "<div class='narrative-block'>"
                 "<h3>Run Error</h3>"
-                f"<p>{escape(compact_report_text(result['error'], max_chars=800))}</p>"
+                f"<pre class='report-body'>{escape(extract_content_string(result['error']) or str(result['error']))}</pre>"
                 "</div>"
                 "</section>"
             )
             continue
 
         final_state = result["final_state"]
+        section_summaries = get_consolidated_section_summaries(result, summary_llm=summary_llm)
         reference_price = format_price_target(result.get("reference_price"))
-        if result.get("reference_price") is not None and result.get("price_target") is not None:
-            delta = result["price_target"] - result["reference_price"]
-            delta_label = f"{delta:+.2f}"
-        else:
-            delta_label = "-"
+        delta_label = format_target_gap_percent(
+            result.get("reference_price"),
+            result.get("price_target"),
+        )
 
         sections.append(
             f"<section class='stock stock-{kind}'>"
@@ -1239,21 +1395,21 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
             "</div>"
             "<div class='confidence-strip'>"
             f"<div class='confidence-bar'><span style='width:{confidence_width}%'></span></div>"
-            f"<div class='confidence-copy'>{escape(result.get('target_summary') or 'No target outlook generated.')}</div>"
+            f"<div class='confidence-copy'>{escape(sanitize_report_language(result.get('target_summary') or 'No target outlook generated.'))}</div>"
             "</div>"
             "<div class='narrative-block'>"
-            "<h3>Executive Summary</h3>"
-            f"<p>{escape(compact_report_text(final_state.get('final_trade_decision'), max_chars=900) or 'No portfolio decision generated.')}</p>"
+            "<h3>Portfolio Management Decision</h3>"
+            f"<div class='bullet-summary'>{bullet_markdown_to_html(section_summaries['Portfolio Management Decision'])}</div>"
             "</div>"
             "<div class='highlight-stack'>"
-            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('market')}</span><h3>Market</h3></div><p>{escape(compact_report_text(final_state.get('market_report'), max_chars=220) or 'No market report generated.')}</p></article>"
-            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('social')}</span><h3>Social</h3></div><p>{escape(compact_report_text(final_state.get('sentiment_report'), max_chars=220) or 'No social sentiment report generated.')}</p></article>"
-            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('news')}</span><h3>News</h3></div><p>{escape(compact_report_text(final_state.get('news_report'), max_chars=220) or 'No news report generated.')}</p></article>"
-            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('fundamentals')}</span><h3>Fundamentals</h3></div><p>{escape(compact_report_text(final_state.get('fundamentals_report'), max_chars=220) or 'No fundamentals report generated.')}</p></article>"
+            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('market')}</span><h3>Market</h3></div><div class='bullet-summary'>{bullet_markdown_to_html(section_summaries['Market'])}</div></article>"
+            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('social')}</span><h3>Social</h3></div><div class='bullet-summary'>{bullet_markdown_to_html(section_summaries['Social'])}</div></article>"
+            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('news')}</span><h3>News</h3></div><div class='bullet-summary'>{bullet_markdown_to_html(section_summaries['News'])}</div></article>"
+            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('fundamentals')}</span><h3>Fundamentals</h3></div><div class='bullet-summary'>{bullet_markdown_to_html(section_summaries['Fundamentals'])}</div></article>"
             "</div>"
             "<div class='narrative-block accent'>"
             "<h3>Trader Plan</h3>"
-            f"<p>{escape(compact_report_text(final_state.get('trader_investment_plan'), max_chars=500) or 'No trader plan generated.')}</p>"
+            f"<pre class='report-body'>{escape(sanitize_report_language(full_report_text(final_state.get('trader_investment_plan'), 'No trader plan generated.')))}</pre>"
             "</div>"
             "</section>"
         )
@@ -1520,6 +1676,22 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
       margin: 0;
       color: var(--slate);
     }}
+    .report-body {{
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      color: var(--slate);
+      font: inherit;
+    }}
+    .bullet-summary ul {{
+      margin: 0;
+      padding-left: 20px;
+      color: var(--slate);
+    }}
+    .bullet-summary li + li {{
+      margin-top: 8px;
+    }}
     .highlight-stack {{
       display: grid;
       gap: 12px;
@@ -1551,10 +1723,6 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
       justify-content: center;
       background: rgba(17, 34, 43, 0.05);
       color: var(--teal);
-    }}
-    .highlight-card p {{
-      margin: 0;
-      color: var(--slate);
     }}
     code {{
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1597,8 +1765,8 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
             <strong>{len(completed_results)}</strong>
           </article>
           <article class="kpi">
-            <span>Avg Confidence</span>
-            <strong>{f"{avg_confidence}/100" if avg_confidence is not None else "-"}</strong>
+            <span>Failed Runs</span>
+            <strong>{len(analysis_results) - len(completed_results)}</strong>
           </article>
         </div>
       </div>
@@ -1612,6 +1780,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
             <th>Ticker</th>
             <th>Decision</th>
             <th>Price Target</th>
+            <th>Target Gap</th>
             <th>Confidence</th>
             <th>Status</th>
             <th>Default Results</th>
@@ -1631,21 +1800,21 @@ def build_consolidated_report_html(analysis_results, analysis_date: str) -> str:
 """
 
 
-def save_consolidated_report(analysis_results, analysis_date: str, save_path: Path) -> dict[str, Path]:
+def save_consolidated_report(analysis_results, analysis_date: str, save_path: Path, summary_llm=None) -> dict[str, Path]:
     """Write the consolidated batch report to disk in markdown and HTML."""
     save_path.mkdir(parents=True, exist_ok=True)
     markdown_path = save_path / "consolidated_report.md"
     html_path = save_path / "consolidated_report.html"
-    markdown_path.write_text(build_consolidated_report(analysis_results, analysis_date))
-    html_path.write_text(build_consolidated_report_html(analysis_results, analysis_date))
+    markdown_path.write_text(build_consolidated_report(analysis_results, analysis_date, summary_llm=summary_llm))
+    html_path.write_text(build_consolidated_report_html(analysis_results, analysis_date, summary_llm=summary_llm))
     return {"markdown": markdown_path, "html": html_path}
 
 
-def display_consolidated_report(analysis_results, analysis_date: str):
+def display_consolidated_report(analysis_results, analysis_date: str, summary_llm=None):
     """Render the consolidated batch report in the terminal."""
     console.print()
     console.print(Rule("Consolidated Analysis Report", style="bold green"))
-    console.print(Markdown(build_consolidated_report(analysis_results, analysis_date)))
+    console.print(Markdown(build_consolidated_report(analysis_results, analysis_date, summary_llm=summary_llm)))
 
 
 def update_research_team_status(status):

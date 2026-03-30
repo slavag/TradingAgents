@@ -31,6 +31,9 @@ from cli.main import (
 from cli.stats_handler import StatsCallbackHandler
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.web.speaking_sources import (
+    SOURCE_LABELS,
+)
 
 logger = logging.getLogger("tradingagents.web.service")
 
@@ -47,8 +50,30 @@ _SPEAKING_CACHE: dict[str, Any] = {
     "key": None,
     "data": None,
 }
+_MARKET_TICKER_CACHE: dict[str, Any] = {
+    "expires_at": None,
+    "key": None,
+    "data": None,
+}
 _MYAGENT_MODULE = None
 _TICKER_DETAIL_CACHE: dict[str, dict[str, Any]] = {}
+
+MARKET_INDEXES = [
+    {"symbol": "^GSPC", "label": "S&P 500"},
+    {"symbol": "^DJI", "label": "Dow"},
+    {"symbol": "^IXIC", "label": "Nasdaq"},
+    {"symbol": "^STOXX50E", "label": "Euro Stoxx 50"},
+    {"symbol": "^GDAXI", "label": "DAX"},
+    {"symbol": "^FTSE", "label": "FTSE 100"},
+    {"symbol": "^RUT", "label": "Russell 2000"},
+    {"symbol": "^N225", "label": "Japan"},
+    {"symbol": "^HSI", "label": "Hong Kong"},
+    {"symbol": "^KS11", "label": "Seoul"},
+    {"symbol": "000001.SS", "label": "Shanghai"},
+    {"symbol": "EURUSD=X", "label": "EUR / USD"},
+    {"symbol": "USDILS=X", "label": "USD / NIS"},
+    {"symbol": "^VIX", "label": "VIX"},
+]
 
 TEAM_ORDER = [
     ("Analyst Team", ["Market Analyst", "Social Analyst", "News Analyst", "Fundamentals Analyst"]),
@@ -462,6 +487,39 @@ def _load_myagent_module():
     return module
 
 
+def _fetch_market_index_snapshots(symbols: list[str]) -> pd.DataFrame:
+    import yfinance as yf
+
+    rows: list[dict[str, Any]] = []
+    for symbol in symbols:
+        try:
+            history = yf.Ticker(symbol).history(period="7d", interval="1d", auto_adjust=True)
+        except Exception as exc:
+            logger.warning("Market tickers: failed to fetch %s: %s", symbol, exc)
+            continue
+
+        if history.empty or "Close" not in history:
+            logger.warning("Market tickers: empty history for %s", symbol)
+            continue
+
+        closes = pd.to_numeric(history["Close"], errors="coerce").dropna()
+        if closes.empty:
+            continue
+
+        last_close = float(closes.iloc[-1])
+        prev_close = float(closes.iloc[-2]) if len(closes) > 1 else None
+        ret_1d = ((last_close / prev_close) - 1.0) if prev_close not in (None, 0) else None
+        rows.append(
+            {
+                "symbol": symbol,
+                "price": last_close,
+                "ret_1d": ret_1d,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 def fetch_speaking_stocks(
     top_n: int = 10,
     lookback_days: int = 30,
@@ -505,28 +563,29 @@ def fetch_speaking_stocks(
         (dt.datetime.now() - step_started).total_seconds(),
     )
 
-    intersection = sorted(list(aw_set & stwt_set))
-    union = sorted(list(aw_set | stwt_set))
+    source_sets: dict[str, set[str]] = {
+        "apewisdom": set(aw_set),
+        "stocktwits": set(stwt_set),
+    }
+    intersection = sorted(list(source_sets["apewisdom"] & source_sets["stocktwits"]))
     logger.warning(
-        "Speaking stocks: intersection size=%s union size=%s",
+        "Speaking stocks: intersection size=%s",
         len(intersection),
-        len(union),
     )
 
-    if not union:
-        logger.warning("Speaking stocks: no symbols available from ApeWisdom/StockTwits")
+    if not intersection:
+        logger.warning("Speaking stocks: no symbols available from ApeWisdom ∩ StockTwits")
         return []
 
-    backfill_candidates = [symbol for symbol in union if symbol not in intersection]
-    candidate_symbols = intersection + backfill_candidates
-    if len(candidate_symbols) > max(top_n * 3, 60):
-        candidate_symbols = candidate_symbols[: max(top_n * 3, 60)]
-
-    if len(intersection) < top_n:
-        logger.warning(
-            "Speaking stocks: intersection below requested top_n, backfilling with %s union-only symbols",
-            min(len(backfill_candidates), top_n - len(intersection)),
+    source_membership = {
+        symbol: sorted(
+            SOURCE_LABELS.get(source_name, source_name)
+            for source_name, symbols in source_sets.items()
+            if symbol in symbols
         )
+        for symbol in intersection
+    }
+    candidate_symbols = intersection
 
     step_started = dt.datetime.now()
     prices = module.fetch_prices(candidate_symbols, lookback=lookback_days)
@@ -551,9 +610,8 @@ def fetch_speaking_stocks(
     latest.columns = ["price"]
 
     tech = latest.join([momentum_1d, momentum_5d, sma50, sma200], how="outer")
-    tech["source_priority"] = [
-        1 if symbol in intersection else 0 for symbol in tech.index
-    ]
+    tech["source_priority"] = [1 if symbol in intersection else 0 for symbol in tech.index]
+    tech["source_hits"] = [len(source_membership.get(symbol, [])) for symbol in tech.index]
     tech["sma_trend"] = (
         (tech["price"] > tech["sma50"]).astype("Int64").fillna(0).astype(int)
         + (tech["sma50"] > tech["sma200"]).astype("Int64").fillna(0).astype(int)
@@ -565,11 +623,11 @@ def fetch_speaking_stocks(
     frame["ret_5d"] = pd.to_numeric(frame["ret_5d"], errors="coerce").fillna(0.0)
     frame["sma_trend"] = pd.to_numeric(frame["sma_trend"], errors="coerce").fillna(0).astype(int)
     frame["source_priority"] = pd.to_numeric(frame["source_priority"], errors="coerce").fillna(0).astype(int)
+    frame["source_hits"] = pd.to_numeric(frame["source_hits"], errors="coerce").fillna(0).astype(int)
     frame["z_ret5"] = module._zscore(frame["ret_5d"])
     frame["score"] = (
         w_ret5 * frame["z_ret5"]
         + w_trend * frame["sma_trend"]
-        + 0.5 * frame["source_priority"]
     )
 
     top = frame.sort_values("score", ascending=False).head(top_n).copy()
@@ -598,6 +656,8 @@ def fetch_speaking_stocks(
                 "trend_score": int(row.sma_trend) if pd.notna(row.sma_trend) else 0,
                 "z_ret5": round(float(row.z_ret5), 2) if pd.notna(row.z_ret5) else None,
                 "lookback_days": lookback_days,
+                "sources": source_membership.get(row.symbol, []),
+                "source_count": len(source_membership.get(row.symbol, [])),
                 "pe_ratio": None,
                 "market_cap": None,
                 "sector": None,
@@ -606,13 +666,55 @@ def fetch_speaking_stocks(
 
     _SPEAKING_CACHE["key"] = cache_key
     _SPEAKING_CACHE["data"] = records
-    _SPEAKING_CACHE["expires_at"] = now + dt.timedelta(minutes=10)
+    _SPEAKING_CACHE["expires_at"] = now + dt.timedelta(minutes=30)
     logger.warning(
         "Speaking stocks: refresh completed in %.2fs with %s records",
         (dt.datetime.now() - started_at).total_seconds(),
         len(records),
     )
     return records
+
+
+def fetch_market_tickers(limit: int = 12) -> list[dict[str, Any]]:
+    cache_key = (limit,)
+    now = dt.datetime.now()
+    if (
+        _MARKET_TICKER_CACHE["data"] is not None
+        and _MARKET_TICKER_CACHE["key"] == cache_key
+        and _MARKET_TICKER_CACHE["expires_at"] is not None
+        and now < _MARKET_TICKER_CACHE["expires_at"]
+    ):
+        logger.warning("Market tickers: cache hit for key=%s", cache_key)
+        return _MARKET_TICKER_CACHE["data"]
+
+    logger.warning("Market tickers: refresh started limit=%s", limit)
+    index_symbols = [item["symbol"] for item in MARKET_INDEXES[:limit]]
+    frame = _fetch_market_index_snapshots(index_symbols)
+    if frame.empty:
+        logger.warning("Market tickers: snapshot frame empty")
+        return []
+    frame = frame.set_index("symbol").reindex(index_symbols).dropna(how="all")
+
+    records = []
+    label_by_symbol = {item["symbol"]: item["label"] for item in MARKET_INDEXES}
+    for symbol, row in frame.iterrows():
+        price = float(row["price"]) if pd.notna(row["price"]) else None
+        ret_1d = float(row["ret_1d"]) * 100.0 if pd.notna(row["ret_1d"]) else None
+        records.append(
+            {
+                "ticker": label_by_symbol.get(symbol, symbol),
+                "symbol": symbol,
+                "price": round(price, 2) if price is not None else None,
+                "ret_1d_pct": round(ret_1d, 1) if ret_1d is not None else None,
+                "source": "Market Index",
+            }
+        )
+
+    _MARKET_TICKER_CACHE["key"] = cache_key
+    _MARKET_TICKER_CACHE["data"] = records[:limit]
+    _MARKET_TICKER_CACHE["expires_at"] = now + dt.timedelta(minutes=10)
+    logger.warning("Market tickers: refresh completed with %s records", len(records[:limit]))
+    return records[:limit]
 
 
 def fetch_ticker_detail(ticker: str) -> dict[str, Any]:
@@ -898,17 +1000,31 @@ def _run_job(job_id: str, payload: dict[str, Any]):
         consolidated_paths = None
         custom_consolidated_paths = None
         if raw_results:
-            consolidated_markdown = build_consolidated_report(raw_results, analysis_date)
-            consolidated_html = build_consolidated_report_html(raw_results, analysis_date)
+            consolidated_markdown = build_consolidated_report(
+                raw_results,
+                analysis_date,
+                summary_llm=graph.final_report_llm,
+            )
+            consolidated_html = build_consolidated_report_html(
+                raw_results,
+                analysis_date,
+                summary_llm=graph.final_report_llm,
+            )
 
             default_batch_dir = RESULTS_ROOT / "batch_web" / analysis_date / job_id
-            consolidated_paths = save_consolidated_report(raw_results, analysis_date, default_batch_dir)
+            consolidated_paths = save_consolidated_report(
+                raw_results,
+                analysis_date,
+                default_batch_dir,
+                summary_llm=graph.final_report_llm,
+            )
 
             if custom_save_enabled:
                 custom_consolidated_paths = save_consolidated_report(
                     raw_results,
                     analysis_date,
                     export_root,
+                    summary_llm=graph.final_report_llm,
                 )
 
         fatal_provider_error = next(

@@ -1,11 +1,17 @@
 const state = {
   jobId: null,
   pollHandle: null,
+  marketRefreshHandle: null,
+  speakingRefreshHandle: null,
   htmlBlobUrl: null,
   markdownBlobUrl: null,
+  marketItems: [],
   speakingItems: [],
   activeTickerItem: null,
 };
+
+const MARKET_TAPE_REFRESH_MS = 10 * 60 * 1000;
+const SPEAKING_TAPE_REFRESH_MS = 30 * 60 * 1000;
 
 const MODEL_OPTIONS = {
   openai: [
@@ -69,8 +75,8 @@ const elements = {
   saveReports: document.getElementById("save-reports"),
   exportPathWrap: document.getElementById("export-path-wrap"),
   exportPath: document.getElementById("export-path"),
-  healthIndicator: document.getElementById("health-indicator"),
-  jobIndicator: document.getElementById("job-indicator"),
+  headerMarketTrack: document.getElementById("header-market-track"),
+  headerMarketStatus: document.getElementById("header-market-status"),
   statusBadge: document.getElementById("status-badge"),
   currentTicker: document.getElementById("current-ticker"),
   completedCount: document.getElementById("completed-count"),
@@ -163,19 +169,6 @@ function updateExportToggle() {
   elements.exportPathWrap.classList.toggle("hidden", !elements.saveReports.checked);
 }
 
-function setHealth(ok, message = null) {
-  elements.healthIndicator.textContent = ok ? "Ready" : (message || "Offline");
-}
-
-async function fetchHealth() {
-  try {
-    const response = await fetch("/api/health");
-    setHealth(response.ok);
-  } catch {
-    setHealth(false);
-  }
-}
-
 function revokeReportUrls() {
   if (state.htmlBlobUrl) {
     URL.revokeObjectURL(state.htmlBlobUrl);
@@ -226,14 +219,14 @@ function setReportButtons(job) {
 }
 
 function tickerItem(item) {
-  const daily = item.ret_1d_pct != null ? `${item.ret_1d_pct.toFixed(1)}%` : "—";
+  const score = item.score != null ? item.score.toFixed(2) : "—";
   const ret5 = item.ret_5d_pct != null ? `${item.ret_5d_pct.toFixed(1)}%` : "—";
   const trend = item.trend_score != null ? `trend ${item.trend_score}/2` : "trend —";
   return `
     <article class="ticker-item clickable" data-ticker-symbol="${escapeHtml(item.ticker)}" role="button" tabindex="0">
       <div class="ticker-row">
         <span class="ticker-symbol">${escapeHtml(item.ticker)}</span>
-        <span class="ticker-metric daily">${daily}</span>
+        <span class="ticker-metric daily">score ${escapeHtml(score)}</span>
       </div>
       <div class="ticker-row ticker-row-sub">
         <span class="ticker-metric">5d ${ret5}</span>
@@ -243,8 +236,22 @@ function tickerItem(item) {
   `;
 }
 
-function tickerGroup(items) {
-  return `<div class="ticker-group">${items.map(tickerItem).join("")}</div>`;
+function marketTickerItem(item) {
+  const change = item.ret_1d_pct != null
+    ? `${item.ret_1d_pct > 0 ? "+" : ""}${item.ret_1d_pct.toFixed(1)}%`
+    : "—";
+  const changeClass = item.ret_1d_pct > 0 ? "positive" : (item.ret_1d_pct < 0 ? "negative" : "flat");
+
+  return `
+    <article class="ticker-item market-ticker-item">
+      <span class="ticker-symbol">${escapeHtml(item.ticker)}</span>
+      <span class="market-ticker-change ${changeClass}">${escapeHtml(change)}</span>
+    </article>
+  `;
+}
+
+function tickerGroup(items, renderer = tickerItem) {
+  return `<div class="ticker-group">${items.map(renderer).join("")}</div>`;
 }
 
 function fillTickerSlots(items, targetCount) {
@@ -254,6 +261,49 @@ function fillTickerSlots(items, targetCount) {
     filled.push(items[index % items.length]);
   }
   return filled;
+}
+
+function renderTape(trackElement, items, renderer, targetCount, emptyMessage) {
+  if (!items.length) {
+    trackElement.innerHTML = `<div class="ticker-item placeholder">${escapeHtml(emptyMessage)}</div>`;
+    return [];
+  }
+
+  const visibleItems = fillTickerSlots(items, targetCount);
+  trackElement.style.setProperty("--visible-tickers", String(targetCount));
+  trackElement.innerHTML = tickerGroup(visibleItems, renderer) + tickerGroup(visibleItems, renderer);
+  return visibleItems;
+}
+
+async function fetchMarketTickers() {
+  elements.headerMarketStatus.textContent = "Refreshing index tape…";
+  elements.headerMarketTrack.innerHTML = '<div class="ticker-item market-ticker-item placeholder">Refreshing index tape…</div>';
+  state.marketItems = [];
+
+  try {
+    const response = await fetch("/api/market-tickers?limit=12");
+    const payload = await response.json();
+    const items = payload.items || [];
+
+    if (!items.length) {
+      elements.headerMarketStatus.textContent = "No market indexes available right now.";
+      elements.headerMarketTrack.innerHTML = '<div class="ticker-item market-ticker-item placeholder">No market indexes available right now.</div>';
+      return;
+    }
+
+    state.marketItems = items;
+    const visibleItems = renderTape(
+      elements.headerMarketTrack,
+      items,
+      marketTickerItem,
+      Math.max(8, Math.min(12, items.length)),
+      "No market indexes available right now.",
+    );
+    elements.headerMarketStatus.textContent = `Tracking ${items.length} benchmark indexes`;
+  } catch (error) {
+    elements.headerMarketStatus.textContent = `Unable to load index tape: ${error.message}`;
+    elements.headerMarketTrack.innerHTML = `<div class="ticker-item market-ticker-item placeholder">${escapeHtml(error.message)}</div>`;
+  }
 }
 
 async function fetchSpeakingStocks() {
@@ -276,9 +326,13 @@ async function fetchSpeakingStocks() {
     }
 
     state.speakingItems = items;
-    const visibleItems = fillTickerSlots(items, topN);
-    elements.tickerTrack.style.setProperty("--visible-tickers", String(topN));
-    elements.tickerTrack.innerHTML = tickerGroup(visibleItems) + tickerGroup(visibleItems);
+    const visibleItems = renderTape(
+      elements.tickerTrack,
+      items,
+      tickerItem,
+      topN,
+      "No speaking stocks available right now.",
+    );
     elements.tickerStatus.textContent = `Showing ${visibleItems.length} slots from ${items.length} unique speaking stocks`;
   } catch (error) {
     elements.tickerStatus.textContent = `Unable to load chatter feed: ${error.message}`;
@@ -318,9 +372,12 @@ function openTickerModal(item) {
   elements.modalEmployees.textContent = "Loading…";
   elements.modalWebsite.textContent = "Loading…";
   elements.modalPe.textContent = "Loading…";
+  const sources = Array.isArray(item.sources) && item.sources.length
+    ? item.sources.join(", ")
+    : "the chatter feed";
   elements.modalDescription.textContent =
-    `${item.ticker} is currently on the speaking-stocks tape because it ranks highly in the ` +
-    `ApeWisdom ∩ StockTwits universe, then gets scored by 5-day momentum and trend structure.`;
+    `${item.ticker} is currently on the speaking-stocks tape because it ranks inside the ` +
+    `ApeWisdom ∩ StockTwits universe and is rescored using the MyAgent momentum/trend model from ${sources}.`;
 
   elements.tickerModal.classList.remove("hidden");
   elements.tickerModal.setAttribute("aria-hidden", "false");
@@ -514,7 +571,6 @@ function statusChip(job) {
 
 function updateJobStatus(job) {
   const [label, className] = statusChip(job);
-  elements.jobIndicator.textContent = label;
   elements.statusBadge.textContent = label;
   elements.statusBadge.className = className;
   elements.currentTicker.textContent = job.current_ticker || "—";
@@ -637,8 +693,10 @@ function boot() {
   setToday();
   updateProviderFields();
   updateExportToggle();
-  fetchHealth();
+  fetchMarketTickers();
   fetchSpeakingStocks();
+  state.marketRefreshHandle = setInterval(fetchMarketTickers, MARKET_TAPE_REFRESH_MS);
+  state.speakingRefreshHandle = setInterval(fetchSpeakingStocks, SPEAKING_TAPE_REFRESH_MS);
 
   document.querySelectorAll(".sidebar-toggle").forEach((toggle) => {
     const section = toggle.parentElement;
@@ -674,6 +732,17 @@ function boot() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !elements.tickerModal.classList.contains("hidden")) {
       closeTickerModal();
+    }
+  });
+  window.addEventListener("beforeunload", () => {
+    if (state.pollHandle) {
+      clearInterval(state.pollHandle);
+    }
+    if (state.marketRefreshHandle) {
+      clearInterval(state.marketRefreshHandle);
+    }
+    if (state.speakingRefreshHandle) {
+      clearInterval(state.speakingRefreshHandle);
     }
   });
 }

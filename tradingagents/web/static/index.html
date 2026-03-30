@@ -14,19 +14,19 @@
         <h1>Research Desk</h1>
         <p class="lede">Multi-ticker analysis with live execution tracking, report actions, and a streaming market chatter tape.</p>
       </div>
-      <div class="status-cluster">
-        <article class="status-tile">
-          <span>Build</span>
-          <strong>sidebar-accordion-v2</strong>
-        </article>
-        <article class="status-tile">
-          <span>Backend</span>
-          <strong id="health-indicator">Checking…</strong>
-        </article>
-        <article class="status-tile">
-          <span>Current Job</span>
-          <strong id="job-indicator">Idle</strong>
-        </article>
+      <div class="topbar-market">
+        <div class="topbar-market-head">
+          <div>
+            <p class="eyebrow">Market Tape</p>
+            <p class="topbar-market-copy">Live benchmark indexes for the broader market backdrop.</p>
+          </div>
+          <p id="header-market-status" class="topbar-market-status">Loading market tape…</p>
+        </div>
+        <div class="ticker-marquee topbar-ticker-marquee">
+          <div id="header-market-track" class="ticker-track">
+            <div class="ticker-item market-ticker-item placeholder">Loading market tape…</div>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -321,7 +321,7 @@
       </div>
       <div class="modal-body">
         <div class="modal-metrics">
-          <article class="metric-box"><span>Score</span><strong id="modal-score">—</strong></article>
+          <article class="metric-box"><span>Model Score</span><strong id="modal-score">—</strong></article>
           <article class="metric-box"><span>Price</span><strong id="modal-price">—</strong></article>
           <article class="metric-box"><span>5D Return</span><strong id="modal-ret5">—</strong></article>
           <article class="metric-box"><span>Trend</span><strong id="modal-trend">—</strong></article>

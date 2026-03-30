@@ -19,7 +19,13 @@ from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from tradingagents.web.service import create_job, fetch_speaking_stocks, fetch_ticker_detail, get_job
+from tradingagents.web.service import (
+    create_job,
+    fetch_market_tickers,
+    fetch_speaking_stocks,
+    fetch_ticker_detail,
+    get_job,
+)
 
 logger = logging.getLogger("tradingagents.web")
 WEB_BUILD = "sidebar-accordion-v2"
@@ -239,6 +245,16 @@ def speaking_stocks(
         }
     except Exception as exc:
         logger.exception("Speaking stocks fetch failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/market-tickers")
+def market_tickers(limit: int = Query(default=12, ge=4, le=24)):
+    try:
+        logger.info("Fetching market tickers (limit=%s)", limit)
+        return {"items": fetch_market_tickers(limit=limit)}
+    except Exception as exc:
+        logger.exception("Market tickers fetch failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
