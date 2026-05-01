@@ -9,8 +9,9 @@ from functools import wraps
 from rich.console import Console
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
+load_dotenv(".env.enterprise", override=False)
 from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.live import Live
@@ -82,7 +83,7 @@ class MessageBuffer:
         self.current_agent = None
         self.report_sections = {}
         self.selected_analysts = []
-        self._last_message_id = None
+        self._processed_message_ids = set()
 
     def init_for_analysis(self, selected_analysts):
         """Initialize agent status and report sections based on selected analysts.
@@ -117,7 +118,7 @@ class MessageBuffer:
         self.current_agent = None
         self.messages.clear()
         self.tool_calls.clear()
-        self._last_message_id = None
+        self._processed_message_ids.clear()
 
     def get_completed_reports_count(self):
         """Count reports that are finalized (their finalizing agent is completed).
@@ -466,7 +467,7 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
 def get_user_selections():
     """Get all user selections before starting the analysis display."""
     # Display ASCII art welcome message
-    with open(Path(__file__).parent / "static" / "welcome.txt", "r") as f:
+    with open(Path(__file__).parent / "static" / "welcome.txt", "r", encoding="utf-8") as f:
         welcome_ascii = f.read()
 
     # Create welcome box content
@@ -852,19 +853,19 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
     analyst_parts = []
     if market_report:
         analysts_dir.mkdir(exist_ok=True)
-        (analysts_dir / "market.md").write_text(market_report)
+        (analysts_dir / "market.md").write_text(market_report, encoding="utf-8")
         analyst_parts.append(("Market Analyst", market_report))
     if sentiment_report:
         analysts_dir.mkdir(exist_ok=True)
-        (analysts_dir / "sentiment.md").write_text(sentiment_report)
+        (analysts_dir / "sentiment.md").write_text(sentiment_report, encoding="utf-8")
         analyst_parts.append(("Social Analyst", sentiment_report))
     if news_report:
         analysts_dir.mkdir(exist_ok=True)
-        (analysts_dir / "news.md").write_text(news_report)
+        (analysts_dir / "news.md").write_text(news_report, encoding="utf-8")
         analyst_parts.append(("News Analyst", news_report))
     if fundamentals_report:
         analysts_dir.mkdir(exist_ok=True)
-        (analysts_dir / "fundamentals.md").write_text(fundamentals_report)
+        (analysts_dir / "fundamentals.md").write_text(fundamentals_report, encoding="utf-8")
         analyst_parts.append(("Fundamentals Analyst", fundamentals_report))
     if analyst_parts:
         content = "\n\n".join(f"### {name}\n{text}" for name, text in analyst_parts)
@@ -880,15 +881,15 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
         research_parts = []
         if bull_history:
             research_dir.mkdir(exist_ok=True)
-            (research_dir / "bull.md").write_text(bull_history)
+            (research_dir / "bull.md").write_text(bull_history, encoding="utf-8")
             research_parts.append(("Bull Researcher", bull_history))
         if bear_history:
             research_dir.mkdir(exist_ok=True)
-            (research_dir / "bear.md").write_text(bear_history)
+            (research_dir / "bear.md").write_text(bear_history, encoding="utf-8")
             research_parts.append(("Bear Researcher", bear_history))
         if judge_decision:
             research_dir.mkdir(exist_ok=True)
-            (research_dir / "manager.md").write_text(judge_decision)
+            (research_dir / "manager.md").write_text(judge_decision, encoding="utf-8")
             research_parts.append(("Research Manager", judge_decision))
         if research_parts:
             content = "\n\n".join(f"### {name}\n{text}" for name, text in research_parts)
@@ -898,7 +899,7 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
     if trader_plan:
         trading_dir = save_path / "3_trading"
         trading_dir.mkdir(exist_ok=True)
-        (trading_dir / "trader.md").write_text(trader_plan)
+        (trading_dir / "trader.md").write_text(trader_plan, encoding="utf-8")
         sections.append(f"## III. Trading Team Plan\n\n### Trader\n{trader_plan}")
 
     # 4. Risk Management
@@ -912,15 +913,15 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
         risk_parts = []
         if aggressive_history:
             risk_dir.mkdir(exist_ok=True)
-            (risk_dir / "aggressive.md").write_text(aggressive_history)
+            (risk_dir / "aggressive.md").write_text(aggressive_history, encoding="utf-8")
             risk_parts.append(("Aggressive Analyst", aggressive_history))
         if conservative_history:
             risk_dir.mkdir(exist_ok=True)
-            (risk_dir / "conservative.md").write_text(conservative_history)
+            (risk_dir / "conservative.md").write_text(conservative_history, encoding="utf-8")
             risk_parts.append(("Conservative Analyst", conservative_history))
         if neutral_history:
             risk_dir.mkdir(exist_ok=True)
-            (risk_dir / "neutral.md").write_text(neutral_history)
+            (risk_dir / "neutral.md").write_text(neutral_history, encoding="utf-8")
             risk_parts.append(("Neutral Analyst", neutral_history))
         if risk_parts:
             content = "\n\n".join(f"### {name}\n{text}" for name, text in risk_parts)
@@ -930,12 +931,12 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
         if judge_decision:
             portfolio_dir = save_path / "5_portfolio"
             portfolio_dir.mkdir(exist_ok=True)
-            (portfolio_dir / "decision.md").write_text(judge_decision)
+            (portfolio_dir / "decision.md").write_text(judge_decision, encoding="utf-8")
             sections.append(f"## V. Portfolio Manager Decision\n\n### Portfolio Manager\n{judge_decision}")
 
     # Write consolidated report
     header = f"# Trading Analysis Report: {ticker}\n\nGenerated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-    (save_path / "complete_report.md").write_text(header + "\n\n".join(sections))
+    (save_path / "complete_report.md").write_text(header + "\n\n".join(sections), encoding="utf-8")
     return save_path / "complete_report.md"
 
 
@@ -1974,7 +1975,13 @@ def format_tool_args(args, max_length=80) -> str:
         return result[:max_length - 3] + "..."
     return result
 
-def run_single_analysis(selections, ticker: str, batch_index: int | None = None, batch_total: int | None = None):
+def run_single_analysis(
+    selections,
+    ticker: str,
+    batch_index: int | None = None,
+    batch_total: int | None = None,
+    checkpoint: bool = False,
+):
     """Run the full TradingAgents workflow for a single ticker."""
     # Create config with selected research depth
     config = DEFAULT_CONFIG.copy()
@@ -1989,6 +1996,7 @@ def run_single_analysis(selections, ticker: str, batch_index: int | None = None,
     config["openai_reasoning_effort"] = selections.get("openai_reasoning_effort")
     config["anthropic_effort"] = selections.get("anthropic_effort")
     config["output_language"] = selections.get("output_language", "English")
+    config["checkpoint_enabled"] = checkpoint
 
     # Create stats callback handler for tracking LLM/tool calls
     stats_handler = StatsCallbackHandler()
@@ -2030,7 +2038,7 @@ def run_single_analysis(selections, ticker: str, batch_index: int | None = None,
             timestamp, message_type, content = obj.messages[-1]
             content = extract_content_string(content) or ""
             content = content.replace("\n", " ")  # Replace newlines with spaces
-            with open(log_file, "a") as f:
+            with open(log_file, "a", encoding="utf-8") as f:
                 f.write(f"{timestamp} [{message_type}] {content}\n")
         return wrapper
     
@@ -2041,7 +2049,7 @@ def run_single_analysis(selections, ticker: str, batch_index: int | None = None,
             func(*args, **kwargs)
             timestamp, tool_name, args = obj.tool_calls[-1]
             args_str = ", ".join(f"{k}={v}" for k, v in args.items())
-            with open(log_file, "a") as f:
+            with open(log_file, "a", encoding="utf-8") as f:
                 f.write(f"{timestamp} [Tool Call] {tool_name}({args_str})\n")
         return wrapper
 
@@ -2055,7 +2063,7 @@ def run_single_analysis(selections, ticker: str, batch_index: int | None = None,
                 if content:
                     file_name = f"{section_name}.md"
                     text = "\n".join(str(item) for item in content) if isinstance(content, list) else content
-                    with open(report_dir / file_name, "w") as f:
+                    with open(report_dir / file_name, "w", encoding="utf-8") as f:
                         f.write(text)
         return wrapper
 
@@ -2107,28 +2115,24 @@ def run_single_analysis(selections, ticker: str, batch_index: int | None = None,
         # Stream the analysis
         trace = []
         for chunk in graph.graph.stream(init_agent_state, **args):
-            # Process messages if present (skip duplicates via message ID)
-            if len(chunk["messages"]) > 0:
-                last_message = chunk["messages"][-1]
-                msg_id = getattr(last_message, "id", None)
+            # Process all messages in chunk, deduplicating by message ID
+            for message in chunk.get("messages", []):
+                msg_id = getattr(message, "id", None)
+                if msg_id is not None:
+                    if msg_id in message_buffer._processed_message_ids:
+                        continue
+                    message_buffer._processed_message_ids.add(msg_id)
 
-                if msg_id != message_buffer._last_message_id:
-                    message_buffer._last_message_id = msg_id
+                msg_type, content = classify_message_type(message)
+                if content and content.strip():
+                    message_buffer.add_message(msg_type, content)
 
-                    # Add message to buffer
-                    msg_type, content = classify_message_type(last_message)
-                    if content and content.strip():
-                        message_buffer.add_message(msg_type, content)
-
-                    # Handle tool calls
-                    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-                        for tool_call in last_message.tool_calls:
-                            if isinstance(tool_call, dict):
-                                message_buffer.add_tool_call(
-                                    tool_call["name"], tool_call["args"]
-                                )
-                            else:
-                                message_buffer.add_tool_call(tool_call.name, tool_call.args)
+                if hasattr(message, "tool_calls") and message.tool_calls:
+                    for tool_call in message.tool_calls:
+                        if isinstance(tool_call, dict):
+                            message_buffer.add_tool_call(tool_call["name"], tool_call["args"])
+                        else:
+                            message_buffer.add_tool_call(tool_call.name, tool_call.args)
 
             # Update analyst statuses based on report state (runs on every chunk)
             update_analyst_statuses(message_buffer, chunk)
@@ -2248,7 +2252,7 @@ def run_single_analysis(selections, ticker: str, batch_index: int | None = None,
     }
 
 
-def run_analysis():
+def run_analysis(checkpoint: bool = False):
     # First get all user selections
     selections = get_user_selections()
     save_preferences = get_save_preferences(selections)
@@ -2276,6 +2280,7 @@ def run_analysis():
                     ticker,
                     batch_index=index if len(tickers) > 1 else None,
                     batch_total=len(tickers) if len(tickers) > 1 else None,
+                    checkpoint=checkpoint,
                 )
             )
         except Exception as exc:
@@ -2378,8 +2383,23 @@ def run_analysis():
 
 
 @app.command()
-def analyze():
-    run_analysis()
+def analyze(
+    checkpoint: bool = typer.Option(
+        False,
+        "--checkpoint",
+        help="Enable checkpoint/resume: save state after each node so a crashed run can resume.",
+    ),
+    clear_checkpoints: bool = typer.Option(
+        False,
+        "--clear-checkpoints",
+        help="Delete all saved checkpoints before running (force fresh start).",
+    ),
+):
+    if clear_checkpoints:
+        from tradingagents.graph.checkpointer import clear_all_checkpoints
+        n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
+        console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
+    run_analysis(checkpoint=checkpoint)
 
 
 @app.command("serve-web")

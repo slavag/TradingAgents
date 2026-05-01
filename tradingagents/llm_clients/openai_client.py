@@ -19,6 +19,21 @@ class NormalizedChatOpenAI(ChatOpenAI):
     def invoke(self, input, config=None, **kwargs):
         return normalize_content(super().invoke(input, config, **kwargs))
 
+    def with_structured_output(self, schema, *, method=None, **kwargs):
+        """Wrap with structured output, defaulting to function_calling for OpenAI.
+
+        langchain-openai's Responses-API-parse path (the default for json_schema
+        when use_responses_api=True) calls response.model_dump(...) on the OpenAI
+        SDK's union-typed parsed response, which makes Pydantic emit ~20
+        PydanticSerializationUnexpectedValue warnings per call. The function-calling
+        path returns a plain tool-call shape that does not trigger that
+        serialization, so it is the cleaner choice for our combination of
+        use_responses_api=True + with_structured_output. Both paths use OpenAI's
+        strict mode and produce the same typed Pydantic instance.
+        """
+        if method is None:
+            method = "function_calling"
+        return super().with_structured_output(schema, method=method, **kwargs)
 
 # Kwargs forwarded from user config to ChatOpenAI
 _PASSTHROUGH_KWARGS = (
@@ -29,6 +44,9 @@ _PASSTHROUGH_KWARGS = (
 # Provider base URLs and API key env vars
 _PROVIDER_CONFIG = {
     "xai": ("https://api.x.ai/v1", "XAI_API_KEY"),
+    "deepseek": ("https://api.deepseek.com", "DEEPSEEK_API_KEY"),
+    "qwen": ("https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY"),
+    "glm": ("https://api.z.ai/api/paas/v4/", "ZHIPU_API_KEY"),
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "ollama": ("http://localhost:11434/v1", None),
 }
