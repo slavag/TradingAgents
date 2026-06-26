@@ -1,49 +1,47 @@
 # TradingAgents/graph/trading_graph.py
 
+import json
 import logging
 import os
-from pathlib import Path
-import json
 from datetime import datetime, timedelta
-from typing import Dict, Any, Tuple, List, Optional
+from pathlib import Path
+from typing import Any
 
 import yfinance as yf
-
-logger = logging.getLogger(__name__)
-
 from langgraph.prebuilt import ToolNode
 
-from tradingagents.llm_clients import create_llm_client
-
-from tradingagents.agents import *
-from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.agents.utils.memory import TradingMemoryLog
-from tradingagents.agents.utils.agent_states import (
-    AgentState,
-    InvestDebateState,
-    RiskDebateState,
-)
-from tradingagents.dataflows.config import set_config
-
-# Import the new abstract tool methods from agent_utils
+# Import the abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
-    get_stock_data,
-    get_indicators,
-    get_fundamentals,
+    build_instrument_context,
     get_balance_sheet,
     get_cashflow,
+    get_fundamentals,
+    get_global_news,
     get_income_statement,
-    get_news,
+    get_indicators,
     get_insider_transactions,
-    get_global_news
+    get_macro_indicators,
+    get_news,
+    get_prediction_markets,
+    get_stock_data,
+    get_verified_market_snapshot,
+    resolve_instrument_identity,
 )
+from tradingagents.agents.utils.memory import TradingMemoryLog
+from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.utils import safe_ticker_component
+from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.llm_clients import create_llm_client
+from tradingagents.reporting import write_report_tree
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
-from .setup import GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
+from .setup import GraphSetup
 from .signal_processing import SignalProcessor
+
+logger = logging.getLogger(__name__)
 
 
 class TradingAgentsGraph:
@@ -51,10 +49,10 @@ class TradingAgentsGraph:
 
     def __init__(
         self,
-        selected_analysts=["market", "social", "news", "fundamentals"],
+        selected_analysts=("market", "social", "news", "fundamentals"),
         debug=False,
-        config: Dict[str, Any] = None,
-        callbacks: Optional[List] = None,
+        config: dict[str, Any] = None,
+        callbacks: list | None = None,
     ):
         """Initialize the trading agents graph and components.
 
@@ -90,7 +88,7 @@ class TradingAgentsGraph:
             model_key="final_report_llm",
             base_url_key="final_report_backend_url",
         )
-        
+
         self.memory_log = TradingMemoryLog(self.config)
 
         # Create tool nodes
@@ -108,7 +106,9 @@ class TradingAgentsGraph:
             self.conditional_logic,
         )
 
-        self.propagator = Propagator()
+        self.propagator = Propagator(
+            max_recur_limit=self.config.get("max_recur_limit", 100),
+        )
         self.reflector = Reflector(self.final_report_llm)
         self.signal_processor = SignalProcessor(self.final_report_llm)
 
@@ -122,10 +122,10 @@ class TradingAgentsGraph:
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
 
-    def _get_provider_kwargs(self, provider: str) -> Dict[str, Any]:
+    def _get_provider_kwargs(self, provider: str | None = None) -> dict[str, Any]:
         """Get provider-specific kwargs for an individual LLM role."""
         kwargs = {}
-        provider = provider.lower()
+        provider = (provider or self.config.get("llm_provider", "")).lower()
 
         if provider == "google":
             thinking_level = self.config.get("google_thinking_level")
@@ -141,6 +141,13 @@ class TradingAgentsGraph:
             effort = self.config.get("anthropic_effort")
             if effort:
                 kwargs["effort"] = effort
+
+        # Sampling temperature is cross-provider: forward it whenever set.
+        # float() here so a value coming from a TRADINGAGENTS_TEMPERATURE env
+        # string ("0.2") works the same as a programmatic float.
+        temperature = self.config.get("temperature")
+        if temperature is not None and temperature != "":
+            kwargs["temperature"] = float(temperature)
 
         return kwargs
 
@@ -170,7 +177,7 @@ class TradingAgentsGraph:
         )
         return client.get_llm()
 
-    def _create_tool_nodes(self) -> Dict[str, ToolNode]:
+    def _create_tool_nodes(self) -> dict[str, ToolNode]:
         """Create tool nodes for different data sources using abstract methods."""
         return {
             "market": ToolNode(
@@ -179,6 +186,10 @@ class TradingAgentsGraph:
                     get_stock_data,
                     # Technical indicators
                     get_indicators,
+                    # Deterministic verification snapshot (bound to the analyst
+                    # LLM and required by its prompt; must be executable here or
+                    # the call fails and the model reports it "unavailable").
+                    get_verified_market_snapshot,
                 ]
             ),
             "social": ToolNode(
@@ -193,6 +204,8 @@ class TradingAgentsGraph:
                     get_news,
                     get_global_news,
                     get_insider_transactions,
+                    get_macro_indicators,
+                    get_prediction_markets,
                 ]
             ),
             "fundamentals": ToolNode(
@@ -206,41 +219,69 @@ class TradingAgentsGraph:
             ),
         }
 
+    def _resolve_benchmark(self, ticker: str) -> str:
+        """Pick the benchmark ticker for alpha calculation against ``ticker``.
+
+        ``config["benchmark_ticker"]`` overrides everything when set; otherwise
+        the suffix map matches the ticker's exchange suffix (e.g. ``.T`` for
+        Tokyo). US-listed tickers without a dotted suffix fall through to the
+        empty-suffix entry (SPY by default). Unrecognised suffixes (including
+        US tickers with dots like ``BRK.B``) also fall back to the empty-suffix
+        entry, which is the right default because the alpha calculation works
+        in USD.
+        """
+        explicit = self.config.get("benchmark_ticker")
+        if explicit:
+            return explicit
+        benchmark_map = self.config.get("benchmark_map", {})
+        ticker_upper = ticker.upper()
+        for suffix, benchmark in benchmark_map.items():
+            if suffix and ticker_upper.endswith(suffix.upper()):
+                return benchmark
+        return benchmark_map.get("", "SPY")
+
     def _fetch_returns(
-        self, ticker: str, trade_date: str, holding_days: int = 5
-    ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
+        self, ticker: str, trade_date: str, holding_days: int = 5,
+        benchmark: str = "SPY",
+    ) -> tuple[float | None, float | None, int | None]:
         """Fetch raw and alpha return for ticker over holding_days from trade_date.
 
-        Returns (raw_return, alpha_return, actual_holding_days) or
-        (None, None, None) if price data is unavailable (too recent, delisted,
-        or network error).
+        ``benchmark`` is the index used as the alpha baseline (resolved by the
+        caller via ``_resolve_benchmark``). Returns ``(raw_return, alpha_return,
+        actual_holding_days)`` or ``(None, None, None)`` if price data is
+        unavailable (too recent, delisted, or network error).
         """
+        from tradingagents.dataflows.symbol_utils import normalize_symbol
+
         try:
             start = datetime.strptime(trade_date, "%Y-%m-%d")
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
             end_str = end.strftime("%Y-%m-%d")
 
-            stock = yf.Ticker(ticker).history(start=trade_date, end=end_str)
-            spy = yf.Ticker("SPY").history(start=trade_date, end=end_str)
+            # Normalize so the realized-return lookup hits the same instrument
+            # the analysis priced (e.g. XAUUSD -> GC=F) (#984). The benchmark is
+            # already a canonical Yahoo symbol from ``_resolve_benchmark``.
+            stock = yf.Ticker(normalize_symbol(ticker)).history(start=trade_date, end=end_str)
+            bench = yf.Ticker(benchmark).history(start=trade_date, end=end_str)
 
-            if len(stock) < 2 or len(spy) < 2:
+            if len(stock) < 2 or len(bench) < 2:
                 return None, None, None
 
-            actual_days = min(holding_days, len(stock) - 1, len(spy) - 1)
+            actual_days = min(holding_days, len(stock) - 1, len(bench) - 1)
             raw = float(
                 (stock["Close"].iloc[actual_days] - stock["Close"].iloc[0])
                 / stock["Close"].iloc[0]
             )
-            spy_ret = float(
-                (spy["Close"].iloc[actual_days] - spy["Close"].iloc[0])
-                / spy["Close"].iloc[0]
+            bench_ret = float(
+                (bench["Close"].iloc[actual_days] - bench["Close"].iloc[0])
+                / bench["Close"].iloc[0]
             )
-            alpha = raw - spy_ret
+            alpha = raw - bench_ret
             return raw, alpha, actual_days
         except Exception as e:
             logger.warning(
-                "Could not resolve outcome for %s on %s (will retry next run): %s",
-                ticker, trade_date, e,
+                "Could not resolve outcome for %s on %s vs %s (will retry next run): %s",
+                ticker, trade_date, benchmark, e,
             )
             return None, None, None
 
@@ -258,15 +299,19 @@ class TradingAgentsGraph:
         if not pending:
             return
 
+        benchmark = self._resolve_benchmark(ticker)
         updates = []
         for entry in pending:
-            raw, alpha, days = self._fetch_returns(ticker, entry["date"])
+            raw, alpha, days = self._fetch_returns(
+                ticker, entry["date"], benchmark=benchmark,
+            )
             if raw is None:
                 continue  # price not available yet — try again next run
             reflection = self.reflector.reflect_on_final_decision(
                 final_decision=entry.get("decision", ""),
                 raw_return=raw,
                 alpha_return=alpha,
+                benchmark_name=benchmark,
             )
             updates.append({
                 "ticker": ticker,
@@ -280,11 +325,26 @@ class TradingAgentsGraph:
         if updates:
             self.memory_log.batch_update_with_outcomes(updates)
 
-    def propagate(self, company_name, trade_date):
+    def resolve_instrument_context(self, ticker: str, asset_type: str = "stock") -> str:
+        """Resolve ticker identity once and return the full instrument context.
+
+        Deterministic yfinance lookup (cached, fail-open) injected into a
+        context string so every agent anchors to the real company instead of
+        hallucinating one from the price chart (#814). Both the propagate()
+        path and the CLI call this so the resolved identity reaches the whole
+        graph regardless of entry point.
+        """
+        identity = resolve_instrument_identity(ticker)
+        return build_instrument_context(ticker, asset_type, identity)
+
+    def propagate(self, company_name, trade_date, asset_type: str = "stock"):
         """Run the trading agents graph for a company on a specific date.
 
-        When ``checkpoint_enabled`` is set in config, the graph is recompiled
-        with a per-ticker SqliteSaver so a crashed run can resume from the last
+        ``asset_type`` selects between the stock pipeline (default) and the
+        crypto pipeline (``"crypto"``) shipped in #567 — the CLI auto-detects
+        from the ticker; programmatic callers pass it explicitly. When
+        ``checkpoint_enabled`` is set in config, the graph is recompiled with
+        a per-ticker SqliteSaver so a crashed run can resume from the last
         successful node on a subsequent invocation with the same ticker+date.
         """
         self.ticker = company_name
@@ -311,19 +371,40 @@ class TradingAgentsGraph:
                 logger.info("Starting fresh for %s on %s", company_name, trade_date)
 
         try:
-            return self._run_graph(company_name, trade_date)
+            return self._run_graph(company_name, trade_date, asset_type=asset_type)
         finally:
             if self._checkpointer_ctx is not None:
                 self._checkpointer_ctx.__exit__(None, None, None)
                 self._checkpointer_ctx = None
                 self.graph = self.workflow.compile()
 
-    def _run_graph(self, company_name, trade_date):
+    def save_reports(self, final_state, ticker, save_path=None) -> Path:
+        """Write the markdown report tree for a completed run, like the CLI does.
+
+        Programmatic callers get the same on-disk reports the CLI produces. Pass
+        an explicit ``save_path`` or let it default under ``results_dir``.
+        """
+        if save_path is None:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            save_path = (
+                Path(self.config["results_dir"])
+                / "reports"
+                / f"{safe_ticker_component(ticker)}_{stamp}"
+            )
+        return write_report_tree(final_state, ticker, save_path)
+
+    def _run_graph(self, company_name, trade_date, asset_type: str = "stock"):
         """Execute the graph and write the resulting state to disk and memory log."""
-        # Initialize state — inject memory log context for PM.
+        # Initialize state — inject memory log context for PM and the
+        # deterministically resolved instrument identity for all agents.
         past_context = self.memory_log.get_past_context(company_name)
+        instrument_context = self.resolve_instrument_context(company_name, asset_type)
         init_agent_state = self.propagator.create_initial_state(
-            company_name, trade_date, past_context=past_context
+            company_name,
+            trade_date,
+            asset_type=asset_type,
+            past_context=past_context,
+            instrument_context=instrument_context,
         )
         args = self.propagator.get_graph_args()
 
@@ -334,13 +415,23 @@ class TradingAgentsGraph:
 
         if self.debug:
             trace = []
+            last_printed = None
             for chunk in self.graph.stream(init_agent_state, **args):
-                if len(chunk["messages"]) == 0:
-                    pass
-                else:
-                    chunk["messages"][-1].pretty_print()
+                if chunk["messages"]:
+                    msg = chunk["messages"][-1]
+                    # Nodes after the trader don't append to messages, so the
+                    # same trailing message repeats across chunks. Print it only
+                    # when it changes (#1027); the trace/state merge is unchanged.
+                    signature = (type(msg).__name__, getattr(msg, "content", None))
+                    if signature != last_printed:
+                        msg.pretty_print()
+                        last_printed = signature
                     trace.append(chunk)
-            final_state = trace[-1]
+            # Streamed chunks are per-node deltas. Merge them so the returned
+            # state matches what graph.invoke() yields in the non-debug path.
+            final_state = {}
+            for chunk in trace:
+                final_state.update(chunk)
         else:
             final_state = self.graph.invoke(init_agent_state, **args)
 
@@ -397,8 +488,10 @@ class TradingAgentsGraph:
             "final_trade_decision": final_state["final_trade_decision"],
         }
 
-        # Save to file
-        directory = Path(self.config["results_dir"]) / self.ticker / "TradingAgentsStrategy_logs"
+        # Save to file. Reject ticker values that would escape the
+        # results directory when joined as a path component.
+        safe_ticker = safe_ticker_component(self.ticker)
+        directory = Path(self.config["results_dir"]) / safe_ticker / "TradingAgentsStrategy_logs"
         directory.mkdir(parents=True, exist_ok=True)
 
         log_path = directory / f"full_states_log_{trade_date}.json"

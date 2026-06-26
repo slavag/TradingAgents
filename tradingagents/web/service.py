@@ -260,9 +260,12 @@ class WebProgressTracker:
             else:
                 self.set_status(agent_name, "pending")
 
-        if not found_active and self.selected_analysts:
-            if self.agent_status.get("Bull Researcher") == "pending":
-                self.set_status("Bull Researcher", "in_progress")
+        if (
+            not found_active
+            and self.selected_analysts
+            and self.agent_status.get("Bull Researcher") == "pending"
+        ):
+            self.set_status("Bull Researcher", "in_progress")
 
     def update_research(self, chunk: dict[str, Any]):
         debate_state = chunk.get("investment_debate_state")
@@ -567,7 +570,7 @@ def fetch_speaking_stocks(
         "apewisdom": set(aw_set),
         "stocktwits": set(stwt_set),
     }
-    intersection = sorted(list(source_sets["apewisdom"] & source_sets["stocktwits"]))
+    intersection = sorted(source_sets["apewisdom"] & source_sets["stocktwits"])
     logger.warning(
         "Speaking stocks: intersection size=%s",
         len(intersection),

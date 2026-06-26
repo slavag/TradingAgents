@@ -1,22 +1,18 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import logging
 import logging.config
 import os
 import threading
 import webbrowser
 from pathlib import Path
-from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
-from fastapi import Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.responses import HTMLResponse
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
