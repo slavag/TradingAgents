@@ -19,6 +19,29 @@ _CUSTOM_ONLY: dict[str, list[ModelOption]] = {
 }
 
 
+# Older IDs we continue to accept for backwards compatibility, even when they
+# are no longer shown as current choices in the CLI/web catalog.
+LEGACY_MODEL_IDS = {
+    "anthropic": [
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+    ],
+    "google": [
+        "gemini-3.1-flash-lite-preview",
+        "gemini-2.5-flash-lite-preview",
+    ],
+    "xai": [
+        "grok-4-1-fast-reasoning",
+        "grok-4-1-fast-non-reasoning",
+        "grok-4-0709",
+        "grok-4-fast-reasoning",
+        "grok-4-fast-non-reasoning",
+    ],
+}
+
+
 # Shared model list for GLM via Z.AI (international) and BigModel (China).
 # Source: docs.z.ai (GLM Coding Plan supported models + LLM guides).
 # All GLM 4.7+ entries support thinking mode via thinking={"type":"enabled"}.
@@ -39,16 +62,9 @@ _GLM_MODELS: dict[str, list[ModelOption]] = {
 }
 
 
-# Shared model list for Qwen's global (dashscope-intl) and CN (dashscope) endpoints.
-# Source: modelstudio.console.alibabacloud.com (Featured Models — Flagship + Cost-optimized).
-#
-# Only versioned IDs are exposed in the dropdown. The version-less aliases
-# (qwen-plus, qwen-flash) are documented by Alibaba as auto-upgrading
-# pointers ("backbone, latest, and snapshot ... have been upgraded to the
-# Qwen3 series"), which means their behavior shifts when Alibaba rotates
-# the backing model. Users who want a specific generation pick it
-# explicitly; users who really want auto-latest can enter the alias via
-# "Custom model ID".
+# Shared model list for Qwen's global (dashscope-intl) and CN (dashscope)
+# endpoints. Only versioned IDs are exposed in the dropdown; version-less
+# aliases can still be entered through "Custom model ID" where supported.
 _QWEN_MODELS: dict[str, list[ModelOption]] = {
     "quick": [
         ("Qwen 3.7 Plus - Latest, balanced speed/cost", "qwen3.7-plus"),
@@ -65,8 +81,6 @@ _QWEN_MODELS: dict[str, list[ModelOption]] = {
 
 
 # Shared model list for MiniMax's global and CN endpoints (same IDs).
-# Full official lineup per platform.minimax.io/docs/api-reference/text-openai-api.
-# M3 carries a 1M-token context window; the M2.x line is 204,800 tokens.
 _MINIMAX_MODELS: dict[str, list[ModelOption]] = {
     "quick": [
         ("MiniMax-M3 - Latest, 1M ctx, native multimodal", "MiniMax-M3"),
@@ -89,53 +103,60 @@ MODEL_OPTIONS: ProviderModeOptions = {
         "quick": [
             ("GPT-5.4 Mini - Fast, strong coding and tool use", "gpt-5.4-mini"),
             ("GPT-5.4 Nano - Cheapest, high-volume tasks", "gpt-5.4-nano"),
-            ("GPT-5.5 - Latest frontier, 1M context", "gpt-5.5"),
+            ("GPT-5.4 - Frontier reasoning model", "gpt-5.4"),
+            ("GPT-4.1 - Smartest non-reasoning model", "gpt-4.1"),
         ],
         "deep": [
-            ("GPT-5.5 - Latest frontier, 1M context", "gpt-5.5"),
-            ("GPT-5.4 - Previous-gen frontier, 1M context, cost-effective", "gpt-5.4"),
-            ("GPT-5.2 - Strong reasoning, cost-effective", "gpt-5.2"),
+            ("GPT-5.5 - Flagship for complex reasoning and coding", "gpt-5.5"),
             ("GPT-5.5 Pro - Most capable, expensive ($30/$180 per 1M tokens)", "gpt-5.5-pro"),
+            ("GPT-5.4 - Affordable frontier reasoning model", "gpt-5.4"),
+            ("GPT-5.4 Pro - Most capable for complex workflows", "gpt-5.4-pro"),
+            ("GPT-5.2 - Strong reasoning, cost-effective", "gpt-5.2"),
+            ("GPT-5.4 Mini - Fast, strong coding and tool use", "gpt-5.4-mini"),
         ],
     },
     "anthropic": {
         "quick": [
-            ("Claude Sonnet 4.6 - Best speed and intelligence balance", "claude-sonnet-4-6"),
-            ("Claude Haiku 4.5 - Fastest with near-frontier intelligence", "claude-haiku-4-5"),
+            ("Claude Sonnet 5 - Best speed and intelligence balance", "claude-sonnet-5"),
+            ("Claude Haiku 4.5 - Fastest Claude model", "claude-haiku-4-5"),
+            ("Claude Opus 4.8 - Complex reasoning and agentic coding", "claude-opus-4-8"),
         ],
         "deep": [
-            ("Claude Opus 4.8 - Latest frontier, agentic coding and reasoning", "claude-opus-4-8"),
-            ("Claude Opus 4.7 - Previous frontier, long-running agents", "claude-opus-4-7"),
-            ("Claude Opus 4.6 - Frontier intelligence, agents and coding", "claude-opus-4-6"),
-            ("Claude Sonnet 4.6 - Best speed and intelligence balance", "claude-sonnet-4-6"),
+            ("Claude Fable 5 - Highest available Claude capability", "claude-fable-5"),
+            ("Claude Opus 4.8 - Complex reasoning and agentic coding", "claude-opus-4-8"),
+            ("Claude Sonnet 5 - Best speed and intelligence balance", "claude-sonnet-5"),
+            ("Claude Haiku 4.5 - Fastest Claude model", "claude-haiku-4-5"),
         ],
     },
     "google": {
         "quick": [
-            ("Gemini 3.5 Flash - Latest, frontier agentic + coding (GA)", "gemini-3.5-flash"),
-            ("Gemini 3.1 Flash Lite - Most cost-efficient", "gemini-3.1-flash-lite"),
+            ("Gemini 3.5 Flash - Stable frontier Flash model", "gemini-3.5-flash"),
+            ("Gemini 3.1 Flash-Lite - Frontier-class low-cost model", "gemini-3.1-flash-lite"),
+            ("Gemini 2.5 Flash-Lite - Fastest low-cost Gemini", "gemini-2.5-flash-lite"),
+            ("Gemini 2.5 Flash - Balanced, stable", "gemini-2.5-flash"),
+            ("Gemini 3 Flash Preview - Fast frontier preview", "gemini-3-flash-preview"),
         ],
         "deep": [
-            ("Gemini 3.1 Pro - Reasoning-first, complex workflows (preview)", "gemini-3.1-pro-preview"),
-            ("Gemini 3.5 Flash - Latest GA, strong agentic + coding", "gemini-3.5-flash"),
+            ("Gemini 3.1 Pro Preview - Advanced agentic reasoning", "gemini-3.1-pro-preview"),
+            ("Gemini 3.5 Flash - Stable frontier Flash model", "gemini-3.5-flash"),
+            ("Gemini 2.5 Pro - Stable advanced reasoning", "gemini-2.5-pro"),
+            ("Gemini 2.5 Flash - Balanced, stable", "gemini-2.5-flash"),
+            ("Gemini 3 Flash Preview - Fast frontier preview", "gemini-3-flash-preview"),
         ],
     },
     "xai": {
         "quick": [
-            ("Grok 4.3 - Latest flagship, fast with built-in reasoning", "grok-4.3"),
+            ("Grok Build 0.1 - Fast coding and agentic workflows", "grok-build-0.1"),
+            ("Grok 4.3 - Current flagship Grok model", "grok-4.3"),
             ("Grok 4.20 (Non-Reasoning) - Speed-optimized", "grok-4.20-0309-non-reasoning"),
-            ("Grok Build 0.1 - Coding-specialized, 256K ctx", "grok-build-0.1"),
         ],
         "deep": [
-            ("Grok 4.3 - Latest flagship, built-in reasoning, 1M ctx", "grok-4.3"),
+            ("Grok 4.3 - Current flagship Grok model", "grok-4.3"),
             ("Grok 4.20 (Reasoning) - Previous-gen reasoning", "grok-4.20-0309-reasoning"),
             ("Grok 4.20 Multi-Agent - Multi-agent reasoning", "grok-4.20-multi-agent-0309"),
+            ("Grok Build 0.1 - Fast coding and agentic workflows", "grok-build-0.1"),
         ],
     },
-    # DeepSeek: the deepseek-chat / deepseek-reasoner aliases are deprecated
-    # (2026-07-24) and now map to V4 Flash; expose the V4 IDs directly. V4 Flash
-    # serves both non-thinking and thinking modes (the DeepSeekChatOpenAI client
-    # handles the reasoning_content round-trip).
     "deepseek": {
         "quick": [
             ("DeepSeek V4 Flash - Latest fast model, thinking + non-thinking", "deepseek-v4-flash"),
@@ -147,26 +168,22 @@ MODEL_OPTIONS: ProviderModeOptions = {
             ("Custom model ID", "custom"),
         ],
     },
-    # Qwen: same model IDs across global (dashscope-intl) and China
-    # (dashscope) endpoints, so the two provider keys share one model list.
     "qwen": _QWEN_MODELS,
     "qwen-cn": _QWEN_MODELS,
-    # GLM: Z.AI (international) and BigModel (China) host the same model
-    # IDs; the two provider keys share one model list.
     "glm": _GLM_MODELS,
     "glm-cn": _GLM_MODELS,
-    # MiniMax: same model IDs across global (.io) and China (.com) regions,
-    # so the two provider keys share one model list.
     "minimax": _MINIMAX_MODELS,
     "minimax-cn": _MINIMAX_MODELS,
-    # OpenRouter: fetched dynamically. Azure: any deployed model name.
-    # Ollama display labels intentionally omit a "local" marker — the
-    # endpoint is now configurable via OLLAMA_BASE_URL, so the same labels
-    # apply whether the user runs ollama-serve on localhost or against a
-    # remote host. The actual resolved endpoint is surfaced separately by
-    # cli.utils.confirm_ollama_endpoint() right after provider selection.
-    # "Custom model ID" lets users pick any model they have pulled via
-    # `ollama pull` beyond the three suggested defaults.
+    "openrouter": {
+        "quick": [
+            ("NVIDIA Nemotron 3 Nano 30B (free)", "nvidia/nemotron-3-nano-30b-a3b:free"),
+            ("Z.AI GLM 4.5 Air (free)", "z-ai/glm-4.5-air:free"),
+        ],
+        "deep": [
+            ("Z.AI GLM 4.5 Air (free)", "z-ai/glm-4.5-air:free"),
+            ("NVIDIA Nemotron 3 Nano 30B (free)", "nvidia/nemotron-3-nano-30b-a3b:free"),
+        ],
+    },
     "ollama": {
         "quick": [
             ("Qwen3:latest (8B)", "qwen3:latest"),
@@ -181,18 +198,11 @@ MODEL_OPTIONS: ProviderModeOptions = {
             ("Custom model ID", "custom"),
         ],
     },
-    # Generic OpenAI-compatible endpoint: the model is whatever the user's
-    # server serves, so only "Custom model ID" is offered.
     "openai_compatible": _CUSTOM_ONLY,
-    # Hosted OpenAI-compatible providers that serve many (and frequently
-    # changing) models — offer "Custom model ID" rather than a list that goes
-    # stale. The endpoint + key are wired by the provider; the user picks the
-    # model their account has access to.
     "mistral": _CUSTOM_ONLY,
     "kimi": _CUSTOM_ONLY,
     "groq": _CUSTOM_ONLY,
     "nvidia": _CUSTOM_ONLY,
-    # Bedrock model IDs / cross-region inference profile IDs are user-specified.
     "bedrock": _CUSTOM_ONLY,
 }
 
@@ -230,7 +240,7 @@ def get_known_models() -> dict[str, list[str]]:
                 value
                 for options in mode_options.values()
                 for _, value in options
-            }
+            }.union(LEGACY_MODEL_IDS.get(provider, []))
         )
         for provider, mode_options in MODEL_OPTIONS.items()
     }

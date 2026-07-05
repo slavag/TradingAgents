@@ -233,7 +233,7 @@ python -m cli.main serve-web --log-level ERROR --log-file /tmp/tradingagents-web
 ### Chatter Tape
 
 The bottom chatter tape is intentionally optimized for speed:
-- It ranks symbols from the **ApeWisdom ∩ StockTwits** universe
+- It ranks symbols from the **ApeWisdom ∩ StockTwits** universe, merged with Stock Traders Daily latest analysis releases
 - It shows fast market data in the tape itself:
   - ticker
   - score

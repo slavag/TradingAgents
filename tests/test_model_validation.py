@@ -45,6 +45,25 @@ class ModelValidationTests(unittest.TestCase):
         self.assertIn("not-a-real-openai-model", str(caught[0].message))
         self.assertIn("openai", str(caught[0].message))
 
+    def test_legacy_models_remain_validator_approved(self):
+        legacy_cases = [
+            ("anthropic", "claude-opus-4-7"),
+            ("anthropic", "claude-opus-4-6"),
+            ("anthropic", "claude-sonnet-4-6"),
+            ("anthropic", "claude-sonnet-4-5"),
+            ("google", "gemini-3.1-flash-lite-preview"),
+            ("google", "gemini-2.5-flash-lite-preview"),
+            ("xai", "grok-4-1-fast-reasoning"),
+            ("xai", "grok-4-1-fast-non-reasoning"),
+            ("xai", "grok-4-0709"),
+            ("xai", "grok-4-fast-reasoning"),
+            ("xai", "grok-4-fast-non-reasoning"),
+        ]
+
+        for provider, model in legacy_cases:
+            with self.subTest(provider=provider, model=model):
+                self.assertTrue(validate_model(provider, model))
+
     def test_openrouter_and_ollama_accept_custom_models_without_warning(self):
         for provider in ("openrouter", "ollama"):
             client = DummyLLMClient(provider, "custom-model-name")

@@ -1,0 +1,143 @@
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from tradingagents.web import service as web_service
+from tradingagents.web.service import _build_source_only_speaking_records
+
+
+class _FakePropagator:
+    def create_initial_state(self, ticker, analysis_date):
+        return {"ticker": ticker, "analysis_date": analysis_date}
+
+    def get_graph_args(self, callbacks=None):
+        return {}
+
+
+class _FakeStreamGraph:
+    def stream(self, init_state, **kwargs):
+        yield {
+            "messages": [],
+            "market_report": "Market report.",
+            "sentiment_report": "Social report.",
+            "news_report": "News report.",
+            "fundamentals_report": "Fundamentals report.",
+            "investment_debate_state": {"judge_decision": "Research decision."},
+            "trader_investment_plan": "Trader plan.",
+            "risk_debate_state": {"judge_decision": "Portfolio decision."},
+            "final_trade_decision": "Buy",
+        }
+
+
+class _FakeGraph:
+    final_report_llm = object()
+
+    def __init__(self, *args, **kwargs):
+        self.propagator = _FakePropagator()
+        self.graph = _FakeStreamGraph()
+
+    def process_signal(self, signal):
+        return "Buy"
+
+
+class WebServiceTests(unittest.TestCase):
+    def test_source_only_records_keep_tape_populated_when_prices_are_empty(self):
+        records = _build_source_only_speaking_records(
+            ["BNED", "RUNN"],
+            {
+                "BNED": ["Stock Traders Daily News Release"],
+                "RUNN": ["Stock Traders Daily News Release", "ApeWisdom"],
+            },
+            top_n=10,
+            lookback_days=30,
+        )
+
+        self.assertEqual([record["ticker"] for record in records], ["RUNN", "BNED"])
+        self.assertEqual(records[0]["source_count"], 2)
+        self.assertEqual(records[0]["score"], 2.0)
+        self.assertIsNone(records[0]["price"])
+        self.assertEqual(records[0]["lookback_days"], 30)
+
+    def test_job_enters_final_report_state_before_consolidated_generation(self):
+        with TemporaryDirectory() as tmpdir:
+            job_id = "job-final-report-state"
+            payload = {
+                "tickers": "AAA",
+                "analysis_date": "2026-07-05",
+                "analysts": ["market"],
+                "research_depth": 1,
+                "quick_provider": "openai",
+                "quick_thinker": "gpt-5.4-mini",
+                "deep_provider": "openai",
+                "deep_thinker": "gpt-5.4",
+                "final_report_provider": "openai",
+                "final_report_model": "gpt-5.4-mini",
+                "save_reports": False,
+            }
+            observed = {}
+            tmp_path = Path(tmpdir)
+
+            with web_service._JOB_LOCK:
+                web_service._JOBS[job_id] = {
+                    "id": job_id,
+                    "status": "queued",
+                    "created_at": "2026-07-05T00:00:00",
+                    "updated_at": "2026-07-05T00:00:00",
+                    "total": 1,
+                    "completed": 0,
+                    "tickers": ["AAA"],
+                    "analysis_date": "2026-07-05",
+                    "current_ticker": None,
+                    "progress_message": "Queued.",
+                    "results": [],
+                    "progress_rows": [],
+                    "recent_events": [],
+                    "current_report": None,
+                    "consolidated_markdown": None,
+                    "consolidated_html": None,
+                    "consolidated_paths": None,
+                    "error": None,
+                }
+
+            def build_markdown(results, analysis_date, summary_llm=None):
+                snapshot = web_service.get_job(job_id)
+                observed["current_ticker"] = snapshot["current_ticker"]
+                observed["progress_message"] = snapshot["progress_message"]
+                observed["summary_llm"] = summary_llm
+                return "markdown"
+
+            with (
+                patch.object(web_service, "TradingAgentsGraph", _FakeGraph),
+                patch.object(
+                    web_service,
+                    "estimate_target_profile",
+                    return_value={
+                        "price_target": 101.0,
+                        "confidence_score": 75,
+                        "target_horizon": "1 month",
+                        "target_summary": "Target summary.",
+                        "reference_price": 100.0,
+                    },
+                ),
+                patch.object(web_service, "save_report_to_disk", return_value=tmp_path / "ticker.md"),
+                patch.object(web_service, "build_consolidated_report", side_effect=build_markdown),
+                patch.object(web_service, "build_consolidated_report_html", return_value="html"),
+                patch.object(
+                    web_service,
+                    "save_consolidated_report",
+                    return_value={
+                        "markdown": tmp_path / "consolidated.md",
+                        "html": tmp_path / "consolidated.html",
+                    },
+                ),
+            ):
+                web_service._run_job(job_id, payload)
+
+            self.assertIsNone(observed["current_ticker"])
+            self.assertEqual(observed["progress_message"], "Building final report.")
+            self.assertIsNone(observed["summary_llm"])
+
+
+if __name__ == "__main__":
+    unittest.main()

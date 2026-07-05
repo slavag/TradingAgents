@@ -32,7 +32,8 @@ from cli.stats_handler import StatsCallbackHandler
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.web.speaking_sources import (
-    SOURCE_LABELS,
+    build_speaking_candidate_universe,
+    fetch_external_market_symbols,
 )
 
 logger = logging.getLogger("tradingagents.web.service")
@@ -523,6 +524,52 @@ def _fetch_market_index_snapshots(symbols: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _build_source_only_speaking_records(
+    candidate_symbols: list[str],
+    source_membership: dict[str, list[str]],
+    top_n: int,
+    lookback_days: int,
+) -> list[dict[str, Any]]:
+    ranked_symbols = sorted(
+        candidate_symbols,
+        key=lambda symbol: (-len(source_membership.get(symbol, [])), symbol),
+    )
+
+    records: list[dict[str, Any]] = []
+    for symbol in ranked_symbols[:top_n]:
+        sources = source_membership.get(symbol, [])
+        records.append(
+            {
+                "ticker": symbol,
+                "score": float(len(sources)),
+                "price": None,
+                "ret_1d_pct": None,
+                "ret_5d_pct": None,
+                "trend_score": 0,
+                "z_ret5": None,
+                "lookback_days": lookback_days,
+                "sources": sources,
+                "source_count": len(sources),
+                "pe_ratio": None,
+                "market_cap": None,
+                "sector": None,
+            }
+        )
+    return records
+
+
+def _store_speaking_cache(
+    cache_key: tuple[Any, ...],
+    records: list[dict[str, Any]],
+    now: dt.datetime,
+    ttl_minutes: int,
+) -> list[dict[str, Any]]:
+    _SPEAKING_CACHE["key"] = cache_key
+    _SPEAKING_CACHE["data"] = records
+    _SPEAKING_CACHE["expires_at"] = now + dt.timedelta(minutes=ttl_minutes)
+    return records
+
+
 def fetch_speaking_stocks(
     top_n: int = 10,
     lookback_days: int = 30,
@@ -570,25 +617,30 @@ def fetch_speaking_stocks(
         "apewisdom": set(aw_set),
         "stocktwits": set(stwt_set),
     }
-    intersection = sorted(source_sets["apewisdom"] & source_sets["stocktwits"])
+
+    step_started = dt.datetime.now()
+    external_source_sets = fetch_external_market_symbols(
+        source_names=("stock_traders_daily_news_release",),
+    )
     logger.warning(
-        "Speaking stocks: intersection size=%s",
-        len(intersection),
+        "Speaking stocks: Stock Traders Daily returned %s symbols in %.2fs",
+        len(external_source_sets.get("stock_traders_daily_news_release", set())),
+        (dt.datetime.now() - step_started).total_seconds(),
+    )
+    source_sets.update(external_source_sets)
+
+    candidate_symbols, core_intersection, source_membership = (
+        build_speaking_candidate_universe(source_sets)
+    )
+    logger.warning(
+        "Speaking stocks: core intersection size=%s candidate size=%s",
+        len(core_intersection),
+        len(candidate_symbols),
     )
 
-    if not intersection:
-        logger.warning("Speaking stocks: no symbols available from ApeWisdom ∩ StockTwits")
+    if not candidate_symbols:
+        logger.warning("Speaking stocks: no symbols available from chatter sources")
         return []
-
-    source_membership = {
-        symbol: sorted(
-            SOURCE_LABELS.get(source_name, source_name)
-            for source_name, symbols in source_sets.items()
-            if symbol in symbols
-        )
-        for symbol in intersection
-    }
-    candidate_symbols = intersection
 
     step_started = dt.datetime.now()
     prices = module.fetch_prices(candidate_symbols, lookback=lookback_days)
@@ -598,8 +650,16 @@ def fetch_speaking_stocks(
         (dt.datetime.now() - step_started).total_seconds(),
     )
     if prices.empty:
-        logger.warning("Speaking stocks: price frame empty, refresh finished early")
-        return []
+        logger.warning(
+            "Speaking stocks: price frame empty, using source-only fallback records"
+        )
+        records = _build_source_only_speaking_records(
+            candidate_symbols,
+            source_membership,
+            top_n=top_n,
+            lookback_days=lookback_days,
+        )
+        return _store_speaking_cache(cache_key, records, now, ttl_minutes=5)
 
     momentum_5d = prices.pct_change(5, fill_method=None).tail(1).T
     momentum_5d.columns = ["ret_5d"]
@@ -613,7 +673,7 @@ def fetch_speaking_stocks(
     latest.columns = ["price"]
 
     tech = latest.join([momentum_1d, momentum_5d, sma50, sma200], how="outer")
-    tech["source_priority"] = [1 if symbol in intersection else 0 for symbol in tech.index]
+    tech["source_priority"] = [1 if symbol in core_intersection else 0 for symbol in tech.index]
     tech["source_hits"] = [len(source_membership.get(symbol, [])) for symbol in tech.index]
     tech["sma_trend"] = (
         (tech["price"] > tech["sma50"]).astype("Int64").fillna(0).astype(int)
@@ -649,10 +709,15 @@ def fetch_speaking_stocks(
         price = float(row.price) if pd.notna(row.price) else None
         ret_5d = float(row.ret_5d) * 100.0 if pd.notna(row.ret_5d) else None
         ret_1d = float(row.ret_1d) * 100.0 if pd.notna(row.ret_1d) else None
+        score = (
+            round(float(row.score), 2)
+            if pd.notna(row.score)
+            else float(row.source_hits)
+        )
         records.append(
             {
                 "ticker": row.symbol,
-                "score": round(float(row.score), 2),
+                "score": score,
                 "price": round(price, 2) if price is not None else None,
                 "ret_1d_pct": round(ret_1d, 1) if ret_1d is not None else None,
                 "ret_5d_pct": round(ret_5d, 1) if ret_5d is not None else None,
@@ -667,9 +732,19 @@ def fetch_speaking_stocks(
             }
         )
 
-    _SPEAKING_CACHE["key"] = cache_key
-    _SPEAKING_CACHE["data"] = records
-    _SPEAKING_CACHE["expires_at"] = now + dt.timedelta(minutes=30)
+    if not records:
+        logger.warning(
+            "Speaking stocks: ranked frame empty, using source-only fallback records"
+        )
+        records = _build_source_only_speaking_records(
+            candidate_symbols,
+            source_membership,
+            top_n=top_n,
+            lookback_days=lookback_days,
+        )
+        return _store_speaking_cache(cache_key, records, now, ttl_minutes=5)
+
+    _store_speaking_cache(cache_key, records, now, ttl_minutes=30)
     logger.warning(
         "Speaking stocks: refresh completed in %.2fs with %s records",
         (dt.datetime.now() - started_at).total_seconds(),
@@ -1003,15 +1078,22 @@ def _run_job(job_id: str, payload: dict[str, Any]):
         consolidated_paths = None
         custom_consolidated_paths = None
         if raw_results:
+            _update_job(
+                job_id,
+                completed=len(raw_results),
+                current_ticker=None,
+                progress_message="Building final report.",
+                results=serialized_results,
+            )
             consolidated_markdown = build_consolidated_report(
                 raw_results,
                 analysis_date,
-                summary_llm=graph.final_report_llm,
+                summary_llm=None,
             )
             consolidated_html = build_consolidated_report_html(
                 raw_results,
                 analysis_date,
-                summary_llm=graph.final_report_llm,
+                summary_llm=None,
             )
 
             default_batch_dir = RESULTS_ROOT / "batch_web" / analysis_date / job_id
@@ -1019,7 +1101,7 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                 raw_results,
                 analysis_date,
                 default_batch_dir,
-                summary_llm=graph.final_report_llm,
+                summary_llm=None,
             )
 
             if custom_save_enabled:
@@ -1027,7 +1109,7 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     raw_results,
                     analysis_date,
                     export_root,
-                    summary_llm=graph.final_report_llm,
+                    summary_llm=None,
                 )
 
         fatal_provider_error = next(

@@ -338,8 +338,8 @@ function openTickerModal(item) {
     ? item.sources.join(", ")
     : "the chatter feed";
   elements.modalDescription.textContent =
-    `${item.ticker} is currently on the speaking-stocks tape because it ranks inside the ` +
-    `ApeWisdom ∩ StockTwits universe and is rescored using the MyAgent momentum/trend model from ${sources}.`;
+    `${item.ticker} is currently on the speaking-stocks tape from ${sources} ` +
+    "and is rescored using the MyAgent momentum/trend model.";
 
   elements.tickerModal.classList.remove("hidden");
   elements.tickerModal.setAttribute("aria-hidden", "false");

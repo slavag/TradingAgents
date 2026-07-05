@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from io import StringIO
 
 import pandas as pd
@@ -15,6 +15,7 @@ logger = logging.getLogger("tradingagents.web.speaking_sources")
 MOTLEY_FOOL_GAINERS_URL = "https://www.fool.com/markets/top-stock-gainers/"
 MOTLEY_FOOL_MOST_ACTIVE_URL = "https://www.fool.com/markets/most-active-stocks/"
 MOTLEY_FOOL_MARKETS_URL = "https://www.fool.com/markets/"
+STOCK_TRADERS_DAILY_NEWS_RELEASE_URL = "https://news.stocktradersdaily.com/news_release/"
 APEWISDOM_ALL_STOCKS_URL = "https://apewisdom.io/api/v1.0/filter/all-stocks/page/{page}"
 STOCKTWITS_TRENDING_URL = "https://api.stocktwits.com/api/2/trending/symbols.json"
 
@@ -22,6 +23,7 @@ SOURCE_URLS: dict[str, str] = {
     "motley_fool_gainers": MOTLEY_FOOL_GAINERS_URL,
     "motley_fool_most_active": MOTLEY_FOOL_MOST_ACTIVE_URL,
     "motley_fool_markets": MOTLEY_FOOL_MARKETS_URL,
+    "stock_traders_daily_news_release": STOCK_TRADERS_DAILY_NEWS_RELEASE_URL,
 }
 
 SOURCE_LABELS: dict[str, str] = {
@@ -30,6 +32,7 @@ SOURCE_LABELS: dict[str, str] = {
     "motley_fool_gainers": "Motley Fool Gainers",
     "motley_fool_most_active": "Motley Fool Most Active",
     "motley_fool_markets": "Motley Fool Markets",
+    "stock_traders_daily_news_release": "Stock Traders Daily News Release",
 }
 
 REQUEST_HEADERS = {
@@ -155,6 +158,37 @@ def extract_symbols_from_market_page_html(html: str) -> set[str]:
     return symbols
 
 
+def extract_symbols_from_stocktradersdaily_html(html: str) -> set[str]:
+    selector = Selector(text=html)
+    symbols: set[str] = set()
+    text_lines = [
+        " ".join(text.split())
+        for text in selector.css("*::text").getall()
+        if text and text.strip()
+    ]
+
+    for line in text_lines:
+        date_match = re.match(
+            r"^([A-Z][A-Z.\-]{0,5})\s+[A-Z][a-z]+\s+\d{1,2},\s+\d{4},",
+            line,
+        )
+        if date_match:
+            symbol = _normalize_symbol(date_match.group(1))
+            if symbol:
+                symbols.add(symbol)
+
+        for pattern in (
+            r"\(([A-Z][A-Z.\-]{0,5})\)",
+            r"^([A-Z][A-Z.\-]{0,5})\s+-\s+",
+        ):
+            for match in re.finditer(pattern, line):
+                symbol = _normalize_symbol(match.group(1))
+                if symbol:
+                    symbols.add(symbol)
+
+    return symbols
+
+
 def fetch_html(url: str, timeout: int = 20) -> str:
     response = requests.get(url, headers=REQUEST_HEADERS, timeout=timeout)
     response.raise_for_status()
@@ -248,16 +282,26 @@ def fetch_stocktwits_activity(
 def fetch_external_market_symbols(
     allowed_symbols: set[str] | None = None,
     html_fetcher: Callable[[str], str] | None = None,
+    source_names: Iterable[str] | None = None,
 ) -> dict[str, set[str]]:
     fetcher = html_fetcher or fetch_html
     parsers: dict[str, Callable[[str], set[str]]] = {
         "motley_fool_gainers": extract_symbols_from_stock_page_html,
         "motley_fool_most_active": extract_symbols_from_stock_page_html,
         "motley_fool_markets": extract_symbols_from_market_page_html,
+        "stock_traders_daily_news_release": extract_symbols_from_stocktradersdaily_html,
     }
 
     results: dict[str, set[str]] = {}
-    for source_name, url in SOURCE_URLS.items():
+    selected_source_names = (
+        tuple(source_names) if source_names is not None else tuple(SOURCE_URLS)
+    )
+    for source_name in selected_source_names:
+        url = SOURCE_URLS.get(source_name)
+        if url is None:
+            logger.warning("Speaking stocks: unknown external market source %s", source_name)
+            results[source_name] = set()
+            continue
         parser = parsers[source_name]
         try:
             html = fetcher(url)
@@ -269,3 +313,30 @@ def fetch_external_market_symbols(
             logger.warning("Speaking stocks: failed to fetch %s from %s: %s", source_name, url, exc)
             results[source_name] = set()
     return results
+
+
+def build_speaking_candidate_universe(
+    source_sets: dict[str, set[str]],
+    core_source_names: tuple[str, ...] = ("apewisdom", "stocktwits"),
+) -> tuple[list[str], set[str], dict[str, list[str]]]:
+    core_sets = [
+        set(source_sets.get(source_name, set()))
+        for source_name in core_source_names
+    ]
+    core_intersection = set.intersection(*core_sets) if core_sets else set()
+
+    supplemental_symbols: set[str] = set()
+    for source_name, symbols in source_sets.items():
+        if source_name not in core_source_names:
+            supplemental_symbols.update(symbols)
+
+    candidates = sorted(core_intersection | supplemental_symbols)
+    source_membership = {
+        symbol: sorted(
+            SOURCE_LABELS.get(source_name, source_name)
+            for source_name, symbols in source_sets.items()
+            if symbol in symbols
+        )
+        for symbol in candidates
+    }
+    return candidates, core_intersection, source_membership
