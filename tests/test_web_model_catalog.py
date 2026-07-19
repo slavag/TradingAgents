@@ -19,7 +19,7 @@ class WebModelCatalogTests(unittest.TestCase):
         self.assertIn("claude-opus-4-8", values)
         self.assertIn("claude-sonnet-5", values)
         self.assertIn("claude-haiku-4-5", values)
-        self.assertNotIn("claude-opus-4-7", values)
+        self.assertIn("claude-opus-4-7", values)
         self.assertNotIn("claude-sonnet-4-6", values)
 
     def test_shared_web_catalog_uses_current_google_models(self):
