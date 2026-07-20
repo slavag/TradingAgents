@@ -48,6 +48,7 @@ from cli.utils import (
     select_shallow_thinking_agent,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.dataflows.temporal import use_analysis_context
 from tradingagents.graph.analyst_execution import (
     AnalystWallTimeTracker,
     build_analyst_execution_plan,
@@ -58,6 +59,13 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.reporting import write_report_tree
 
 console = Console()
+
+
+def _stream_graph_in_analysis_context(graph, initial_state, args, analysis_date):
+    """Keep the request context active while a directly streamed graph runs."""
+    with use_analysis_context(analysis_date):
+        yield from graph.graph.stream(initial_state, **args)
+
 
 # prompt_toolkit's win32 output module is importable only on Windows (it asserts
 # the platform at import time), so gate on the platform rather than catching the
@@ -2234,7 +2242,9 @@ def run_single_analysis(
 
         # Stream the analysis
         trace = []
-        for chunk in graph.graph.stream(init_agent_state, **args):
+        for chunk in _stream_graph_in_analysis_context(
+            graph, init_agent_state, args, run_selections["analysis_date"]
+        ):
             # Process all messages in chunk, deduplicating by message ID
             for message in chunk.get("messages", []):
                 msg_id = getattr(message, "id", None)
