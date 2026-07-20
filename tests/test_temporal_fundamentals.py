@@ -2,7 +2,12 @@
 
 import pytest
 
-from tradingagents.dataflows import alpha_vantage_fundamentals, y_finance
+from tradingagents.dataflows import (
+    alpha_vantage_fundamentals,
+    alpha_vantage_news,
+    interface,
+    y_finance,
+)
 from tradingagents.dataflows.temporal import use_analysis_context
 
 
@@ -58,3 +63,43 @@ def test_alpha_vantage_fundamentals_are_unavailable_historically(monkeypatch, me
     result = method("NVDA", curr_date="2020-01-02")
 
     assert result.startswith("DATA_UNAVAILABLE:")
+
+
+@pytest.mark.unit
+def test_alpha_vantage_insider_transactions_are_unavailable_historically(monkeypatch):
+    monkeypatch.setattr(alpha_vantage_news, "_make_api_request", _vendor_must_not_be_called)
+
+    with use_analysis_context("2020-01-02"):
+        result = alpha_vantage_news.get_insider_transactions("NVDA")
+
+    assert result.startswith("DATA_UNAVAILABLE:")
+    assert "Alpha Vantage insider transactions" in result
+
+
+@pytest.mark.unit
+def test_routed_alpha_vantage_insider_transactions_skip_vendor_io_historically(
+    monkeypatch,
+):
+    monkeypatch.setattr(alpha_vantage_news, "_make_api_request", _vendor_must_not_be_called)
+    monkeypatch.setattr(interface, "get_vendor", lambda _category, _method: "alpha_vantage")
+
+    with use_analysis_context("2020-01-02"):
+        result = interface.route_to_vendor("get_insider_transactions", "NVDA")
+
+    assert result.startswith("DATA_UNAVAILABLE:")
+    assert "Alpha Vantage insider transactions" in result
+
+
+@pytest.mark.unit
+def test_alpha_vantage_insider_transactions_remain_callable_live(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        alpha_vantage_news,
+        "_make_api_request",
+        lambda function, params: calls.append((function, params)) or {"data": []},
+    )
+
+    result = alpha_vantage_news.get_insider_transactions("NVDA")
+
+    assert result == {"data": []}
+    assert calls == [("INSIDER_TRANSACTIONS", {"symbol": "NVDA"})]

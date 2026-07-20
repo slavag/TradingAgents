@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from datetime import date
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +11,7 @@ import pytest
 
 from cli import main as cli_main
 from cli.models import AnalystType
+from tradingagents.agents.utils.agent_utils import build_instrument_context
 from tradingagents.dataflows.temporal import get_analysis_context
 from tradingagents.graph.checkpointer import thread_id
 from tradingagents.graph.trading_graph import TradingAgentsGraph
@@ -100,6 +102,42 @@ def test_stream_injects_memory_and_instrument_context():
     assert initial["past_context"] == "chronological lesson"
     assert initial["instrument_context"] == "NVDA identity"
     graph.propagator.get_graph_args.assert_called_once_with(callbacks=[callback])
+
+
+def test_historical_execution_uses_ticker_only_context_without_identity_lookup():
+    graph = make_lifecycle_graph()
+    graph.resolve_instrument_context = TradingAgentsGraph.resolve_instrument_context.__get__(
+        graph, TradingAgentsGraph
+    )
+
+    with patch(
+        "tradingagents.graph.trading_graph.resolve_instrument_identity",
+        side_effect=AssertionError("historical execution must not access Yahoo .info"),
+    ) as identity_lookup:
+        list(graph.stream("NVDA", "2020-01-02"))
+
+    identity_lookup.assert_not_called()
+    initial = graph.graph.stream.call_args.args[0]
+    assert initial["instrument_context"] == build_instrument_context(
+        "NVDA", "stock", identity=None
+    )
+
+
+def test_live_execution_preserves_identity_lookup():
+    graph = make_lifecycle_graph()
+    graph.resolve_instrument_context = TradingAgentsGraph.resolve_instrument_context.__get__(
+        graph, TradingAgentsGraph
+    )
+
+    with patch(
+        "tradingagents.graph.trading_graph.resolve_instrument_identity",
+        return_value={"company_name": "NVIDIA Corporation"},
+    ) as identity_lookup:
+        list(graph.stream("NVDA", date.today().isoformat()))
+
+    identity_lookup.assert_called_once_with("NVDA")
+    initial = graph.graph.stream.call_args.args[0]
+    assert "Company: NVIDIA Corporation" in initial["instrument_context"]
 
 
 def test_completed_stream_logs_and_stores_decision():

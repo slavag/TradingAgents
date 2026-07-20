@@ -1,8 +1,14 @@
 """Tests for TradingMemoryLog — storage, deferred reflection, PM injection, legacy removal."""
 
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import FrozenInstanceError
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
+from typing import get_type_hints
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -11,6 +17,7 @@ import pytest
 from tradingagents import default_config as default_config_module
 from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
 from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
+from tradingagents.agents.utils import memory as memory_module
 from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.graph.propagation import Propagator
 from tradingagents.graph.reflection import Reflector
@@ -159,6 +166,110 @@ class TestTradingMemoryLogCore:
         log.store_decision("NVDA", "2026-01-10", DECISION_BUY)
         log.store_decision("NVDA", "2026-01-10", DECISION_BUY)
         assert len(log.load_entries()) == 1
+
+    def test_concurrent_same_decision_appends_exactly_one_pending_entry(
+        self, tmp_path, monkeypatch
+    ):
+        logs = [make_log(tmp_path), make_log(tmp_path)]
+        logs[0]._log_path.write_text("", encoding="utf-8")
+        barrier = threading.Barrier(2)
+        original_parse_rating = memory_module.parse_rating
+
+        def synchronized_parse_rating(decision):
+            rating = original_parse_rating(decision)
+            barrier.wait(timeout=5)
+            return rating
+
+        monkeypatch.setattr(memory_module, "parse_rating", synchronized_parse_rating)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(
+                    log.store_decision,
+                    "NVDA",
+                    "2026-01-10",
+                    DECISION_BUY,
+                )
+                for log in logs
+            ]
+            for future in futures:
+                future.result(timeout=5)
+
+        entries = logs[0].load_entries()
+        assert len(entries) == 1
+        assert entries[0]["pending"] is True
+
+    def test_concurrent_different_outcome_updates_both_survive(
+        self, tmp_path, monkeypatch
+    ):
+        logs = [make_log(tmp_path), make_log(tmp_path)]
+        logs[0].store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        logs[0].store_decision("AAPL", "2026-01-06", DECISION_SELL)
+        barrier = threading.Barrier(2)
+        original_read_text = Path.read_text
+
+        def synchronized_read_text(path, *args, **kwargs):
+            text = original_read_text(path, *args, **kwargs)
+            if path == logs[0]._log_path and threading.current_thread().name.startswith(
+                "memory-outcome"
+            ):
+                with suppress(threading.BrokenBarrierError):
+                    barrier.wait(timeout=0.25)
+            return text
+
+        monkeypatch.setattr(Path, "read_text", synchronized_read_text)
+
+        updates = [
+            ("NVDA", "2026-01-05", "NVDA lesson."),
+            ("AAPL", "2026-01-06", "AAPL lesson."),
+        ]
+        with ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="memory-outcome"
+        ) as executor:
+            futures = [
+                executor.submit(
+                    log.update_with_outcome,
+                    ticker,
+                    trade_date,
+                    0.05,
+                    0.02,
+                    5,
+                    reflection,
+                )
+                for log, (ticker, trade_date, reflection) in zip(
+                    logs, updates, strict=True
+                )
+            ]
+            for future in futures:
+                future.result(timeout=5)
+
+        entries = logs[0].load_entries()
+        assert {(entry["ticker"], entry["reflection"]) for entry in entries} == {
+            ("NVDA", "NVDA lesson."),
+            ("AAPL", "AAPL lesson."),
+        }
+        assert all(not entry["pending"] for entry in entries)
+        assert not list(tmp_path.glob("*.tmp"))
+        assert not list(tmp_path.glob(".*.tmp"))
+
+    def test_failed_atomic_update_cleans_temporary_file_without_corrupting_log(
+        self, tmp_path
+    ):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+
+        with (
+            patch.object(os, "replace", side_effect=OSError("replace failed")),
+            pytest.raises(OSError, match="replace failed"),
+        ):
+            log.update_with_outcome(
+                "NVDA", "2026-01-05", 0.05, 0.02, 5, "NVDA lesson."
+            )
+
+        entries = log.load_entries()
+        assert len(entries) == 1
+        assert entries[0]["pending"] is True
+        assert not list(tmp_path.glob("*.tmp"))
+        assert not list(tmp_path.glob(".*.tmp"))
 
     def test_batch_update_resolves_multiple_entries(self, tmp_path):
         """batch_update_with_outcomes resolves multiple pending entries in one write."""
@@ -382,6 +493,50 @@ class TestTradingMemoryLogCore:
         _seed_completed(tmp_path, "NVDA", "unknown-date", "Legacy decision.", "Legacy lesson.")
         assert "Legacy lesson." in log.get_past_context("NVDA")
 
+    def test_cutoff_context_sorts_same_ticker_by_trade_date_before_quota(self, tmp_path):
+        log = make_log(tmp_path)
+        _seed_completed(tmp_path, "NVDA", "2026-01-09", "Newest decision.", "Newest lesson.")
+        _seed_completed(tmp_path, "NVDA", "2026-01-01", "Oldest decision.", "Oldest lesson.")
+        _seed_completed(tmp_path, "NVDA", "2026-01-05", "Middle decision.", "Middle lesson.")
+
+        context = log.get_past_context(
+            "NVDA", n_same=2, n_cross=0, as_of_date="2026-01-10"
+        )
+
+        assert "Newest lesson." in context
+        assert "Middle lesson." in context
+        assert "Oldest lesson." not in context
+        assert context.index("Newest lesson.") < context.index("Middle lesson.")
+
+    def test_cutoff_context_sorts_cross_ticker_by_trade_date_before_quota(self, tmp_path):
+        log = make_log(tmp_path)
+        _seed_completed(tmp_path, "AAPL", "2026-01-09", "AAPL decision.", "Newest cross.")
+        _seed_completed(tmp_path, "MSFT", "2026-01-01", "MSFT decision.", "Oldest cross.")
+        _seed_completed(tmp_path, "GOOG", "2026-01-05", "GOOG decision.", "Middle cross.")
+
+        context = log.get_past_context(
+            "NVDA", n_same=0, n_cross=2, as_of_date="2026-01-10"
+        )
+
+        assert "Newest cross." in context
+        assert "Middle cross." in context
+        assert "Oldest cross." not in context
+        assert context.index("Newest cross.") < context.index("Middle cross.")
+
+    def test_context_without_cutoff_preserves_reverse_append_order(self, tmp_path):
+        log = make_log(tmp_path)
+        _seed_completed(tmp_path, "NVDA", "2026-01-09", "Date-newer.", "Date-newer lesson.")
+        _seed_completed(tmp_path, "NVDA", "2026-01-01", "Appended-later.", "Appended-later lesson.")
+
+        context = log.get_past_context("NVDA", n_same=1, n_cross=0)
+
+        assert "Appended-later lesson." in context
+        assert "Date-newer lesson." not in context
+
+    def test_get_past_context_accepts_date_annotation(self):
+        hints = get_type_hints(TradingMemoryLog.get_past_context)
+        assert hints["as_of_date"] == str | date | None
+
     def test_n_same_limit_respected(self, tmp_path):
         """Only the n_same most recent same-ticker entries are included."""
         log = make_log(tmp_path)
@@ -540,14 +695,15 @@ class TestDeferredReflection:
         assert aapl["reflection"] == "Neutral result."
         assert msft["ticker"] == "MSFT" and msft["pending"] is True
 
-    def test_update_atomic_write(self, tmp_path):
-        """A pre-existing .tmp file is overwritten; the log is correctly updated."""
+    def test_update_atomic_write_does_not_reuse_fixed_temporary_path(self, tmp_path):
+        """A stale legacy temp file is not shared with the atomic update."""
         log = make_log(tmp_path)
         log.store_decision("NVDA", "2026-01-10", DECISION_BUY)
         stale_tmp = tmp_path / "trading_memory.tmp"
         stale_tmp.write_text("GARBAGE CONTENT — should be overwritten", encoding="utf-8")
         log.update_with_outcome("NVDA", "2026-01-10", 0.042, 0.021, 5, "Correct.")
-        assert not stale_tmp.exists()
+        assert stale_tmp.read_text(encoding="utf-8") == "GARBAGE CONTENT — should be overwritten"
+        assert not list(tmp_path.glob(".trading_memory.md.*.tmp"))
         entries = log.load_entries()
         assert len(entries) == 1
         assert entries[0]["reflection"] == "Correct."

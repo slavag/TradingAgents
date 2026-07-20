@@ -18,3 +18,4 @@ def test_readme_documents_historical_data_boundaries():
     )
     assert "Live runs remain variable." in readme
     assert "Dated news is filtered to the requested cutoff." in readme
+    assert "gross raw return and excess return versus the configured benchmark" in readme

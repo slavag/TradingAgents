@@ -32,7 +32,7 @@ from tradingagents.agents.utils.agent_utils import (
 )
 from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.dataflows.config import set_config
-from tradingagents.dataflows.temporal import use_analysis_context
+from tradingagents.dataflows.temporal import is_historical, use_analysis_context
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG, validate_outcome_holding_days
 from tradingagents.llm_clients import create_llm_client
@@ -426,6 +426,8 @@ class TradingAgentsGraph:
         path and the CLI call this so the resolved identity reaches the whole
         graph regardless of entry point.
         """
+        if is_historical():
+            return build_instrument_context(ticker, asset_type, identity=None)
         identity = resolve_instrument_identity(ticker)
         return build_instrument_context(ticker, asset_type, identity)
 
