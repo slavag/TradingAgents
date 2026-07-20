@@ -183,6 +183,8 @@ def get_macro_data(
             "series_id": series_id,
             "observation_start": start_date,
             "observation_end": curr_date,
+            "realtime_start": curr_date,
+            "realtime_end": curr_date,
             "sort_order": "asc",
         },
     ).get("observations", [])

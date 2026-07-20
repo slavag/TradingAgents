@@ -2,8 +2,7 @@
 
 Regressions for #990 (no request timeout -> can hang), #991 (invalid-key
 responses mislabeled as rate limits and silently treated as transient), and
-#1115 (fundamentals look-ahead filter never ran because the payload is a JSON
-string, not a dict).
+the point-in-time boundary for non-vintaged fundamental endpoints.
 """
 import json
 
@@ -73,15 +72,12 @@ _FUNDAMENTALS_JSON = json.dumps({
 
 
 @pytest.mark.unit
-def test_fundamentals_look_ahead_filter_runs_on_json_string(monkeypatch):
-    # #1115: the payload arrives as a JSON *string*; the old dict-only guard let
-    # future-dated fiscal periods leak into historical runs.
+def test_historical_fundamentals_are_unavailable_even_with_filtered_reports(monkeypatch):
+    # Alpha Vantage does not provide point-in-time fundamental vintages. Filtering
+    # fiscal period end dates cannot prevent publication-date look-ahead.
     monkeypatch.setattr(avf, "_make_api_request", lambda fn, params: _FUNDAMENTALS_JSON)
     out = avf.get_balance_sheet("AAPL", curr_date="2024-01-01")
-    assert isinstance(out, str)  # callers still receive a str
-    parsed = json.loads(out)
-    assert [r["fiscalDateEnding"] for r in parsed["annualReports"]] == ["2023-12-31"]
-    assert [r["fiscalDateEnding"] for r in parsed["quarterlyReports"]] == ["2023-09-30"]
+    assert out.startswith("DATA_UNAVAILABLE:")
 
 
 @pytest.mark.unit
@@ -91,6 +87,6 @@ def test_fundamentals_no_curr_date_passes_through(monkeypatch):
 
 
 @pytest.mark.unit
-def test_fundamentals_non_json_body_unchanged(monkeypatch):
+def test_historical_fundamentals_do_not_request_non_json_body(monkeypatch):
     monkeypatch.setattr(avf, "_make_api_request", lambda fn, params: "not-json")
-    assert avf.get_cashflow("AAPL", curr_date="2024-01-01") == "not-json"
+    assert avf.get_cashflow("AAPL", curr_date="2024-01-01").startswith("DATA_UNAVAILABLE:")

@@ -1,6 +1,7 @@
 import json
 
 from .alpha_vantage_common import _make_api_request
+from .temporal import historical_unavailable
 
 
 def _filter_reports_by_date(result, curr_date: str):
@@ -33,11 +34,15 @@ def get_fundamentals(ticker: str, curr_date: str = None) -> str:
 
     Args:
         ticker (str): Ticker symbol of the company
-        curr_date (str): Current date you are trading at, yyyy-mm-dd (not used for Alpha Vantage)
+        curr_date (str): Current date you are trading at, yyyy-mm-dd
 
     Returns:
         str: Company overview data including financial ratios and key metrics
     """
+    unavailable = historical_unavailable("Alpha Vantage fundamentals", curr_date)
+    if unavailable:
+        return unavailable
+
     params = {
         "symbol": ticker,
     }
@@ -47,18 +52,26 @@ def get_fundamentals(ticker: str, curr_date: str = None) -> str:
 
 def get_balance_sheet(ticker: str, freq: str = "quarterly", curr_date: str = None):
     """Retrieve balance sheet data for a given ticker symbol using Alpha Vantage."""
+    unavailable = historical_unavailable("Alpha Vantage balance sheets", curr_date)
+    if unavailable:
+        return unavailable
     result = _make_api_request("BALANCE_SHEET", {"symbol": ticker})
     return _filter_reports_by_date(result, curr_date)
 
 
 def get_cashflow(ticker: str, freq: str = "quarterly", curr_date: str = None):
     """Retrieve cash flow statement data for a given ticker symbol using Alpha Vantage."""
+    unavailable = historical_unavailable("Alpha Vantage cash flow statements", curr_date)
+    if unavailable:
+        return unavailable
     result = _make_api_request("CASH_FLOW", {"symbol": ticker})
     return _filter_reports_by_date(result, curr_date)
 
 
 def get_income_statement(ticker: str, freq: str = "quarterly", curr_date: str = None):
     """Retrieve income statement data for a given ticker symbol using Alpha Vantage."""
+    unavailable = historical_unavailable("Alpha Vantage income statements", curr_date)
+    if unavailable:
+        return unavailable
     result = _make_api_request("INCOME_STATEMENT", {"symbol": ticker})
     return _filter_reports_by_date(result, curr_date)
-
