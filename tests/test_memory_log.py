@@ -1,5 +1,6 @@
 """Tests for TradingMemoryLog — storage, deferred reflection, PM injection, legacy removal."""
 
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -280,6 +281,24 @@ class TestTradingMemoryLogCore:
         log = make_log(tmp_path)
         _seed_completed(tmp_path, "NVDA", "unknown-date", "Legacy decision.", "Legacy lesson.")
         assert log.get_past_context("NVDA", as_of_date="2026-01-10") == ""
+
+    def test_today_cutoff_excludes_same_day_and_malformed_legacy_entries(self, tmp_path):
+        log = make_log(tmp_path)
+        _seed_completed(tmp_path, "NVDA", "2020-01-01", "Earlier decision.", "Earlier lesson.")
+        _seed_completed(
+            tmp_path,
+            "NVDA",
+            date.today().isoformat(),
+            "Same-day decision.",
+            "Same-day lesson.",
+        )
+        _seed_completed(tmp_path, "NVDA", "unknown-date", "Legacy decision.", "Legacy lesson.")
+
+        context = log.get_past_context("NVDA", as_of_date=date.today())
+
+        assert "Earlier lesson." in context
+        assert "Same-day lesson." not in context
+        assert "Legacy lesson." not in context
 
     def test_past_context_without_cutoff_keeps_malformed_legacy_date(self, tmp_path):
         log = make_log(tmp_path)

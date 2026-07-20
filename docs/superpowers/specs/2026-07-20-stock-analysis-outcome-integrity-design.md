@@ -42,7 +42,7 @@ Unavailable data is a first-class result. Analysts must distinguish missing evid
 
 Pending outcomes will only be resolved through prices available on or before the current run date. A historical replay must not resolve or inject outcomes from later decisions. Live-learning memory and chronological replay therefore share the same file format but obey a strict date boundary.
 
-If an old entry has no parseable date, it is excluded from historical context and may remain available to a live run for backward compatibility.
+Chronological memory is an explicit exception to the general live-mode preservation rule: whenever a caller supplies `as_of_date`, including `date.today()`, the strict earlier-than boundary applies. Same-day entries and malformed legacy dates are excluded. Direct no-cutoff API reads retain legacy behavior, including visibility of malformed entries, for backward compatibility.
 
 ## Executable Outcome Labels
 

@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Preserve current live-mode behavior unless this plan explicitly changes it.
+- Preserve current live-mode behavior unless this plan explicitly changes it. Chronological memory is the explicit exception: any supplied `as_of_date`, including today's date, strictly excludes same-day, later, and malformed legacy entries; direct no-cutoff reads retain legacy behavior.
 - Historical mode means `as_of_date < date.today()` using the host's local date.
 - Missing historical evidence is unavailable, not neutral.
 - No new paid vendor or model-training dependency is introduced.
@@ -367,7 +367,7 @@ git commit -m "fix: enforce point-in-time source boundaries"
 
 **Interfaces:**
 - `TradingMemoryLog.get_past_context(ticker, n_same=5, n_cross=3, as_of_date=None) -> str`
-- Historical context includes only resolved entries with a parseable date strictly before `as_of_date`.
+- Any cutoff-based context, including `as_of_date=date.today()`, includes only resolved entries with a parseable date strictly before `as_of_date`; no-cutoff direct reads retain legacy behavior.
 
 - [ ] **Step 1: Add failing chronology tests**
 
@@ -387,6 +387,17 @@ def test_historical_context_excludes_malformed_legacy_date(tmp_path):
     log = make_log(tmp_path)
     _seed_completed(tmp_path, "NVDA", "unknown-date", "Legacy decision.", "Legacy lesson.")
     assert log.get_past_context("NVDA", as_of_date="2026-01-10") == ""
+
+
+def test_today_cutoff_excludes_same_day_and_malformed_legacy_entries(tmp_path):
+    log = make_log(tmp_path)
+    _seed_completed(tmp_path, "NVDA", "2020-01-01", "Earlier decision.", "Earlier lesson.")
+    _seed_completed(tmp_path, "NVDA", date.today().isoformat(), "Same-day decision.", "Same-day lesson.")
+    _seed_completed(tmp_path, "NVDA", "unknown-date", "Legacy decision.", "Legacy lesson.")
+    context = log.get_past_context("NVDA", as_of_date=date.today())
+    assert "Earlier lesson." in context
+    assert "Same-day lesson." not in context
+    assert "Legacy lesson." not in context
 ```
 
 - [ ] **Step 2: Run and verify both tests fail**
