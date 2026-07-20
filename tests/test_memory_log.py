@@ -653,6 +653,28 @@ class TestDeferredReflection:
         assert outcome.entry_date == "2026-01-06"
         assert outcome.exit_date == "2026-01-07"
 
+    def test_fetch_returns_preserves_positive_offset_exchange_session_dates(self):
+        stock = pd.DataFrame(
+            {"Open": [100, 105], "Close": [102, 110]},
+            index=pd.to_datetime(["2026-01-06", "2026-01-07"]).tz_localize(
+                "Asia/Tokyo"
+            ),
+        )
+        benchmark = pd.DataFrame(
+            {"Open": [200, 204], "Close": [202, 210]},
+            index=stock.index,
+        )
+
+        outcome = _fetch_with_frames(
+            stock, benchmark, signal_date="2026-01-05", holding_days=2
+        )
+
+        assert outcome.entry_date == "2026-01-06"
+        assert outcome.exit_date == "2026-01-07"
+        assert outcome.raw_return == pytest.approx(0.10)
+        assert outcome.benchmark_return == pytest.approx(0.05)
+        assert outcome.excess_return == pytest.approx(0.05)
+
     def test_fetch_returns_too_recent(self):
         """An incomplete common-session window stays pending."""
         one_session = _ohlc_frame(["2026-04-20"], 100)
@@ -860,6 +882,44 @@ class TestDeferredReflection:
             holding_days=5,
             benchmark="SPY",
             available_through="2026-01-07",
+        )
+
+    @pytest.mark.parametrize("invalid_value", [0, -3, True, "not-a-number", 1.5])
+    def test_resolve_rejects_invalid_outcome_holding_days(
+        self, tmp_path, invalid_value
+    ):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        graph = MagicMock(spec=TradingAgentsGraph)
+        graph.memory_log = log
+        graph.config = {"outcome_holding_days": invalid_value}
+        graph._resolve_benchmark.return_value = "SPY"
+        graph._fetch_returns.return_value = None
+
+        with pytest.raises(
+            ValueError, match="outcome_holding_days must be a positive integer"
+        ):
+            TradingAgentsGraph._resolve_pending_entries(graph, "NVDA")
+
+        graph._fetch_returns.assert_not_called()
+
+    def test_resolve_accepts_numeric_string_outcome_holding_days(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        graph = MagicMock(spec=TradingAgentsGraph)
+        graph.memory_log = log
+        graph.config = {"outcome_holding_days": "7"}
+        graph._resolve_benchmark.return_value = "SPY"
+        graph._fetch_returns.return_value = None
+
+        TradingAgentsGraph._resolve_pending_entries(graph, "NVDA")
+
+        graph._fetch_returns.assert_called_once_with(
+            "NVDA",
+            "2026-01-05",
+            holding_days=7,
+            benchmark="SPY",
+            available_through=None,
         )
 
     def test_outcome_holding_days_default_and_env_override(self, monkeypatch):

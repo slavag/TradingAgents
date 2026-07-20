@@ -56,6 +56,25 @@ def _coerce(value: str, reference):
     return value
 
 
+def validate_outcome_holding_days(value) -> int:
+    """Return a positive integer outcome horizon or raise a clear error."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(
+            f"outcome_holding_days must be a positive integer, got {value!r}"
+        )
+    try:
+        holding_days = int(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"outcome_holding_days must be a positive integer, got {value!r}"
+        ) from exc
+    if holding_days <= 0:
+        raise ValueError(
+            f"outcome_holding_days must be a positive integer, got {value!r}"
+        )
+    return holding_days
+
+
 def _apply_env_overrides(config: dict) -> dict:
     """Apply TRADINGAGENTS_* env vars to the config dict in-place."""
     for env_var, key in _ENV_OVERRIDES.items():
@@ -63,7 +82,10 @@ def _apply_env_overrides(config: dict) -> dict:
         if raw is None or raw == "":
             continue
         try:
-            config[key] = _coerce(raw, config.get(key))
+            if key == "outcome_holding_days":
+                config[key] = validate_outcome_holding_days(raw)
+            else:
+                config[key] = _coerce(raw, config.get(key))
         except ValueError as exc:
             raise ValueError(f"Invalid value for {env_var}: {exc}") from exc
     return config

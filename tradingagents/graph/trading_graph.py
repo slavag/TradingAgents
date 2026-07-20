@@ -33,7 +33,7 @@ from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.temporal import use_analysis_context
 from tradingagents.dataflows.utils import safe_ticker_component
-from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.default_config import DEFAULT_CONFIG, validate_outcome_holding_days
 from tradingagents.llm_clients import create_llm_client
 from tradingagents.reporting import write_report_tree
 
@@ -330,10 +330,10 @@ class TradingAgentsGraph:
                 columns={"Open": "benchmark_open", "Close": "benchmark_close"}
             )
             stock_prices.index = (
-                pd.to_datetime(stock_prices.index, utc=True).tz_localize(None).normalize()
+                pd.to_datetime(stock_prices.index).tz_localize(None).normalize()
             )
             benchmark_prices.index = (
-                pd.to_datetime(benchmark_prices.index, utc=True).tz_localize(None).normalize()
+                pd.to_datetime(benchmark_prices.index).tz_localize(None).normalize()
             )
             common = stock_prices.join(benchmark_prices, how="inner").dropna()
             common = common[common.index > pd.Timestamp(trade_date)]
@@ -381,7 +381,9 @@ class TradingAgentsGraph:
             return
 
         benchmark = self._resolve_benchmark(ticker)
-        holding_days = self.config["outcome_holding_days"]
+        holding_days = validate_outcome_holding_days(
+            self.config["outcome_holding_days"]
+        )
         updates = []
         for entry in pending:
             outcome = self._fetch_returns(
