@@ -823,11 +823,18 @@ def get_save_preferences(selections):
     }
 
 
-def format_price_target(price_target) -> str:
+def format_price_target(price_target, currency: str | None = None) -> str:
     """Format price target for display."""
     if price_target is None:
         return "-"
-    return f"${price_target:,.2f}"
+    formatted_price = f"{price_target:,.2f}"
+    if not currency:
+        return formatted_price
+
+    currency_code = currency.upper()
+    if currency_code == "USD":
+        return f"${formatted_price}"
+    return f"{currency_code} {formatted_price}"
 
 
 def parse_json_response(raw_content: str) -> dict | None:
@@ -880,96 +887,38 @@ def fetch_reference_price(ticker: str, analysis_date: str) -> float | None:
 
 
 def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, decision: str):
-    """Estimate a per-ticker target price and confidence score."""
+    """Extract an explicit Portfolio Manager target without model-generated fallbacks."""
     current_price = fetch_reference_price(ticker, analysis_date)
-    decision_text = compact_report_text(final_state.get("final_trade_decision"), max_chars=1400)
-    market_text = compact_report_text(final_state.get("market_report"), max_chars=1200)
-    social_text = compact_report_text(final_state.get("sentiment_report"), max_chars=900)
-    news_text = compact_report_text(final_state.get("news_report"), max_chars=900)
-    fundamentals_text = compact_report_text(final_state.get("fundamentals_report"), max_chars=1000)
-    trader_text = compact_report_text(final_state.get("trader_investment_plan"), max_chars=900)
-
-    messages = [
-        (
-            "system",
-            "You summarize trading analysis. Return JSON only with keys "
-            'price_target, confidence_score, horizon, summary. '
-            "price_target must be a number in USD or null. "
-            "confidence_score must be an integer from 0 to 100 representing the probability "
-            "the stock reaches or exceeds the target within the stated horizon. "
-            "Use a realistic single target, not a range. Keep summary under 80 words.",
-        ),
-        (
-            "human",
-            f"""Ticker: {ticker}
-Analysis date: {analysis_date}
-Current reference price: {current_price if current_price is not None else 'unknown'}
-Decision: {decision}
-
-Portfolio decision summary:
-{decision_text}
-
-Market summary:
-{market_text}
-
-Social summary:
-{social_text}
-
-News summary:
-{news_text}
-
-Fundamentals summary:
-{fundamentals_text}
-
-Trader plan summary:
-{trader_text}
-
-Return strict JSON only.""",
-        ),
-    ]
-
-    try:
-        response = llm.invoke(messages)
-        payload = parse_json_response(extract_content_string(response.content) or "")
-    except Exception:
-        payload = None
-
     price_target = None
-    confidence_score = 50
-    horizon = "12 months"
-    summary = "Target estimate unavailable."
+    target_horizon = None
+    final_trade_decision = extract_content_string(final_state.get("final_trade_decision")) or ""
 
-    if payload:
-        raw_target = payload.get("price_target")
-        if isinstance(raw_target, (int, float)):
-            price_target = round(float(raw_target), 2)
-        elif isinstance(raw_target, str):
-            match = re.search(r"-?\d+(?:\.\d+)?", raw_target.replace(",", ""))
-            if match:
-                price_target = round(float(match.group(0)), 2)
+    target_match = re.search(
+        r"(?im)^\s*\*\*price target\*\*\s*:\s*(.+?)\s*$",
+        final_trade_decision,
+    )
+    if target_match:
+        numeric_target = re.fullmatch(
+            r"\$?\s*(-?\d[\d,]*(?:\.\d+)?)\s*(?:USD)?",
+            target_match.group(1).strip(),
+            re.IGNORECASE,
+        )
+        if numeric_target:
+            price_target = round(float(numeric_target.group(1).replace(",", "")), 2)
 
-        raw_confidence = payload.get("confidence_score")
-        if isinstance(raw_confidence, (int, float)):
-            confidence_score = int(round(float(raw_confidence)))
-        elif isinstance(raw_confidence, str):
-            match = re.search(r"\d+", raw_confidence)
-            if match:
-                confidence_score = int(match.group(0))
-
-        horizon = str(payload.get("horizon") or horizon).strip()
-        summary = str(payload.get("summary") or summary).strip()
-
-    confidence_score = max(0, min(100, confidence_score))
-
-    if price_target is None:
-        price_target = current_price
+    horizon_match = re.search(
+        r"(?im)^\s*\*\*time horizon\*\*\s*:\s*(.+?)\s*$",
+        final_trade_decision,
+    )
+    if horizon_match:
+        target_horizon = horizon_match.group(1).strip() or None
 
     return {
-        "reference_price": current_price,
         "price_target": price_target,
-        "confidence_score": confidence_score,
-        "target_horizon": horizon,
-        "target_summary": summary,
+        "confidence_score": None,
+        "target_horizon": target_horizon,
+        "target_summary": "Explicit Portfolio Manager target." if price_target is not None else None,
+        "reference_price": current_price,
     }
 
 
@@ -1270,7 +1219,7 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
         "",
         "## Batch Summary",
         "",
-        "| Ticker | Decision | Price Target | Target Gap | Confidence | Status | Default Results |",
+        "| Ticker | Decision | Price Target | Target Gap | Model confidence (uncalibrated) | Status | Default Results |",
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
 
@@ -1304,9 +1253,9 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
                 f"Average Price Target: {format_price_target(result.get('price_target'))}",
                 f"Reference Price: {format_price_target(result.get('reference_price'))}",
                 f"Target Gap: {format_target_gap_percent(result.get('reference_price'), result.get('price_target'))}",
-                f"Confidence: {result.get('confidence_score', '-')}/100"
+                f"Model confidence (uncalibrated): {result.get('confidence_score', '-')}/100"
                 if result.get("confidence_score") is not None
-                else "Confidence: -",
+                else "Model confidence (uncalibrated): -",
                 f"Horizon: {result.get('target_horizon') or '-'}",
             ]
         )
@@ -1363,15 +1312,12 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     """Build an HTML version of the consolidated report."""
     generated_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     completed_results = [result for result in analysis_results if not result.get("error")]
-    avg_target = (
-        round(
-            sum(result.get("price_target", 0) for result in completed_results if result.get("price_target") is not None)
-            / max(1, len([result for result in completed_results if result.get("price_target") is not None])),
-            2,
-        )
-        if any(result.get("price_target") is not None for result in completed_results)
-        else None
-    )
+    targets = [
+        result["price_target"]
+        for result in completed_results
+        if result.get("price_target") is not None
+    ]
+    avg_target = round(sum(targets) / len(targets), 2) if targets else None
 
     def decision_kind(decision: str | None) -> str:
         text = (decision or "").lower()
@@ -1486,7 +1432,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             f"<article class='metric-card'><span class='metric-icon'>{metric_icon('target')}</span><div><span class='metric-label'>Average Price Target</span><strong>{escape(format_price_target(result.get('price_target')))}</strong></div></article>"
             f"<article class='metric-card'><span class='metric-icon'>{metric_icon('reference')}</span><div><span class='metric-label'>Reference Price</span><strong>{escape(reference_price)}</strong></div></article>"
             f"<article class='metric-card'><span class='metric-icon'>{metric_icon('delta')}</span><div><span class='metric-label'>Target Gap</span><strong>{escape(delta_label)}</strong></div></article>"
-            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('confidence')}</span><div><span class='metric-label'>Confidence</span><strong>{escape(str(confidence_value) + '/100' if confidence_value is not None else '-')}</strong></div></article>"
+            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('confidence')}</span><div><span class='metric-label'>Model confidence (uncalibrated)</span><strong>{escape(str(confidence_value) + '/100' if confidence_value is not None else '-')}</strong></div></article>"
             "</div>"
             "<div class='confidence-strip'>"
             f"<div class='confidence-bar'><span style='width:{confidence_width}%'></span></div>"
@@ -1882,7 +1828,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             <th>Decision</th>
             <th>Price Target</th>
             <th>Target Gap</th>
-            <th>Confidence</th>
+            <th>Model confidence (uncalibrated)</th>
             <th>Status</th>
             <th>Default Results</th>
           </tr>
