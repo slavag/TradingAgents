@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 
 import requests
 
+from .temporal import historical_unavailable
+
 logger = logging.getLogger(__name__)
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
@@ -79,6 +81,10 @@ def get_prediction_markets(topic: str, limit: int | None = None) -> str:
         each with its implied probability, traded volume, resolution date, and
         recent (1-week) move.
     """
+    unavailable = historical_unavailable("Polymarket live prediction markets")
+    if unavailable:
+        return unavailable
+
     if limit is None:
         limit = DEFAULT_LIMIT
 

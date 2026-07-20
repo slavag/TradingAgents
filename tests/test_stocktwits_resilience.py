@@ -14,6 +14,7 @@ from urllib.error import HTTPError
 import pytest
 
 from tradingagents.dataflows import stocktwits
+from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
 
 
 def _raise(exc):
@@ -75,3 +76,14 @@ class TestStockTwitsCryptoSymbols:
         with patch.object(stocktwits, "urlopen", side_effect=fake_urlopen):
             stocktwits.fetch_stocktwits_messages("BTC-USD")
         assert "/symbol/BTC.X.json" in seen["url"]
+
+
+@pytest.mark.unit
+def test_historical_stocktwits_is_unavailable_without_network(monkeypatch):
+    def fail_network(*args, **kwargs):
+        raise AssertionError("network must not be called")
+
+    monkeypatch.setattr("tradingagents.dataflows.stocktwits.urlopen", fail_network)
+    result = fetch_stocktwits_messages("NVDA", as_of_date="2020-01-02")
+    assert result.startswith("DATA_UNAVAILABLE:")
+    assert "StockTwits" in result

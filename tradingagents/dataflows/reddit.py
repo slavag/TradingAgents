@@ -31,6 +31,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .symbol_utils import crypto_base
+from .temporal import historical_unavailable
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,7 @@ def fetch_reddit_posts(
     limit_per_sub: int = 5,
     timeout: float = 10.0,
     inter_request_delay: float = 1.0,
+    as_of_date: str | None = None,
 ) -> str:
     """Fetch recent Reddit posts mentioning ``ticker`` across finance
     subreddits and return them as a formatted plaintext block.
@@ -202,6 +204,10 @@ def fetch_reddit_posts(
     stay under Reddit's public per-IP rate limit; combined with the RSS-first
     path it makes 429s rare even when several analyses run back-to-back.
     """
+    unavailable = historical_unavailable("Reddit", as_of_date)
+    if unavailable:
+        return unavailable
+
     # Crypto reaches us as a Yahoo pair (BTC-USD); search Reddit for the base
     # ("BTC") so the query actually matches discussion instead of near-nothing.
     ticker = crypto_base(ticker) or ticker

@@ -14,6 +14,8 @@ import tradingagents.dataflows.config as config_module
 import tradingagents.default_config as default_config
 from tradingagents.dataflows import interface, polymarket
 from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.polymarket import get_prediction_markets
+from tradingagents.dataflows.temporal import use_analysis_context
 
 
 def _market(question, prob, *, volume, end_date, closed=False, wk=None):
@@ -123,6 +125,18 @@ class PolymarketRoutingTests(unittest.TestCase):
         ):
             out = interface.route_to_vendor("get_prediction_markets", "fed", 5)
         self.assertEqual(out, "POLY_OK")
+
+
+@pytest.mark.unit
+def test_historical_polymarket_uses_request_context(monkeypatch):
+    def fail_network(*args, **kwargs):
+        raise AssertionError("network must not be called")
+
+    monkeypatch.setattr("tradingagents.dataflows.polymarket._request", fail_network)
+    with use_analysis_context("2020-01-02"):
+        result = get_prediction_markets("recession")
+    assert result.startswith("DATA_UNAVAILABLE:")
+    assert "Polymarket" in result
 
 
 if __name__ == "__main__":
