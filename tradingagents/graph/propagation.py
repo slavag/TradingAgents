@@ -6,6 +6,7 @@ from tradingagents.agents.utils.agent_states import (
     InvestDebateState,
     RiskDebateState,
 )
+from tradingagents.dataflows.temporal import build_analysis_context
 
 
 class Propagator:
@@ -31,12 +32,15 @@ class Propagator:
         fall back to ticker-only context via
         ``get_instrument_context_from_state``.
         """
+        analysis_context = build_analysis_context(trade_date)
         return {
             "messages": [("human", company_name)],
             "company_of_interest": company_name,
             "asset_type": asset_type,
             "instrument_context": instrument_context,
             "trade_date": str(trade_date),
+            "as_of_date": analysis_context.as_of_date.isoformat(),
+            "analysis_mode": analysis_context.mode.value,
             "past_context": past_context,
             "investment_debate_state": InvestDebateState(
                 {
