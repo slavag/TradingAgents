@@ -543,8 +543,12 @@ class TradingAgentsGraph:
             for chunk in self.graph.stream(initial_state, **args):
                 final_state = chunk
                 yield chunk
-            if final_state is not None:
-                self._complete_run(company_name, trade_date, asset_type, final_state)
+            if final_state is None:
+                raise RuntimeError(
+                    "Graph execution produced no value chunks for "
+                    f"{company_name} on {trade_date}."
+                )
+            self._complete_run(company_name, trade_date, asset_type, final_state)
 
     def propagate(self, company_name, trade_date, asset_type: str = "stock"):
         """Run the graph to completion and return its state and processed signal."""
@@ -570,7 +574,30 @@ class TradingAgentsGraph:
         with TradingAgentsGraph._execution_scope(
             self, company_name, trade_date, asset_type
         ) as (initial_state, args):
-            final_state = self.graph.invoke(initial_state, **args)
+            if self.debug:
+                final_state = {}
+                last_printed = None
+                produced_chunk = False
+                for chunk in self.graph.stream(initial_state, **args):
+                    produced_chunk = True
+                    messages = chunk.get("messages") or []
+                    if messages:
+                        message = messages[-1]
+                        signature = (
+                            type(message).__name__,
+                            getattr(message, "content", None),
+                        )
+                        if signature != last_printed:
+                            message.pretty_print()
+                            last_printed = signature
+                    final_state.update(chunk)
+                if not produced_chunk:
+                    raise RuntimeError(
+                        "Graph execution produced no value chunks for "
+                        f"{company_name} on {trade_date}."
+                    )
+            else:
+                final_state = self.graph.invoke(initial_state, **args)
             TradingAgentsGraph._complete_run(
                 self, company_name, trade_date, asset_type, final_state
             )
