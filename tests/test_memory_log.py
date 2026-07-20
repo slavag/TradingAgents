@@ -266,6 +266,26 @@ class TestTradingMemoryLogCore:
         assert "Recent cross-ticker lessons" in ctx
         assert "Past analyses of NVDA" not in ctx
 
+    def test_past_context_excludes_same_day_and_future_entries(self, tmp_path):
+        log = make_log(tmp_path)
+        _seed_completed(tmp_path, "NVDA", "2026-01-05", "Old decision.", "Old lesson.")
+        _seed_completed(tmp_path, "NVDA", "2026-01-10", "Same-day decision.", "Same-day lesson.")
+        _seed_completed(tmp_path, "AAPL", "2026-01-12", "Future decision.", "Future lesson.")
+        context = log.get_past_context("NVDA", as_of_date="2026-01-10")
+        assert "Old lesson" in context
+        assert "Same-day lesson" not in context
+        assert "Future lesson" not in context
+
+    def test_historical_context_excludes_malformed_legacy_date(self, tmp_path):
+        log = make_log(tmp_path)
+        _seed_completed(tmp_path, "NVDA", "unknown-date", "Legacy decision.", "Legacy lesson.")
+        assert log.get_past_context("NVDA", as_of_date="2026-01-10") == ""
+
+    def test_past_context_without_cutoff_keeps_malformed_legacy_date(self, tmp_path):
+        log = make_log(tmp_path)
+        _seed_completed(tmp_path, "NVDA", "unknown-date", "Legacy decision.", "Legacy lesson.")
+        assert "Legacy lesson." in log.get_past_context("NVDA")
+
     def test_n_same_limit_respected(self, tmp_path):
         """Only the n_same most recent same-ticker entries are included."""
         log = make_log(tmp_path)
@@ -862,7 +882,9 @@ class TestLegacyRemoval:
             },
         }
         mock_graph = MagicMock()
-        mock_graph.memory_log = TradingMemoryLog({"memory_log_path": str(tmp_path / "mem.md")})
+        mock_graph.memory_log = MagicMock(wraps=TradingMemoryLog({
+            "memory_log_path": str(tmp_path / "mem.md")
+        }))
         mock_graph.log_states_dict = {}
         mock_graph.debug = False
         mock_graph.config = {"results_dir": str(tmp_path)}
@@ -876,6 +898,9 @@ class TestLegacyRemoval:
             TradingAgentsGraph._run_graph, mock_graph
         )
         TradingAgentsGraph.propagate(mock_graph, "NVDA", "2026-01-10")
+        mock_graph.memory_log.get_past_context.assert_called_once_with(
+            "NVDA", as_of_date="2026-01-10"
+        )
         entries = mock_graph.memory_log.load_entries()
         assert len(entries) == 1
         assert entries[0]["ticker"] == "NVDA"

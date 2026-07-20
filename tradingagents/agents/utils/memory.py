@@ -1,6 +1,7 @@
 """Append-only markdown decision log for TradingAgents."""
 
 import re
+from datetime import date
 from pathlib import Path
 
 from tradingagents.agents.utils.rating import parse_rating
@@ -67,9 +68,26 @@ class TradingMemoryLog:
         """Return entries with outcome:pending (for Phase B)."""
         return [e for e in self.load_entries() if e.get("pending")]
 
-    def get_past_context(self, ticker: str, n_same: int = 5, n_cross: int = 3) -> str:
+    def get_past_context(
+        self,
+        ticker: str,
+        n_same: int = 5,
+        n_cross: int = 3,
+        as_of_date: str | None = None,
+    ) -> str:
         """Return formatted past context string for agent prompt injection."""
+        cutoff = date.fromisoformat(str(as_of_date)) if as_of_date is not None else None
         entries = [e for e in self.load_entries() if not e.get("pending")]
+        if cutoff is not None:
+            chronological = []
+            for entry in entries:
+                try:
+                    entry_date = date.fromisoformat(entry["date"])
+                except (TypeError, ValueError):
+                    continue
+                if entry_date < cutoff:
+                    chronological.append(entry)
+            entries = chronological
         if not entries:
             return ""
 
