@@ -349,6 +349,16 @@ ta = TradingAgentsGraph(config=config)
 _, decision = ta.propagate("NVDA", "2026-01-15")
 ```
 
+## Historical analysis boundaries
+
+When you supply an analysis date, dated news, OHLCV, technical indicators, and FRED data vintages use that requested cutoff. Memory is filtered strictly before the analysis date, including when the supplied date is today.
+
+StockTwits, Reddit, and Polymarket are unavailable historically because their integrations do not provide point-in-time archives. Current company overviews, insider feeds, and financial statements without public publication timestamps are also unavailable for historical analysis; a fiscal period alone is not proof that the information was public by the cutoff.
+
+Deferred outcomes model an executable signal: they enter at the next common trading session's adjusted open for the stock and benchmark, then exit at the adjusted close after the configured common-session horizon. Their benchmark difference is gross excess return before costs, not risk-adjusted alpha.
+
+Model confidence is not a calibrated probability and is omitted until calibration data exists.
+
 ## Reproducibility
 
 TradingAgents is LLM-driven, so two runs of the same ticker and date can differ. This is expected for a research tool built on language models, not a defect. The variation comes from a few distinct sources, and it helps to separate them.
