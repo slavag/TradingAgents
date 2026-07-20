@@ -21,7 +21,7 @@ class Reflector:
             "You are a trading analyst reviewing your own past decision now that the outcome is known.\n"
             "Write exactly 2-4 sentences of plain prose (no bullets, no headers, no markdown).\n\n"
             "Cover in order:\n"
-            "1. Was the directional call correct? (cite the alpha figure)\n"
+            "1. Was the directional call correct? (cite the excess-return figure)\n"
             "2. Which part of the investment thesis held or failed?\n"
             "3. One concrete lesson to apply to the next similar analysis.\n\n"
             "Be specific and terse. Your output will be stored verbatim in a decision log "
@@ -32,14 +32,14 @@ class Reflector:
         self,
         final_decision: str,
         raw_return: float,
-        alpha_return: float,
+        excess_return: float,
         benchmark_name: str = "SPY",
     ) -> str:
         """Single reflection call on the final trade decision with outcome context.
 
         Used by Phase B deferred reflection. The final_trade_decision already
         synthesises all analyst insights, so no separate market context is needed.
-        ``benchmark_name`` is the label used for the alpha line (e.g. ``"SPY"``
+        ``benchmark_name`` is the label used for the excess-return line (e.g. ``"SPY"``
         for US tickers, ``"^N225"`` for ``.T`` listings); defaults to SPY for
         callers that haven't been updated to thread the benchmark through.
         """
@@ -49,7 +49,7 @@ class Reflector:
                 "human",
                 (
                     f"Raw return: {raw_return:+.1%}\n"
-                    f"Alpha vs {benchmark_name}: {alpha_return:+.1%}\n\n"
+                    f"Excess return vs {benchmark_name}: {excess_return:+.1%}\n\n"
                     f"Final Decision:\n{final_decision}"
                 ),
             ),

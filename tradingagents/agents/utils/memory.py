@@ -122,6 +122,11 @@ class TradingMemoryLog:
         alpha_return: float,
         holding_days: int,
         reflection: str,
+        *,
+        excess_return: float | None = None,
+        entry_date: str | None = None,
+        exit_date: str | None = None,
+        return_basis: str | None = None,
     ) -> None:
         """Replace pending tag and append REFLECTION section using atomic write.
 
@@ -137,7 +142,7 @@ class TradingMemoryLog:
 
         pending_prefix = f"[{trade_date} | {ticker} |"
         raw_pct = f"{raw_return:+.1%}"
-        alpha_pct = f"{alpha_return:+.1%}"
+        excess_pct = f"{excess_return if excess_return is not None else alpha_return:+.1%}"
 
         updated = False
         new_blocks = []
@@ -158,10 +163,17 @@ class TradingMemoryLog:
                 # Parse rating from the existing pending tag
                 fields = [f.strip() for f in tag_line[1:-1].split("|")]
                 rating = fields[2]
-                new_tag = (
-                    f"[{trade_date} | {ticker} | {rating}"
-                    f" | {raw_pct} | {alpha_pct} | {holding_days}d]"
-                )
+                tag_fields = [
+                    trade_date,
+                    ticker,
+                    rating,
+                    raw_pct,
+                    excess_pct,
+                    f"{holding_days}d",
+                ]
+                if entry_date is not None and exit_date is not None and return_basis is not None:
+                    tag_fields.extend([entry_date, exit_date, return_basis])
+                new_tag = f"[{' | '.join(tag_fields)}]"
                 rest = "\n".join(lines[1:])
                 new_blocks.append(
                     f"{new_tag}\n\n{rest.lstrip()}\n\nREFLECTION:\n{reflection}"
@@ -183,7 +195,9 @@ class TradingMemoryLog:
         """Apply multiple outcome updates in a single read + atomic write.
 
         Each element of updates must have keys: ticker, trade_date,
-        raw_return, alpha_return, holding_days, reflection.
+        raw_return, excess_return, holding_days, reflection, entry_date,
+        exit_date, and return_basis. Legacy callers may supply alpha_return
+        without execution metadata to produce the old six-field record.
         """
         if not self._log_path or not self._log_path.exists() or not updates:
             return
@@ -211,11 +225,26 @@ class TradingMemoryLog:
                     fields = [f.strip() for f in tag_line[1:-1].split("|")]
                     rating = fields[2]
                     raw_pct = f"{upd['raw_return']:+.1%}"
-                    alpha_pct = f"{upd['alpha_return']:+.1%}"
-                    new_tag = (
-                        f"[{trade_date} | {ticker} | {rating}"
-                        f" | {raw_pct} | {alpha_pct} | {upd['holding_days']}d]"
-                    )
+                    excess_return = upd.get("excess_return", upd.get("alpha_return"))
+                    excess_pct = f"{excess_return:+.1%}"
+                    tag_fields = [
+                        trade_date,
+                        ticker,
+                        rating,
+                        raw_pct,
+                        excess_pct,
+                        f"{upd['holding_days']}d",
+                    ]
+                    if all(
+                        upd.get(key) is not None
+                        for key in ("entry_date", "exit_date", "return_basis")
+                    ):
+                        tag_fields.extend([
+                            upd["entry_date"],
+                            upd["exit_date"],
+                            upd["return_basis"],
+                        ])
+                    new_tag = f"[{' | '.join(tag_fields)}]"
                     rest = "\n".join(lines[1:])
                     new_blocks.append(
                         f"{new_tag}\n\n{rest.lstrip()}\n\nREFLECTION:\n{upd['reflection']}"
@@ -282,14 +311,19 @@ class TradingMemoryLog:
         fields = [f.strip() for f in tag_line[1:-1].split("|")]
         if len(fields) < 4:
             return None
+        excess = fields[4] if len(fields) > 4 else None
         entry = {
             "date": fields[0],
             "ticker": fields[1],
             "rating": fields[2],
             "pending": fields[3] == "pending",
             "raw": fields[3] if fields[3] != "pending" else None,
-            "alpha": fields[4] if len(fields) > 4 else None,
+            "excess": excess,
+            "alpha": excess,
             "holding": fields[5] if len(fields) > 5 else None,
+            "entry_date": fields[6] if len(fields) > 6 else None,
+            "exit_date": fields[7] if len(fields) > 7 else None,
+            "return_basis": fields[8] if len(fields) > 8 else None,
         }
         body = "\n".join(lines[1:]).strip()
         decision_match = self._DECISION_RE.search(body)
@@ -300,9 +334,12 @@ class TradingMemoryLog:
 
     def _format_full(self, e: dict) -> str:
         raw = e["raw"] or "n/a"
-        alpha = e["alpha"] or "n/a"
+        excess = e["excess"] or "n/a"
         holding = e["holding"] or "n/a"
-        tag = f"[{e['date']} | {e['ticker']} | {e['rating']} | {raw} | {alpha} | {holding}]"
+        tag_fields = [e["date"], e["ticker"], e["rating"], raw, excess, holding]
+        if e.get("entry_date") and e.get("exit_date") and e.get("return_basis"):
+            tag_fields.extend([e["entry_date"], e["exit_date"], e["return_basis"]])
+        tag = f"[{' | '.join(tag_fields)}]"
         parts = [tag, f"DECISION:\n{e['decision']}"]
         if e["reflection"]:
             parts.append(f"REFLECTION:\n{e['reflection']}")

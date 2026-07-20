@@ -1,11 +1,14 @@
 """Tests for TradingMemoryLog — storage, deferred reflection, PM injection, legacy removal."""
 
+from dataclasses import FrozenInstanceError
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
 
+from tradingagents import default_config as default_config_module
 from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
 from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
 from tradingagents.agents.utils.memory import TradingMemoryLog
@@ -55,9 +58,34 @@ def _resolve_entry(log, ticker, date, decision, reflection="Good call."):
     log.update_with_outcome(ticker, date, 0.05, 0.02, 5, reflection)
 
 
-def _price_df(prices):
-    """Minimal DataFrame matching yfinance .history() output shape."""
-    return pd.DataFrame({"Close": prices})
+def _fetch_with_frames(stock, benchmark, signal_date, holding_days, available_through="2026-12-31"):
+    graph = MagicMock(spec=TradingAgentsGraph)
+    with patch("yfinance.Ticker") as ticker_class:
+        def make_ticker(symbol):
+            ticker = MagicMock()
+            ticker.history.return_value = benchmark if symbol == "SPY" else stock
+            return ticker
+
+        ticker_class.side_effect = make_ticker
+        return TradingAgentsGraph._fetch_returns(
+            graph,
+            "NVDA",
+            signal_date,
+            holding_days=holding_days,
+            benchmark="SPY",
+            available_through=available_through,
+        )
+
+
+def _ohlc_frame(session_dates, base):
+    count = len(session_dates)
+    return pd.DataFrame(
+        {
+            "Open": [base + index for index in range(count)],
+            "Close": [base + index + 1 for index in range(count)],
+        },
+        index=pd.to_datetime(session_dates),
+    )
 
 
 def _make_pm_state(past_context=""):
@@ -153,6 +181,55 @@ class TestTradingMemoryLogCore:
         assert all(not e["pending"] for e in entries)
         assert entries[0]["reflection"] == "First correct."
         assert entries[1]["reflection"] == "Second correct."
+
+    def test_batch_update_stores_execution_window_and_gross_basis(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        log.batch_update_with_outcomes([
+            {
+                "ticker": "NVDA",
+                "trade_date": "2026-01-05",
+                "raw_return": 0.05,
+                "benchmark_return": 0.03,
+                "excess_return": 0.02,
+                "holding_days": 5,
+                "entry_date": "2026-01-06",
+                "exit_date": "2026-01-12",
+                "return_basis": "gross",
+                "reflection": "Executable outcome recorded.",
+            }
+        ])
+
+        raw_text = (tmp_path / "trading_memory.md").read_text(encoding="utf-8")
+        assert (
+            "[2026-01-05 | NVDA | Buy | +5.0% | +2.0% | 5d | "
+            "2026-01-06 | 2026-01-12 | gross]"
+        ) in raw_text
+        entry = log.load_entries()[0]
+        assert entry["excess"] == "+2.0%"
+        assert entry["alpha"] == "+2.0%"
+        assert entry["entry_date"] == "2026-01-06"
+        assert entry["exit_date"] == "2026-01-12"
+        assert entry["return_basis"] == "gross"
+
+    def test_legacy_six_field_outcome_tag_remains_readable(self, tmp_path):
+        _seed_completed(
+            tmp_path,
+            "NVDA",
+            "2026-01-05",
+            DECISION_BUY,
+            "Legacy outcome.",
+        )
+
+        entry = make_log(tmp_path).load_entries()[0]
+
+        assert entry["raw"] == "+1.0%"
+        assert entry["excess"] == "+0.5%"
+        assert entry["alpha"] == "+0.5%"
+        assert entry["holding"] == "5d"
+        assert entry["entry_date"] is None
+        assert entry["exit_date"] is None
+        assert entry["return_basis"] is None
 
     def test_pending_tag_format(self, tmp_path):
         log = make_log(tmp_path)
@@ -504,7 +581,7 @@ class TestDeferredReflection:
         mock_llm.invoke.return_value.content = "Directionally correct. Thesis confirmed."
         reflector = Reflector(mock_llm)
         result = reflector.reflect_on_final_decision(
-            final_decision=DECISION_BUY, raw_return=0.042, alpha_return=0.021
+            final_decision=DECISION_BUY, raw_return=0.042, excess_return=0.021
         )
         assert result == "Directionally correct. Thesis confirmed."
         mock_llm.invoke.assert_called_once()
@@ -515,7 +592,7 @@ class TestDeferredReflection:
         mock_llm.invoke.return_value.content = "Incorrect call."
         reflector = Reflector(mock_llm)
         reflector.reflect_on_final_decision(
-            final_decision=DECISION_SELL, raw_return=-0.08, alpha_return=-0.05
+            final_decision=DECISION_SELL, raw_return=-0.08, excess_return=-0.05
         )
         messages = mock_llm.invoke.call_args[0][0]
         human_content = next(content for role, content in messages if role == "human")
@@ -525,55 +602,93 @@ class TestDeferredReflection:
 
     # TradingAgentsGraph._fetch_returns
 
-    def test_fetch_returns_valid_ticker(self):
-        stock_prices = [100.0, 102.0, 104.0, 103.0, 105.0, 106.0]
-        spy_prices   = [400.0, 402.0, 404.0, 403.0, 405.0, 406.0]
-        mock_graph = MagicMock(spec=TradingAgentsGraph)
-        with patch("yfinance.Ticker") as mock_ticker_cls:
-            def _make_ticker(sym):
-                m = MagicMock()
-                m.history.return_value = _price_df(spy_prices if sym == "SPY" else stock_prices)
-                return m
-            mock_ticker_cls.side_effect = _make_ticker
-            raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "NVDA", "2026-01-05")
-        assert raw is not None and alpha is not None and days is not None
-        assert isinstance(raw, float) and isinstance(alpha, float) and isinstance(days, int)
-        assert days == 5
+    def test_fetch_returns_enters_next_common_open_and_exits_fifth_close(self):
+        stock = pd.DataFrame(
+            {"Open": [100, 101, 102, 103, 104], "Close": [101, 102, 103, 104, 110]},
+            index=pd.to_datetime(
+                ["2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09", "2026-01-12"]
+            ),
+        )
+        benchmark = pd.DataFrame(
+            {"Open": [200, 201, 202, 203, 204], "Close": [201, 202, 203, 204, 210]},
+            index=stock.index,
+        )
+
+        outcome = _fetch_with_frames(
+            stock, benchmark, signal_date="2026-01-05", holding_days=5
+        )
+
+        assert type(outcome).__name__ == "RealizedOutcome"
+        assert outcome.entry_date == "2026-01-06"
+        assert outcome.exit_date == "2026-01-12"
+        assert outcome.raw_return == pytest.approx(0.10)
+        assert outcome.benchmark_return == pytest.approx(0.05)
+        assert outcome.excess_return == pytest.approx(0.05)
+        assert outcome.holding_days == 5
+        assert outcome.return_basis == "gross"
+        with pytest.raises(FrozenInstanceError):
+            outcome.raw_return = 0.0
+
+    def test_fetch_returns_inner_aligns_mismatched_calendars(self):
+        stock = _ohlc_frame(["2026-01-06", "2026-01-07", "2026-01-08"], 100)
+        benchmark = _ohlc_frame(["2026-01-06", "2026-01-08", "2026-01-09"], 200)
+
+        outcome = _fetch_with_frames(
+            stock, benchmark, signal_date="2026-01-05", holding_days=2
+        )
+
+        assert outcome.entry_date == "2026-01-06"
+        assert outcome.exit_date == "2026-01-08"
+
+    def test_fetch_returns_normalizes_timezone_aware_session_indexes(self):
+        stock = _ohlc_frame(["2026-01-06", "2026-01-07"], 100)
+        stock.index = stock.index.tz_localize("America/New_York")
+        benchmark = _ohlc_frame(["2026-01-06", "2026-01-07"], 200)
+        benchmark.index = benchmark.index.tz_localize("UTC")
+
+        outcome = _fetch_with_frames(
+            stock, benchmark, signal_date="2026-01-05", holding_days=2
+        )
+
+        assert outcome.entry_date == "2026-01-06"
+        assert outcome.exit_date == "2026-01-07"
 
     def test_fetch_returns_too_recent(self):
-        """Only 1 data point available → returns (None, None, None), no crash."""
-        mock_graph = MagicMock(spec=TradingAgentsGraph)
-        with patch("yfinance.Ticker") as mock_ticker_cls:
-            m = MagicMock()
-            m.history.return_value = _price_df([100.0])
-            mock_ticker_cls.return_value = m
-            raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "NVDA", "2026-04-19")
-        assert raw is None and alpha is None and days is None
+        """An incomplete common-session window stays pending."""
+        one_session = _ohlc_frame(["2026-04-20"], 100)
+        outcome = _fetch_with_frames(
+            one_session,
+            one_session,
+            signal_date="2026-04-19",
+            holding_days=5,
+            available_through="2026-04-20",
+        )
+        assert outcome is None
 
     def test_fetch_returns_delisted(self):
         """Empty DataFrame → returns (None, None, None), no crash."""
         mock_graph = MagicMock(spec=TradingAgentsGraph)
         with patch("yfinance.Ticker") as mock_ticker_cls:
             m = MagicMock()
-            m.history.return_value = pd.DataFrame({"Close": []})
+            m.history.return_value = pd.DataFrame(columns=["Open", "Close"])
             mock_ticker_cls.return_value = m
-            raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "XXXXXFAKE", "2026-01-10")
-        assert raw is None and alpha is None and days is None
+            outcome = TradingAgentsGraph._fetch_returns(
+                mock_graph, "XXXXXFAKE", "2026-01-10"
+            )
+        assert outcome is None
 
-    def test_fetch_returns_spy_shorter_than_stock(self):
-        """SPY having fewer rows than the stock must not raise IndexError."""
-        stock_prices = [100.0, 102.0, 104.0, 103.0, 105.0, 106.0]
-        spy_prices   = [400.0, 402.0, 403.0]
-        mock_graph = MagicMock(spec=TradingAgentsGraph)
-        with patch("yfinance.Ticker") as mock_ticker_cls:
-            def _make_ticker(sym):
-                m = MagicMock()
-                m.history.return_value = _price_df(spy_prices if sym == "SPY" else stock_prices)
-                return m
-            mock_ticker_cls.side_effect = _make_ticker
-            raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "NVDA", "2026-01-05")
-        assert raw is not None and alpha is not None and days is not None
-        assert days == 2
+    def test_fetch_returns_rejects_incomplete_common_session_window(self):
+        stock = _ohlc_frame(
+            ["2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09", "2026-01-12"],
+            100,
+        )
+        benchmark = _ohlc_frame(["2026-01-06", "2026-01-08", "2026-01-12"], 200)
+
+        outcome = _fetch_with_frames(
+            stock, benchmark, signal_date="2026-01-05", holding_days=5
+        )
+
+        assert outcome is None
 
     # TradingAgentsGraph._resolve_benchmark — picks index for alpha calc
 
@@ -650,13 +765,13 @@ class TestDeferredReflection:
         reflector.reflect_on_final_decision(
             final_decision=DECISION_BUY,
             raw_return=0.05,
-            alpha_return=0.02,
+            excess_return=0.02,
             benchmark_name="^N225",
         )
         messages = mock_llm.invoke.call_args[0][0]
         human_content = next(content for role, content in messages if role == "human")
-        assert "Alpha vs ^N225:" in human_content
-        assert "Alpha vs SPY:" not in human_content
+        assert "Excess return vs ^N225:" in human_content
+        assert "Alpha" not in human_content
 
     def test_reflector_defaults_to_spy_for_unupdated_callers(self):
         """Default benchmark_name keeps the SPY label for legacy callers."""
@@ -666,11 +781,11 @@ class TestDeferredReflection:
         reflector.reflect_on_final_decision(
             final_decision=DECISION_BUY,
             raw_return=0.05,
-            alpha_return=0.02,
+            excess_return=0.02,
         )
         messages = mock_llm.invoke.call_args[0][0]
         human_content = next(content for role, content in messages if role == "human")
-        assert "Alpha vs SPY:" in human_content
+        assert "Excess return vs SPY:" in human_content
 
     # TradingAgentsGraph._resolve_pending_entries
 
@@ -680,7 +795,7 @@ class TestDeferredReflection:
         log.store_decision("AAPL", "2026-01-10", DECISION_BUY)
         mock_graph = MagicMock(spec=TradingAgentsGraph)
         mock_graph.memory_log = log
-        mock_graph._fetch_returns = MagicMock(return_value=(0.05, 0.02, 5))
+        mock_graph._fetch_returns = MagicMock(return_value=None)
         TradingAgentsGraph._resolve_pending_entries(mock_graph, "NVDA")
         mock_graph._fetch_returns.assert_not_called()
         assert len(log.get_pending_entries()) == 1
@@ -694,8 +809,20 @@ class TestDeferredReflection:
         mock_graph = MagicMock(spec=TradingAgentsGraph)
         mock_graph.memory_log = log
         mock_graph.reflector = mock_reflector
-        mock_graph._fetch_returns = MagicMock(return_value=(0.05, 0.02, 5))
-        TradingAgentsGraph._resolve_pending_entries(mock_graph, "NVDA")
+        mock_graph.config = {"outcome_holding_days": 5}
+        mock_graph._resolve_benchmark.return_value = "SPY"
+        mock_graph._fetch_returns = MagicMock(return_value=SimpleNamespace(
+            raw_return=0.05,
+            benchmark_return=0.03,
+            excess_return=0.02,
+            holding_days=5,
+            entry_date="2026-01-06",
+            exit_date="2026-01-12",
+            return_basis="gross",
+        ))
+        TradingAgentsGraph._resolve_pending_entries(
+            mock_graph, "NVDA", as_of_date="2026-01-12"
+        )
         assert log.get_pending_entries() == []
         entries = log.load_entries()
         assert len(entries) == 1
@@ -703,6 +830,47 @@ class TestDeferredReflection:
         assert entries[0]["reflection"] == "Momentum confirmed."
         assert "+5.0%" in entries[0]["raw"]
         assert "+2.0%" in entries[0]["alpha"]
+        assert entries[0]["excess"] == "+2.0%"
+        assert entries[0]["entry_date"] == "2026-01-06"
+        assert entries[0]["exit_date"] == "2026-01-12"
+        assert entries[0]["return_basis"] == "gross"
+        mock_reflector.reflect_on_final_decision.assert_called_once_with(
+            final_decision=DECISION_BUY,
+            raw_return=0.05,
+            excess_return=0.02,
+            benchmark_name="SPY",
+        )
+
+    def test_pending_outcome_cannot_read_beyond_current_run_date(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        graph = MagicMock(spec=TradingAgentsGraph)
+        graph.memory_log = log
+        graph.config = {"outcome_holding_days": 5}
+        graph._resolve_benchmark.return_value = "SPY"
+        graph._fetch_returns.return_value = None
+
+        TradingAgentsGraph._resolve_pending_entries(
+            graph, "NVDA", as_of_date="2026-01-07"
+        )
+
+        graph._fetch_returns.assert_called_once_with(
+            "NVDA",
+            "2026-01-05",
+            holding_days=5,
+            benchmark="SPY",
+            available_through="2026-01-07",
+        )
+
+    def test_outcome_holding_days_default_and_env_override(self, monkeypatch):
+        assert default_config_module.DEFAULT_CONFIG["outcome_holding_days"] == 5
+        monkeypatch.setenv("TRADINGAGENTS_OUTCOME_HOLDING_DAYS", "7")
+        config = {"outcome_holding_days": 5}
+
+        default_config_module._apply_env_overrides(config)
+
+        assert config["outcome_holding_days"] == 7
+        assert isinstance(config["outcome_holding_days"], int)
 
 
 # ---------------------------------------------------------------------------
