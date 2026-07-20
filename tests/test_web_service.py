@@ -4,20 +4,28 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from cli.stats_handler import StatsCallbackHandler
 from tradingagents.web import service as web_service
 from tradingagents.web.service import _build_source_only_speaking_records
 
 
-class _FakePropagator:
-    def create_initial_state(self, ticker, analysis_date):
-        return {"ticker": ticker, "analysis_date": analysis_date}
+class _FakeGraph:
+    final_report_llm = object()
+    instances = []
 
-    def get_graph_args(self, callbacks=None):
-        return {}
+    def __init__(self, *args, **kwargs):
+        self.stream_calls = []
+        self.__class__.instances.append(self)
 
-
-class _FakeStreamGraph:
-    def stream(self, init_state, **kwargs):
+    def stream(self, ticker, analysis_date, *, asset_type="stock", callbacks=None):
+        self.stream_calls.append(
+            {
+                "ticker": ticker,
+                "analysis_date": analysis_date,
+                "asset_type": asset_type,
+                "callbacks": callbacks,
+            }
+        )
         yield {
             "messages": [],
             "market_report": "Market report.",
@@ -29,14 +37,6 @@ class _FakeStreamGraph:
             "risk_debate_state": {"judge_decision": "Portfolio decision."},
             "final_trade_decision": "Buy",
         }
-
-
-class _FakeGraph:
-    final_report_llm = object()
-
-    def __init__(self, *args, **kwargs):
-        self.propagator = _FakePropagator()
-        self.graph = _FakeStreamGraph()
 
     def process_signal(self, signal):
         return "Buy"
@@ -85,6 +85,7 @@ class WebServiceTests(unittest.TestCase):
 
     def test_job_enters_final_report_state_before_consolidated_generation(self):
         with TemporaryDirectory() as tmpdir:
+            _FakeGraph.instances.clear()
             job_id = "job-final-report-state"
             payload = {
                 "tickers": "AAA",
@@ -161,6 +162,13 @@ class WebServiceTests(unittest.TestCase):
             self.assertIsNone(observed["current_ticker"])
             self.assertEqual(observed["progress_message"], "Building final report.")
             self.assertIsNone(observed["summary_llm"])
+            stream_call = _FakeGraph.instances[0].stream_calls[0]
+            self.assertEqual(stream_call["ticker"], "AAA")
+            self.assertEqual(stream_call["analysis_date"], "2026-07-05")
+            self.assertEqual(stream_call["asset_type"], "stock")
+            self.assertEqual(len(stream_call["callbacks"]), 1)
+            self.assertIsInstance(stream_call["callbacks"][0], StatsCallbackHandler)
+            self.assertFalse(hasattr(web_service, "_stream_graph_in_analysis_context"))
 
 
 if __name__ == "__main__":

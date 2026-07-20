@@ -48,7 +48,6 @@ from cli.utils import (
     select_shallow_thinking_agent,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.dataflows.temporal import use_analysis_context
 from tradingagents.graph.analyst_execution import (
     AnalystWallTimeTracker,
     build_analyst_execution_plan,
@@ -59,12 +58,6 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.reporting import write_report_tree
 
 console = Console()
-
-
-def _stream_graph_in_analysis_context(graph, initial_state, args, analysis_date):
-    """Keep the request context active while a directly streamed graph runs."""
-    with use_analysis_context(analysis_date):
-        yield from graph.graph.stream(initial_state, **args)
 
 
 # prompt_toolkit's win32 output module is importable only on Windows (it asserts
@@ -2169,27 +2162,13 @@ def run_single_analysis(
         )
         update_display(layout, spinner_text, stats_handler=stats_handler, start_time=start_time)
 
-        # Initialize state and get graph args with callbacks.
-        # Resolve the instrument identity once here so all agents anchor to
-        # the real company (#814); the CLI builds state directly rather than
-        # going through propagate(), so this must happen on the CLI path too.
-        instrument_context = graph.resolve_instrument_context(
-            ticker, run_selections["asset_type"]
-        )
-        init_agent_state = graph.propagator.create_initial_state(
+        # Stream the analysis
+        trace = []
+        for chunk in graph.stream(
             ticker,
             run_selections["analysis_date"],
             asset_type=run_selections["asset_type"],
-            instrument_context=instrument_context,
-        )
-        # Pass callbacks to graph config for tool execution tracking
-        # (LLM tracking is handled separately via LLM constructor)
-        args = graph.propagator.get_graph_args(callbacks=[stats_handler])
-
-        # Stream the analysis
-        trace = []
-        for chunk in _stream_graph_in_analysis_context(
-            graph, init_agent_state, args, run_selections["analysis_date"]
+            callbacks=[stats_handler],
         ):
             # Process all messages in chunk, deduplicating by message ID
             for message in chunk.get("messages", []):

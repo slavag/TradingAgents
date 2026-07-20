@@ -31,7 +31,6 @@ from cli.main import (
 )
 from cli.stats_handler import StatsCallbackHandler
 from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.dataflows.temporal import use_analysis_context
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.web.speaking_sources import (
     build_speaking_candidate_universe,
@@ -39,12 +38,6 @@ from tradingagents.web.speaking_sources import (
 )
 
 logger = logging.getLogger("tradingagents.web.service")
-
-
-def _stream_graph_in_analysis_context(graph, initial_state, args, analysis_date):
-    """Keep the request context active while a directly streamed graph runs."""
-    with use_analysis_context(analysis_date):
-        yield from graph.graph.stream(initial_state, **args)
 
 
 RESULTS_ROOT = Path(DEFAULT_CONFIG["results_dir"]).resolve()
@@ -957,11 +950,13 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     config=config,
                     callbacks=[stats_handler],
                 )
-                init_state = graph.propagator.create_initial_state(ticker, analysis_date)
-                args = graph.propagator.get_graph_args(callbacks=[stats_handler])
+                asset_type = "stock"
                 trace = []
-                for chunk in _stream_graph_in_analysis_context(
-                    graph, init_state, args, analysis_date
+                for chunk in graph.stream(
+                    ticker,
+                    analysis_date,
+                    asset_type=asset_type,
+                    callbacks=[stats_handler],
                 ):
                     messages = chunk.get("messages") or []
                     if messages:
