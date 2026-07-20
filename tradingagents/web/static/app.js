@@ -30,6 +30,7 @@ const elements = {
   openaiEffort: document.getElementById("openai-effort"),
   googleThinkingWrap: document.getElementById("google-thinking-wrap"),
   googleThinking: document.getElementById("google-thinking"),
+  samplingTemperature: document.getElementById("sampling-temperature"),
   saveReports: document.getElementById("save-reports"),
   exportPathWrap: document.getElementById("export-path-wrap"),
   exportPath: document.getElementById("export-path"),
@@ -180,19 +181,139 @@ function setReportButtons(job) {
     : "Not written yet.";
 }
 
+const SOURCE_DISPLAY_NAMES = {
+  "Stock Traders Daily News Release": "Stock Traders Daily",
+};
+
+function displaySourceName(source) {
+  return SOURCE_DISPLAY_NAMES[source] || source;
+}
+
+function sourceSummary(item) {
+  const sources = Array.isArray(item.sources)
+    ? item.sources
+        .map((source) => displaySourceName(String(source).trim()))
+        .filter(Boolean)
+    : [];
+  const rawCount = Number(item.source_count);
+  const count = Number.isFinite(rawCount) && rawCount > 0
+    ? rawCount
+    : sources.length;
+  const text = sources.length ? sources.join(" + ") : "source list unavailable";
+  return {
+    count,
+    text,
+    detail: sources.length
+      ? `${count} source feed${count === 1 ? "" : "s"}: ${text}`
+      : "Source unavailable",
+  };
+}
+
+function formatSignedPercent(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "—";
+  return `${num > 0 ? "+" : ""}${num.toFixed(1)}%`;
+}
+
+function metricTone(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num === 0) return "flat";
+  return num > 0 ? "positive" : "negative";
+}
+
+function formatPrice(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "—";
+  return `$${num.toFixed(2)}`;
+}
+
+const RANK_HELP_TEXT = "5D move + avg checks";
+const AVG_CHECK_HELP_TEXT = "price > 50D, 50D > 200D";
+
+function currentMoveSummary(item) {
+  const dayChange = Number(item.ret_1d_pct);
+  if (item.market_open === true && Number.isFinite(dayChange)) {
+    const label = `Today ${formatSignedPercent(dayChange)}`;
+    return {
+      label,
+      detail: `Current trading-day change ${formatSignedPercent(dayChange)}`,
+      tone: metricTone(dayChange),
+    };
+  }
+
+  const latestClose = Number(item.price);
+  if (Number.isFinite(latestClose)) {
+    return {
+      label: `Close ${formatPrice(latestClose)}`,
+      detail: item.market_open === true
+        ? `Latest close ${formatPrice(latestClose)}; current trading-day change unavailable`
+        : `Latest close ${formatPrice(latestClose)}; market is not trading`,
+      tone: "flat",
+    };
+  }
+
+  return {
+    label: "Close —",
+    detail: "Latest close unavailable",
+    tone: "flat",
+  };
+}
+
+function trendSummary(value) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) {
+    return {
+      label: "Avg checks —",
+      detail: `Moving-average checks unavailable. Checks are ${AVG_CHECK_HELP_TEXT}.`,
+      value: "—",
+    };
+  }
+
+  const score = Math.max(0, Math.min(2, Math.round(raw)));
+  return {
+    label: `Avg checks ${score}/2`,
+    detail: `Moving-average checks: ${score} of 2 pass (${AVG_CHECK_HELP_TEXT}).`,
+    value: `${score}/2`,
+  };
+}
+
+function rankScoreDetail(score) {
+  return `Rank score ${score}: sorting score that combines ${RANK_HELP_TEXT}. Higher ranks earlier; not a buy/sell signal.`;
+}
+
 function tickerItem(item) {
-  const score = item.score != null ? item.score.toFixed(2) : "—";
-  const ret5 = item.ret_5d_pct != null ? `${item.ret_5d_pct.toFixed(1)}%` : "—";
-  const trend = item.trend_score != null ? `trend ${item.trend_score}/2` : "trend —";
+  const score = Number.isFinite(Number(item.score)) ? Number(item.score).toFixed(2) : "—";
+  const ret5 = formatSignedPercent(item.ret_5d_pct);
+  const sources = sourceSummary(item);
+  const currentMove = currentMoveSummary(item);
+  const trend = trendSummary(item.trend_score);
+  const rankDetail = rankScoreDetail(score);
+  const itemLabel = (
+    `${item.ticker}: ${currentMove.detail}. ${rankDetail} ` +
+    `5D move ${ret5}. ${trend.detail}. ${sources.detail}.`
+  );
   return `
-    <article class="ticker-item clickable" data-ticker-symbol="${escapeHtml(item.ticker)}" role="button" tabindex="0">
-      <div class="ticker-row">
+    <article class="ticker-item clickable" data-ticker-symbol="${escapeHtml(item.ticker)}" role="button" tabindex="0" aria-label="${escapeHtml(itemLabel)}" title="${escapeHtml(itemLabel)}">
+      <div class="ticker-row ticker-row-main">
         <span class="ticker-symbol">${escapeHtml(item.ticker)}</span>
-        <span class="ticker-metric daily">score ${escapeHtml(score)}</span>
+        <span class="ticker-current-change ${currentMove.tone}" title="${escapeHtml(currentMove.detail)}">${escapeHtml(currentMove.label)}</span>
       </div>
-      <div class="ticker-row ticker-row-sub">
-        <span class="ticker-metric">5d ${ret5}</span>
-        <span class="ticker-metric">${escapeHtml(trend)}</span>
+      <div class="ticker-signal-line">
+        <div class="ticker-rank-block" title="${escapeHtml(rankDetail)}">
+          <span class="ticker-metric ticker-signal">Rank score ${escapeHtml(score)}</span>
+          <span class="ticker-helper ticker-rank-help">${escapeHtml(RANK_HELP_TEXT)}</span>
+        </div>
+      </div>
+      <div class="ticker-detail-row">
+        <div class="ticker-avg-block" title="${escapeHtml(trend.detail)}">
+          <div class="ticker-trend-line">${escapeHtml(trend.label)}</div>
+        </div>
+        <span class="ticker-metric ticker-move ${metricTone(item.ret_5d_pct)}">5D ${escapeHtml(ret5)}</span>
+      </div>
+      <div class="ticker-helper ticker-avg-help ticker-avg-help-row" title="${escapeHtml(trend.detail)}">${escapeHtml(AVG_CHECK_HELP_TEXT)}</div>
+      <div class="ticker-bottom-block">
+        <div class="ticker-divider"></div>
+        <div class="ticker-source-line" title="${escapeHtml(sources.detail)}">${escapeHtml(sources.text)}</div>
       </div>
     </article>
   `;
@@ -288,14 +409,14 @@ async function fetchSpeakingStocks() {
     }
 
     state.speakingItems = items;
-    const visibleItems = renderTape(
+    renderTape(
       elements.tickerTrack,
       items,
       tickerItem,
       topN,
       "No speaking stocks available right now.",
     );
-    elements.tickerStatus.textContent = `Showing ${visibleItems.length} slots from ${items.length} unique speaking stocks`;
+    elements.tickerStatus.textContent = `Top chatter candidates: ${items.length} unique tickers | Rank score = ${RANK_HELP_TEXT} | Avg checks = ${AVG_CHECK_HELP_TEXT}`;
   } catch (error) {
     elements.tickerStatus.textContent = `Unable to load chatter feed: ${error.message}`;
     elements.tickerTrack.innerHTML = `<div class="ticker-item placeholder">${escapeHtml(error.message)}</div>`;
@@ -334,12 +455,13 @@ function openTickerModal(item) {
   elements.modalEmployees.textContent = "Loading…";
   elements.modalWebsite.textContent = "Loading…";
   elements.modalPe.textContent = "Loading…";
-  const sources = Array.isArray(item.sources) && item.sources.length
-    ? item.sources.join(", ")
-    : "the chatter feed";
+  const sources = sourceSummary(item);
+  const trend = trendSummary(item.trend_score);
+  const score = Number.isFinite(Number(item.score)) ? Number(item.score).toFixed(2) : "—";
   elements.modalDescription.textContent =
-    `${item.ticker} is currently on the speaking-stocks tape from ${sources} ` +
-    "and is rescored using the MyAgent momentum/trend model.";
+    `${item.ticker} is a chatter candidate from ${sources.text}. ` +
+    `${rankScoreDetail(score)} ` +
+    `Avg checks means ${trend.detail}`;
 
   elements.tickerModal.classList.remove("hidden");
   elements.tickerModal.setAttribute("aria-hidden", "false");
@@ -585,6 +707,7 @@ function collectPayload() {
     google_thinking_level: [elements.quickProvider.value, elements.deepProvider.value, elements.finalReportProvider.value].includes("google")
       ? (elements.googleThinking.value || null)
       : null,
+    temperature: Number(elements.samplingTemperature.value),
     save_reports: elements.saveReports.checked,
     export_path: elements.saveReports.checked ? (elements.exportPath.value.trim() || null) : null,
   };

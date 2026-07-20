@@ -31,8 +31,10 @@ def create_trader(llm):
                 "role": "system",
                 "content": (
                     "You are a trading agent analyzing market data to make investment decisions. "
-                    "Based on your analysis, provide a specific recommendation to buy, sell, or hold. "
-                    "Anchor your reasoning in the analysts' reports and the research plan. "
+                    "Translate the Research Manager's rating into a transaction direction using this "
+                    "fixed mapping: Buy or Overweight -> Buy; Hold -> Hold; Underweight or Sell -> Sell. "
+                    "Do not re-adjudicate or reverse the directional rating; use the analysts' reports "
+                    "to set execution details, sizing, and risk controls. "
                     + NO_EXTERNAL_TOOLS
                     + get_language_instruction()
                 ),

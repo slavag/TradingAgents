@@ -38,6 +38,23 @@ def create_research_manager(llm):
 
 Commit to a clear stance whenever the debate's strongest arguments warrant one; reserve Hold for situations where the evidence on both sides is genuinely balanced.
 
+**Consistency Scorecard**
+Score each dimension internally as -1 (bearish), 0 (mixed or unsupported), or +1 (bullish), using only concrete evidence in the debate:
+- fundamentals
+- valuation
+- technical trend
+- catalysts and sentiment
+- financial and event risk
+
+Map the total to the rating without changing thresholds between runs:
+- +4 to +5: Buy
+- +2 to +3: Overweight
+- -1 to +1: Hold
+- -3 to -2: Underweight
+- -5 to -4: Sell
+
+Do not let writing style, debate rhetoric, or an assumed existing position change the score. Explain the decisive dimensions in the rationale so the result is auditable.
+
 ---
 
 **Debate History:**

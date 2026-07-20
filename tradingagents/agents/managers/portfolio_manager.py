@@ -62,6 +62,13 @@ def create_portfolio_manager(llm):
 
 ---
 
+**Consistency Protocol:**
+- Use the Research Manager rating as the baseline.
+- Adjust it only when the risk debate adds concrete evidence that was not already reflected in the research plan; rhetoric alone is not new evidence.
+- When an adjustment is justified, move at most one tier on the five-tier scale unless the debate identifies a factual thesis invalidation.
+- Do not assume whether the user already owns the instrument. The rating expresses the forward risk/reward view; describe separate actions for existing and prospective positions when relevant.
+- Apply the same rating standard to materially identical evidence across runs.
+
 Be decisive and ground every conclusion in specific evidence from the analysts.
 
 {NO_EXTERNAL_TOOLS}{get_language_instruction()}"""

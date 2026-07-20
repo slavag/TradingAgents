@@ -10,6 +10,7 @@ import traceback
 import uuid
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -58,6 +59,7 @@ _MARKET_TICKER_CACHE: dict[str, Any] = {
 }
 _MYAGENT_MODULE = None
 _TICKER_DETAIL_CACHE: dict[str, dict[str, Any]] = {}
+MARKET_TIMEZONE = ZoneInfo("America/New_York")
 
 MARKET_INDEXES = [
     {"symbol": "^GSPC", "label": "S&P 500"},
@@ -93,6 +95,20 @@ REPORT_TITLES = {
     "trader_investment_plan": "Trading Team Plan",
     "final_trade_decision": "Portfolio Management Decision",
 }
+
+
+def _is_us_market_open(now: dt.datetime | None = None) -> bool:
+    """Return whether the US regular equity session is open."""
+    current = now or dt.datetime.now()
+    if current.tzinfo is None:
+        current = current.astimezone()
+    eastern = current.astimezone(MARKET_TIMEZONE)
+    if eastern.weekday() >= 5:
+        return False
+
+    market_open = eastern.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = eastern.replace(hour=16, minute=0, second=0, microsecond=0)
+    return market_open <= eastern < market_close
 
 
 def classify_runtime_error(exc: Exception) -> dict[str, Any]:
@@ -406,6 +422,7 @@ def build_graph_config(payload: dict[str, Any]) -> dict[str, Any]:
     config["final_report_backend_url"] = payload.get("final_report_backend_url")
     config["google_thinking_level"] = payload.get("google_thinking_level")
     config["openai_reasoning_effort"] = payload.get("openai_reasoning_effort")
+    config["temperature"] = payload.get("temperature", 0.0)
     return config
 
 
@@ -529,6 +546,7 @@ def _build_source_only_speaking_records(
     source_membership: dict[str, list[str]],
     top_n: int,
     lookback_days: int,
+    market_open: bool = False,
 ) -> list[dict[str, Any]]:
     ranked_symbols = sorted(
         candidate_symbols,
@@ -543,6 +561,7 @@ def _build_source_only_speaking_records(
                 "ticker": symbol,
                 "score": float(len(sources)),
                 "price": None,
+                "market_open": market_open,
                 "ret_1d_pct": None,
                 "ret_5d_pct": None,
                 "trend_score": 0,
@@ -577,8 +596,9 @@ def fetch_speaking_stocks(
     w_ret5: float = 0.7,
     w_trend: float = 0.3,
 ) -> list[dict[str, Any]]:
-    cache_key = (top_n, lookback_days, ape_pages, w_ret5, w_trend)
     now = dt.datetime.now()
+    market_open = _is_us_market_open(now)
+    cache_key = (top_n, lookback_days, ape_pages, w_ret5, w_trend, market_open)
     if (
         _SPEAKING_CACHE["data"] is not None
         and _SPEAKING_CACHE["key"] == cache_key
@@ -658,6 +678,7 @@ def fetch_speaking_stocks(
             source_membership,
             top_n=top_n,
             lookback_days=lookback_days,
+            market_open=market_open,
         )
         return _store_speaking_cache(cache_key, records, now, ttl_minutes=5)
 
@@ -719,6 +740,7 @@ def fetch_speaking_stocks(
                 "ticker": row.symbol,
                 "score": score,
                 "price": round(price, 2) if price is not None else None,
+                "market_open": market_open,
                 "ret_1d_pct": round(ret_1d, 1) if ret_1d is not None else None,
                 "ret_5d_pct": round(ret_5d, 1) if ret_5d is not None else None,
                 "trend_score": int(row.sma_trend) if pd.notna(row.sma_trend) else 0,
@@ -741,6 +763,7 @@ def fetch_speaking_stocks(
             source_membership,
             top_n=top_n,
             lookback_days=lookback_days,
+            market_open=market_open,
         )
         return _store_speaking_cache(cache_key, records, now, ttl_minutes=5)
 

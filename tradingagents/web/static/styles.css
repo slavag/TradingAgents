@@ -891,6 +891,11 @@ button:disabled {
   will-change: transform;
 }
 
+.ticker-pane .ticker-track {
+  animation-name: ticker-scroll-from-right;
+  animation-duration: 68s;
+}
+
 .ticker-group {
   flex: 0 0 auto;
   min-width: 100%;
@@ -898,6 +903,11 @@ button:disabled {
   grid-template-columns: repeat(var(--visible-tickers, 20), minmax(0, 1fr));
   gap: 16px;
   padding: 0 12px;
+}
+
+.ticker-pane .ticker-group {
+  grid-template-columns: repeat(var(--visible-tickers, 20), minmax(256px, 256px));
+  gap: 16px;
 }
 
 .ticker-marquee:hover .ticker-track {
@@ -930,6 +940,22 @@ button:disabled {
   transform: translateY(-1px);
   background: #282f63;
   border-color: rgba(123, 97, 255, 0.42);
+}
+
+.ticker-pane .ticker-item {
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  align-content: start;
+  gap: 7px;
+  min-height: 132px;
+  padding: 11px 13px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: subpixel-antialiased;
+  -moz-osx-font-smoothing: auto;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  color: #f7f9ff;
+  background: #20275a;
+  border-color: rgba(142, 128, 255, 0.42);
 }
 
 .ticker-item.placeholder {
@@ -974,9 +1000,9 @@ button:disabled {
 
 .ticker-symbol {
   font-weight: 800;
-  letter-spacing: 0.03em;
+  letter-spacing: 0;
   min-width: 0;
-  font-size: 16px;
+  font-size: 18px;
   color: #C5F20F;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -990,6 +1016,10 @@ button:disabled {
   justify-content: space-between;
   gap: 6px;
   min-width: 0;
+}
+
+.ticker-row-main {
+  gap: 8px;
 }
 
 .ticker-row-sub {
@@ -1007,6 +1037,152 @@ button:disabled {
 .ticker-metric.daily {
   color: #f3f6ff;
   font-weight: 700;
+}
+
+.ticker-signal-line,
+.ticker-detail-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.ticker-signal-line {
+  line-height: 1.15;
+}
+
+.ticker-detail-row {
+  align-items: start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ticker-pane .ticker-metric {
+  font-size: 12px;
+  color: #f7f9ff;
+}
+
+.ticker-rank-block,
+.ticker-avg-block {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ticker-rank-block {
+  width: 100%;
+}
+
+.ticker-avg-block {
+  flex: 1 1 auto;
+}
+
+.ticker-signal {
+  display: block;
+  min-width: 0;
+  color: #f7f9ff;
+  font-weight: 800;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+.ticker-helper {
+  color: #cbd5f5;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.1;
+  min-width: 0;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.ticker-avg-help-row {
+  display: block;
+  width: 100%;
+}
+
+.ticker-move {
+  flex: 0 0 auto;
+  margin-left: auto;
+  text-align: right;
+  font-weight: 800;
+}
+
+.ticker-metric.positive {
+  color: #7cf6c6;
+}
+
+.ticker-metric.negative {
+  color: #ff9cb2;
+}
+
+.ticker-metric.flat {
+  color: var(--muted);
+}
+
+.ticker-current-change {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #f7f9ff;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  max-width: 106px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticker-current-change.positive {
+  color: #7cf6c6;
+}
+
+.ticker-current-change.negative {
+  color: #ff9cb2;
+}
+
+.ticker-current-change.flat {
+  color: #cbd5f5;
+}
+
+.ticker-bottom-block {
+  align-self: end;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ticker-divider {
+  min-width: 0;
+  height: 1px;
+  background: rgba(203, 213, 245, 0.34);
+}
+
+.ticker-source-line {
+  min-width: 0;
+  color: #cbd5f5;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticker-trend-line {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: #f7f9ff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 input[type="checkbox"] {
@@ -1102,6 +1278,11 @@ input[type="checkbox"] {
 
 @keyframes ticker-scroll {
   from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+@keyframes ticker-scroll-from-right {
+  from { transform: translateX(100vw); }
   to { transform: translateX(-50%); }
 }
 

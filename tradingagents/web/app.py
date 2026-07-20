@@ -178,6 +178,7 @@ class AnalysisRequest(BaseModel):
     final_report_model: str = "gpt-5.4-mini"
     google_thinking_level: str | None = None
     openai_reasoning_effort: str | None = "medium"
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     save_reports: bool = True
     export_path: str | None = None
 

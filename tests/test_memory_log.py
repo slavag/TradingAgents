@@ -705,6 +705,17 @@ class TestPortfolioManagerInjection:
         pm_node(state)
         assert "Lessons from prior decisions" not in captured["prompt"]
 
+    def test_pm_prompt_anchors_rating_without_assuming_ownership(self):
+        captured = {}
+        llm = _structured_pm_llm(captured)
+        pm_node = create_portfolio_manager(llm)
+        pm_node(_make_pm_state())
+
+        prompt = captured["prompt"]
+        assert "Research Manager rating as the baseline" in prompt
+        assert "Do not assume whether the user already owns the instrument" in prompt
+        assert "move at most one tier" in prompt
+
     def test_pm_returns_rendered_markdown_with_rating(self):
         """The structured PortfolioDecision is rendered to markdown that
         downstream consumers (memory log, signal processor, CLI display)

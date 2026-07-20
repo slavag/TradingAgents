@@ -1085,9 +1085,13 @@ def full_report_text(content, fallback: str) -> str:
 
 
 REPORT_CHATTER_PATTERNS = (
+    "if you don't own it yet",
+    "if you don’t own it yet",
     "if you want, i can",
     "if you want, i will",
     "if you want to",
+    "i'd prefer",
+    "i’d prefer",
     "which follow-up would you like",
     "which follow up would you like",
     "would you like me to",
@@ -1105,13 +1109,47 @@ def sanitize_report_language(content) -> str:
 
     filtered_lines = []
     for line in text.splitlines():
-        lowered = line.strip().lower()
+        stripped = line.strip()
+        lowered = stripped.lower()
         if any(pattern in lowered for pattern in REPORT_CHATTER_PATTERNS):
+            continue
+        if "key points table" in lowered:
+            continue
+        if stripped.startswith("|") or set(stripped) <= {"|", "-", ":", " "}:
             continue
         filtered_lines.append(line)
 
     cleaned = "\n".join(filtered_lines).strip()
     return re.sub(r"\n{3,}", "\n\n", cleaned)
+
+
+def clean_summary_fragment(text: str) -> str:
+    """Remove block-level markdown tokens that do not belong inside summary bullets."""
+    text = re.sub(r"(^|\s)#{1,6}\s+", r"\1", text)
+    text = re.sub(r"(^|\s)-{3,}\s+", r"\1", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def render_summary_inline_markdown(text: str) -> str:
+    """Render the small inline-markdown subset used by consolidated summaries."""
+    html = escape(clean_summary_fragment(text))
+    html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
+    return html.replace("**", "")
+
+
+def render_report_body_html(content, fallback: str) -> str:
+    """Render full report prose safely while preserving paragraph structure."""
+    cleaned = sanitize_report_language(full_report_text(content, fallback))
+    paragraphs = []
+
+    for block in re.split(r"\n\s*\n", cleaned):
+        text = clean_summary_fragment(block.strip())
+        if text:
+            paragraphs.append(f"<p>{render_summary_inline_markdown(text)}</p>")
+
+    if not paragraphs:
+        paragraphs.append(f"<p>{render_summary_inline_markdown(fallback)}</p>")
+    return "".join(paragraphs)
 
 
 def fallback_bullet_summary(content, max_bullets: int = 5) -> str:
@@ -1123,11 +1161,9 @@ def fallback_bullet_summary(content, max_bullets: int = 5) -> str:
     sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9(])", cleaned.replace("\n", " "))
     bullets = []
     for sentence in sentences:
-        line = sentence.strip().lstrip("#").strip()
+        line = clean_summary_fragment(sentence.strip().lstrip("#").strip())
         if not line:
             continue
-        if len(line) > 260:
-            line = line[:257].rsplit(" ", 1)[0].strip() + "..."
         bullets.append(f"- {line}")
         if len(bullets) >= max_bullets:
             break
@@ -1209,10 +1245,10 @@ def bullet_markdown_to_html(summary: str) -> str:
     for line in summary.splitlines():
         stripped = line.strip()
         if stripped.startswith(("- ", "* ")):
-            bullets.append(f"<li>{escape(stripped[2:].strip())}</li>")
+            bullets.append(f"<li>{render_summary_inline_markdown(stripped[2:].strip())}</li>")
     if not bullets:
         fallback = sanitize_report_language(summary) or "No report generated."
-        bullets.append(f"<li>{escape(fallback)}</li>")
+        bullets.append(f"<li>{render_summary_inline_markdown(fallback)}</li>")
     return "<ul>" + "".join(bullets) + "</ul>"
 
 
@@ -1460,7 +1496,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             "</div>"
             "<div class='narrative-block accent'>"
             "<h3>Trader Plan</h3>"
-            f"<pre class='report-body'>{escape(sanitize_report_language(full_report_text(final_state.get('trader_investment_plan'), 'No trader plan generated.')))}</pre>"
+            f"<div class='report-body'>{render_report_body_html(final_state.get('trader_investment_plan'), 'No trader plan generated.')}</div>"
             "</div>"
             "</section>"
         )
@@ -1734,6 +1770,12 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
       overflow-wrap: anywhere;
       color: var(--slate);
       font: inherit;
+    }}
+    .report-body p {{
+      margin: 0 0 12px;
+    }}
+    .report-body p:last-child {{
+      margin-bottom: 0;
     }}
     .bullet-summary ul {{
       margin: 0;

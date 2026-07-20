@@ -200,6 +200,17 @@ class TestTraderAgent:
         prompt = captured["prompt"]
         assert any("Proposed Investment Plan" in m["content"] for m in prompt)
 
+    def test_prompt_maps_research_rating_to_transaction_direction(self):
+        captured = {}
+        llm = _structured_trader_llm(captured)
+        trader = create_trader(llm)
+        trader(_make_trader_state())
+
+        system_prompt = captured["prompt"][0]["content"]
+        assert "Buy or Overweight -> Buy" in system_prompt
+        assert "Hold -> Hold" in system_prompt
+        assert "Underweight or Sell -> Sell" in system_prompt
+
     def test_falls_back_to_freetext_when_structured_unavailable(self):
         plain_response = (
             "**Action**: Sell\n\nGuidance cut hits margins.\n\n"
@@ -274,6 +285,25 @@ class TestResearchManagerAgent:
         prompt = captured["prompt"]
         for tier in ("Buy", "Overweight", "Hold", "Underweight", "Sell"):
             assert f"**{tier}**" in prompt, f"missing {tier} in prompt"
+
+    def test_prompt_uses_fixed_evidence_scorecard(self):
+        captured = {}
+        llm = _structured_rm_llm(captured)
+        rm = create_research_manager(llm)
+        rm(_make_rm_state())
+
+        prompt = captured["prompt"]
+        for dimension in (
+            "fundamentals",
+            "valuation",
+            "technical trend",
+            "catalysts and sentiment",
+            "financial and event risk",
+        ):
+            assert dimension in prompt
+        assert "+4 to +5: Buy" in prompt
+        assert "-1 to +1: Hold" in prompt
+        assert "-5 to -4: Sell" in prompt
 
     def test_falls_back_to_freetext_when_structured_unavailable(self):
         plain_response = "**Recommendation**: Sell\n\n**Rationale**: ...\n\n**Strategic Actions**: ..."

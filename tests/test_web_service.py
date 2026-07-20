@@ -1,3 +1,4 @@
+import datetime as dt
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -42,6 +43,16 @@ class _FakeGraph:
 
 
 class WebServiceTests(unittest.TestCase):
+    def test_web_graph_config_defaults_to_repeatable_temperature(self):
+        config = web_service.build_graph_config({})
+
+        self.assertEqual(config["temperature"], 0.0)
+
+    def test_web_graph_config_accepts_explicit_temperature(self):
+        config = web_service.build_graph_config({"temperature": 0.25})
+
+        self.assertEqual(config["temperature"], 0.25)
+
     def test_source_only_records_keep_tape_populated_when_prices_are_empty(self):
         records = _build_source_only_speaking_records(
             ["BNED", "RUNN"],
@@ -58,6 +69,19 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(records[0]["score"], 2.0)
         self.assertIsNone(records[0]["price"])
         self.assertEqual(records[0]["lookback_days"], 30)
+        self.assertFalse(records[0]["market_open"])
+
+    def test_us_market_open_detection_uses_regular_session(self):
+        self.assertTrue(
+            web_service._is_us_market_open(
+                dt.datetime(2026, 7, 6, 15, 0, tzinfo=dt.timezone.utc)
+            )
+        )
+        self.assertFalse(
+            web_service._is_us_market_open(
+                dt.datetime(2026, 7, 5, 15, 0, tzinfo=dt.timezone.utc)
+            )
+        )
 
     def test_job_enters_final_report_state_before_consolidated_generation(self):
         with TemporaryDirectory() as tmpdir:

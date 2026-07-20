@@ -1,7 +1,8 @@
 import unittest
+from pathlib import Path
 
 from tradingagents.llm_clients.model_catalog import get_web_model_options
-from tradingagents.web.app import _render_index_response
+from tradingagents.web.app import AnalysisRequest, _render_index_response
 
 
 class WebModelCatalogTests(unittest.TestCase):
@@ -45,6 +46,28 @@ class WebModelCatalogTests(unittest.TestCase):
         self.assertIn("claude-fable-5", html)
         self.assertIn("gemini-3.5-flash", html)
         self.assertIn("grok-build-0.1", html)
+
+    def test_analysis_request_defaults_to_repeatable_temperature(self):
+        request = AnalysisRequest(tickers="PENG", analysis_date="2026-07-19")
+
+        self.assertEqual(request.temperature, 0.0)
+
+    def test_index_exposes_sampling_temperature_control(self):
+        html = _render_index_response().body.decode("utf-8")
+
+        self.assertIn('id="sampling-temperature"', html)
+
+    def test_browser_sends_sampling_temperature(self):
+        app_js = (
+            Path(__file__).resolve().parents[1]
+            / "tradingagents"
+            / "web"
+            / "static"
+            / "app.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('document.getElementById("sampling-temperature")', app_js)
+        self.assertIn("temperature: Number(elements.samplingTemperature.value)", app_js)
 
 
 if __name__ == "__main__":
