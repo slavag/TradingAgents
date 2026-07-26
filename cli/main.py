@@ -1,5 +1,6 @@
 import datetime
 import json
+import math
 import os
 import re
 import sys
@@ -58,6 +59,7 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.reporting import write_report_tree
 
 console = Console()
+
 
 # prompt_toolkit's win32 output module is importable only on Windows (it asserts
 # the platform at import time), so gate on the platform rather than catching the
@@ -815,11 +817,18 @@ def get_save_preferences(selections):
     }
 
 
-def format_price_target(price_target) -> str:
+def format_price_target(price_target, currency: str | None = None) -> str:
     """Format price target for display."""
     if price_target is None:
         return "-"
-    return f"${price_target:,.2f}"
+    formatted_price = f"{price_target:,.2f}"
+    if not currency:
+        return formatted_price
+
+    currency_code = currency.upper()
+    if currency_code == "USD":
+        return f"${formatted_price}"
+    return f"{currency_code} {formatted_price}"
 
 
 def parse_json_response(raw_content: str) -> dict | None:
@@ -849,6 +858,75 @@ def parse_json_response(raw_content: str) -> dict | None:
         return None
 
 
+def _fallback_target_has_provenance(
+    price_target: float,
+    supporting_quote,
+    evidence_text: str,
+) -> bool:
+    """Verify that a fallback target is copied from a cited price-level quote."""
+    if not isinstance(supporting_quote, str):
+        return False
+
+    quote = re.sub(r"\s+", " ", supporting_quote).strip()
+    evidence = re.sub(r"\s+", " ", evidence_text).strip()
+    if not quote or len(quote) > 300 or quote.casefold() not in evidence.casefold():
+        return False
+
+    price_label = (
+        r"(?:price(?:\s+target)?|target(?:\s+price)?|reference\s+price|"
+        r"close|open|high|low|support|resistance|sma|ema|vwma|"
+        r"bollinger(?:\s+(?:middle|upper|lower))?(?:\s+band)?|"
+        r"fair\s+value|valuation|price\s+level|level)"
+    )
+    currency_marker = r"(?:[$€£¥]|\b(?:USD|EUR|GBP|JPY|CAD|AUD|CHF|CNY|HKD)\b)"
+    connector = (
+        r"(?:\s|[:=~≈@()\[\],-]|"
+        r"\b(?:is|at|near|around|of|about|approximately|approx|roughly|"
+        r"estimate|estimated|to)\b)*"
+    )
+
+    cited_numbers = re.finditer(
+        r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?![\w.])",
+        quote,
+    )
+    for cited_match in cited_numbers:
+        try:
+            cited_value = float(cited_match.group(0).replace(",", ""))
+        except ValueError:
+            continue
+        if not math.isclose(
+            cited_value,
+            price_target,
+            rel_tol=1e-9,
+            abs_tol=0.005,
+        ):
+            continue
+
+        following = quote[cited_match.end() : cited_match.end() + 24]
+        if re.match(
+            r"\s*(?:%|percent\b|x\b|shares?\b|units?\b|volume\b|"
+            r"thousand\b|million\b|billion\b|trillion\b|[KMBT]\b)",
+            following,
+            re.IGNORECASE,
+        ):
+            continue
+
+        preceding = quote[max(0, cited_match.start() - 80) : cited_match.start()]
+        follows_price_label = re.search(
+            rf"(?:{price_label}|{currency_marker}){connector}$",
+            preceding,
+            re.IGNORECASE,
+        )
+        precedes_price_label = re.match(
+            rf"{connector}(?:{price_label}|{currency_marker})",
+            following,
+            re.IGNORECASE,
+        )
+        if follows_price_label or precedes_price_label:
+            return True
+    return False
+
+
 def fetch_reference_price(ticker: str, analysis_date: str) -> float | None:
     """Fetch the latest close near the analysis date for target estimation."""
     try:
@@ -872,96 +950,215 @@ def fetch_reference_price(ticker: str, analysis_date: str) -> float | None:
 
 
 def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, decision: str):
-    """Estimate a per-ticker target price and confidence score."""
+    """Build decision metrics from the PM output, with an evidence-grounded fallback."""
     current_price = fetch_reference_price(ticker, analysis_date)
-    decision_text = compact_report_text(final_state.get("final_trade_decision"), max_chars=1400)
-    market_text = compact_report_text(final_state.get("market_report"), max_chars=1200)
-    social_text = compact_report_text(final_state.get("sentiment_report"), max_chars=900)
-    news_text = compact_report_text(final_state.get("news_report"), max_chars=900)
-    fundamentals_text = compact_report_text(final_state.get("fundamentals_report"), max_chars=1000)
-    trader_text = compact_report_text(final_state.get("trader_investment_plan"), max_chars=900)
+    price_target = None
+    confidence_score = None
+    target_horizon = None
+    target_summary = None
+    final_trade_decision = extract_content_string(final_state.get("final_trade_decision")) or ""
 
-    messages = [
-        (
-            "system",
-            "You summarize trading analysis. Return JSON only with keys "
-            'price_target, confidence_score, horizon, summary. '
-            "price_target must be a number in USD or null. "
-            "confidence_score must be an integer from 0 to 100 representing the probability "
-            "the stock reaches or exceeds the target within the stated horizon. "
-            "Use a realistic single target, not a range. Keep summary under 80 words.",
-        ),
-        (
-            "human",
-            f"""Ticker: {ticker}
+    target_match = re.search(
+        r"(?im)^\s*\*\*price target\*\*\s*:\s*(.+?)\s*$",
+        final_trade_decision,
+    )
+    if target_match:
+        numeric_target = re.fullmatch(
+            r"\$?\s*(-?\d[\d,]*(?:\.\d+)?)\s*(?:USD)?",
+            target_match.group(1).strip(),
+            re.IGNORECASE,
+        )
+        if numeric_target:
+            parsed_target = float(numeric_target.group(1).replace(",", ""))
+            if math.isfinite(parsed_target) and parsed_target > 0:
+                price_target = round(parsed_target, 2)
+
+    horizon_match = re.search(
+        r"(?im)^\s*\*\*time horizon\*\*\s*:\s*(.+?)\s*$",
+        final_trade_decision,
+    )
+    if horizon_match:
+        target_horizon = horizon_match.group(1).strip() or None
+
+    confidence_match = re.search(
+        r"(?im)^\s*\*\*(?:decision|model)?\s*confidence"
+        r"(?:\s*\(uncalibrated\))?\*\*\s*:\s*"
+        r"(\d{1,3})(?:\s*/\s*100|\s*%)?\s*$",
+        final_trade_decision,
+    )
+    if confidence_match:
+        parsed_confidence = int(confidence_match.group(1))
+        if 0 <= parsed_confidence <= 100:
+            confidence_score = parsed_confidence
+
+    summary_match = re.search(
+        r"(?im)^\s*\*\*target rationale\*\*\s*:\s*(.+?)\s*$",
+        final_trade_decision,
+    )
+    if summary_match:
+        target_summary = summary_match.group(1).strip() or None
+
+    needs_fallback = (
+        price_target is None
+        or confidence_score is None
+        or target_horizon is None
+        or target_summary is None
+    )
+    payload = None
+    if llm is not None and needs_fallback:
+        decision_text = compact_report_text(
+            final_state.get("final_trade_decision"), max_chars=1800
+        )
+        market_text = compact_report_text(final_state.get("market_report"), max_chars=1400)
+        fundamentals_text = compact_report_text(
+            final_state.get("fundamentals_report"), max_chars=1200
+        )
+        news_text = compact_report_text(final_state.get("news_report"), max_chars=900)
+        social_text = compact_report_text(
+            final_state.get("sentiment_report"), max_chars=900
+        )
+        trader_text = compact_report_text(
+            final_state.get("trader_investment_plan"), max_chars=1000
+        )
+        evidence_text = "\n".join(
+            (
+                decision_text,
+                market_text,
+                fundamentals_text,
+                news_text,
+                social_text,
+                trader_text,
+            )
+        )
+        messages = [
+            (
+                "system",
+                "Derive missing decision metrics from an existing stock analysis. "
+                "Return JSON only with keys price_target, confidence_score, horizon, "
+                "summary, supporting_quote. price_target is the evidence-grounded central-case price "
+                "in the instrument's quote currency at the stated horizon, or null "
+                "when the supplied analysis cannot support one. confidence_score is "
+                "an integer from 0 to 100 measuring uncalibrated evidence strength, "
+                "not probability, or null when unsupported. For Buy/Overweight the "
+                "target should normally be above the reference price; for "
+                "Sell/Underweight it should normally be below it. Ground the target "
+                "in quoted valuation or technical levels. Never copy the reference "
+                "price merely because a target is missing. Keep summary under 80 "
+                "words and cite the evidence behind the target. supporting_quote "
+                "must be a short verbatim excerpt from the supplied analysis that "
+                "contains both the exact numeric target and its price context; use "
+                "null when no such excerpt exists.",
+            ),
+            (
+                "human",
+                f"""Ticker: {ticker}
 Analysis date: {analysis_date}
-Current reference price: {current_price if current_price is not None else 'unknown'}
+Verified reference price: {current_price if current_price is not None else "unknown"}
 Decision: {decision}
 
-Portfolio decision summary:
+Portfolio Manager decision:
 {decision_text}
 
-Market summary:
+Market evidence:
 {market_text}
 
-Social summary:
-{social_text}
-
-News summary:
-{news_text}
-
-Fundamentals summary:
+Fundamental evidence:
 {fundamentals_text}
 
-Trader plan summary:
+News evidence:
+{news_text}
+
+Sentiment evidence:
+{social_text}
+
+Trader plan:
 {trader_text}
 
-Return strict JSON only.""",
-        ),
-    ]
-
-    try:
-        response = llm.invoke(messages)
-        payload = parse_json_response(extract_content_string(response.content) or "")
-    except Exception:
-        payload = None
-
-    price_target = None
-    confidence_score = 50
-    horizon = "12 months"
-    summary = "Target estimate unavailable."
+Fill only metrics supported by this evidence. Return strict JSON only.""",
+            ),
+        ]
+        try:
+            response = llm.invoke(messages)
+            payload = parse_json_response(extract_content_string(response.content) or "")
+        except Exception:
+            payload = None
 
     if payload:
-        raw_target = payload.get("price_target")
-        if isinstance(raw_target, (int, float)):
-            price_target = round(float(raw_target), 2)
-        elif isinstance(raw_target, str):
-            match = re.search(r"-?\d+(?:\.\d+)?", raw_target.replace(",", ""))
-            if match:
-                price_target = round(float(match.group(0)), 2)
+        if price_target is None:
+            raw_target = payload.get("price_target")
+            parsed_target = None
+            if isinstance(raw_target, (int, float)) and not isinstance(raw_target, bool):
+                parsed_target = float(raw_target)
+            elif isinstance(raw_target, str):
+                numeric_target = re.fullmatch(
+                    r"\$?\s*(-?\d[\d,]*(?:\.\d+)?)\s*(?:[A-Z]{3})?",
+                    raw_target.strip(),
+                    re.IGNORECASE,
+                )
+                if numeric_target:
+                    parsed_target = float(numeric_target.group(1).replace(",", ""))
+            if (
+                parsed_target is not None
+                and math.isfinite(parsed_target)
+                and parsed_target > 0
+                and _fallback_target_has_provenance(
+                    parsed_target,
+                    payload.get("supporting_quote"),
+                    evidence_text,
+                )
+            ):
+                price_target = round(parsed_target, 2)
 
-        raw_confidence = payload.get("confidence_score")
-        if isinstance(raw_confidence, (int, float)):
-            confidence_score = int(round(float(raw_confidence)))
-        elif isinstance(raw_confidence, str):
-            match = re.search(r"\d+", raw_confidence)
-            if match:
-                confidence_score = int(match.group(0))
+        if confidence_score is None:
+            raw_confidence = payload.get("confidence_score")
+            parsed_confidence = None
+            if isinstance(raw_confidence, (int, float)) and not isinstance(
+                raw_confidence, bool
+            ):
+                numeric_confidence = float(raw_confidence)
+                if math.isfinite(numeric_confidence):
+                    parsed_confidence = int(round(numeric_confidence))
+            elif isinstance(raw_confidence, str):
+                numeric_confidence = re.fullmatch(
+                    r"\s*(\d{1,3})(?:\s*/\s*100|\s*%)?\s*",
+                    raw_confidence,
+                )
+                if numeric_confidence:
+                    parsed_confidence = int(numeric_confidence.group(1))
+            if parsed_confidence is not None and 0 <= parsed_confidence <= 100:
+                confidence_score = parsed_confidence
 
-        horizon = str(payload.get("horizon") or horizon).strip()
-        summary = str(payload.get("summary") or summary).strip()
+        if target_horizon is None:
+            fallback_horizon = str(payload.get("horizon") or "").strip()
+            target_horizon = fallback_horizon or None
 
-    confidence_score = max(0, min(100, confidence_score))
+        if target_summary is None:
+            fallback_summary = str(payload.get("summary") or "").strip()
+            target_summary = fallback_summary or None
+
+    normalized_decision = (decision or "").strip().lower()
+    if current_price is not None and price_target is not None:
+        contradicts_decision = (
+            normalized_decision in {"buy", "overweight"}
+            and price_target <= current_price
+        ) or (
+            normalized_decision in {"sell", "underweight"}
+            and price_target >= current_price
+        )
+        if contradicts_decision:
+            price_target = None
 
     if price_target is None:
-        price_target = current_price
+        confidence_score = None
+        target_horizon = None
+        target_summary = None
 
     return {
-        "reference_price": current_price,
         "price_target": price_target,
         "confidence_score": confidence_score,
-        "target_horizon": horizon,
-        "target_summary": summary,
+        "target_horizon": target_horizon,
+        "target_summary": target_summary,
+        "reference_price": current_price,
     }
 
 
@@ -1262,7 +1459,7 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
         "",
         "## Batch Summary",
         "",
-        "| Ticker | Decision | Price Target | Target Gap | Confidence | Status | Default Results |",
+        "| Ticker | Decision | Price Target | Target Gap | Model confidence (uncalibrated) | Status | Default Results |",
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
 
@@ -1293,12 +1490,12 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
                 f"## {result['ticker']}",
                 "",
                 f"Analysis Date: {result['analysis_date']}",
-                f"Average Price Target: {format_price_target(result.get('price_target'))}",
+                f"Price Target: {format_price_target(result.get('price_target'))}",
                 f"Reference Price: {format_price_target(result.get('reference_price'))}",
                 f"Target Gap: {format_target_gap_percent(result.get('reference_price'), result.get('price_target'))}",
-                f"Confidence: {result.get('confidence_score', '-')}/100"
+                f"Model confidence (uncalibrated): {result.get('confidence_score', '-')}/100"
                 if result.get("confidence_score") is not None
-                else "Confidence: -",
+                else "Model confidence (uncalibrated): -",
                 f"Horizon: {result.get('target_horizon') or '-'}",
             ]
         )
@@ -1355,15 +1552,12 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     """Build an HTML version of the consolidated report."""
     generated_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     completed_results = [result for result in analysis_results if not result.get("error")]
-    avg_target = (
-        round(
-            sum(result.get("price_target", 0) for result in completed_results if result.get("price_target") is not None)
-            / max(1, len([result for result in completed_results if result.get("price_target") is not None])),
-            2,
-        )
-        if any(result.get("price_target") is not None for result in completed_results)
-        else None
-    )
+    targets = [
+        result["price_target"]
+        for result in completed_results
+        if result.get("price_target") is not None
+    ]
+    avg_target = round(sum(targets) / len(targets), 2) if targets else None
 
     def decision_kind(decision: str | None) -> str:
         text = (decision or "").lower()
@@ -1475,10 +1669,10 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             "</div>"
             f"<p class='meta-line'>Analysis Date: {escape(result['analysis_date'])} · Horizon: {escape(result.get('target_horizon') or '-')} · Results: <code>{escape(result['results_dir'])}</code></p>"
             "<div class='metric-ribbon'>"
-            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('target')}</span><div><span class='metric-label'>Average Price Target</span><strong>{escape(format_price_target(result.get('price_target')))}</strong></div></article>"
+            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('target')}</span><div><span class='metric-label'>Price Target</span><strong>{escape(format_price_target(result.get('price_target')))}</strong></div></article>"
             f"<article class='metric-card'><span class='metric-icon'>{metric_icon('reference')}</span><div><span class='metric-label'>Reference Price</span><strong>{escape(reference_price)}</strong></div></article>"
             f"<article class='metric-card'><span class='metric-icon'>{metric_icon('delta')}</span><div><span class='metric-label'>Target Gap</span><strong>{escape(delta_label)}</strong></div></article>"
-            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('confidence')}</span><div><span class='metric-label'>Confidence</span><strong>{escape(str(confidence_value) + '/100' if confidence_value is not None else '-')}</strong></div></article>"
+            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('confidence')}</span><div><span class='metric-label'>Model confidence (uncalibrated)</span><strong>{escape(str(confidence_value) + '/100' if confidence_value is not None else '-')}</strong></div></article>"
             "</div>"
             "<div class='confidence-strip'>"
             f"<div class='confidence-bar'><span style='width:{confidence_width}%'></span></div>"
@@ -1874,7 +2068,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             <th>Decision</th>
             <th>Price Target</th>
             <th>Target Gap</th>
-            <th>Confidence</th>
+            <th>Model confidence (uncalibrated)</th>
             <th>Status</th>
             <th>Default Results</th>
           </tr>
@@ -2215,26 +2409,14 @@ def run_single_analysis(
         )
         update_display(layout, spinner_text, stats_handler=stats_handler, start_time=start_time)
 
-        # Initialize state and get graph args with callbacks.
-        # Resolve the instrument identity once here so all agents anchor to
-        # the real company (#814); the CLI builds state directly rather than
-        # going through propagate(), so this must happen on the CLI path too.
-        instrument_context = graph.resolve_instrument_context(
-            ticker, run_selections["asset_type"]
-        )
-        init_agent_state = graph.propagator.create_initial_state(
+        # Stream the analysis
+        trace = []
+        for chunk in graph.stream(
             ticker,
             run_selections["analysis_date"],
             asset_type=run_selections["asset_type"],
-            instrument_context=instrument_context,
-        )
-        # Pass callbacks to graph config for tool execution tracking
-        # (LLM tracking is handled separately via LLM constructor)
-        args = graph.propagator.get_graph_args(callbacks=[stats_handler])
-
-        # Stream the analysis
-        trace = []
-        for chunk in graph.graph.stream(init_agent_state, **args):
+            callbacks=[stats_handler],
+        ):
             # Process all messages in chunk, deduplicating by message ID
             for message in chunk.get("messages", []):
                 msg_id = getattr(message, "id", None)

@@ -1,8 +1,41 @@
 from cli.main import (
+    build_consolidated_report,
     build_consolidated_report_html,
     bullet_markdown_to_html,
     fallback_bullet_summary,
 )
+
+
+def test_consolidated_reports_mark_uncalibrated_confidence_and_missing_target_unavailable():
+    result = {
+        "ticker": "PENG",
+        "analysis_date": "2026-07-19",
+        "decision": "Hold",
+        "price_target": None,
+        "reference_price": None,
+        "confidence_score": None,
+        "target_horizon": None,
+        "target_summary": None,
+        "results_dir": "/tmp/peng",
+        "final_state": {
+            "final_trade_decision": "Hold.",
+            "market_report": "Market report.",
+            "sentiment_report": "Social report.",
+            "news_report": "News report.",
+            "fundamentals_report": "Fundamentals report.",
+            "trader_investment_plan": "Trader plan.",
+        },
+    }
+
+    markdown = build_consolidated_report([result], "2026-07-19")
+    html = build_consolidated_report_html([result], "2026-07-19")
+
+    assert "Model confidence (uncalibrated)" in markdown
+    assert "| PENG | Hold | - | - | - |" in markdown
+    assert "Model confidence (uncalibrated)" in html
+    assert "Average target across completed runs: -" in html
+    assert "Average Price Target" not in html
+    assert "<span class='metric-label'>Price Target</span>" in html
 
 
 def test_consolidated_html_summary_renders_markdown_control_tokens():

@@ -56,6 +56,30 @@ def test_int_coercion(monkeypatch):
     assert isinstance(dc.DEFAULT_CONFIG["max_risk_discuss_rounds"], int)
 
 
+def test_outcome_holding_days_env_accepts_positive_integer(monkeypatch):
+    dc = _reload_with_env(
+        monkeypatch,
+        TRADINGAGENTS_OUTCOME_HOLDING_DAYS="7",
+    )
+    assert dc.DEFAULT_CONFIG["outcome_holding_days"] == 7
+    assert isinstance(dc.DEFAULT_CONFIG["outcome_holding_days"], int)
+
+
+@pytest.mark.parametrize("raw", ["0", "-2", "not-a-number"])
+def test_outcome_holding_days_env_rejects_invalid_values(monkeypatch, raw):
+    monkeypatch.setenv("TRADINGAGENTS_OUTCOME_HOLDING_DAYS", raw)
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Invalid value for TRADINGAGENTS_OUTCOME_HOLDING_DAYS: "
+            "outcome_holding_days must be a positive integer"
+        ),
+    ):
+        importlib.reload(default_config_module)
+    monkeypatch.delenv("TRADINGAGENTS_OUTCOME_HOLDING_DAYS", raising=False)
+    importlib.reload(default_config_module)
+
+
 @pytest.mark.parametrize(
     "raw,expected",
     [

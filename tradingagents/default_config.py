@@ -17,6 +17,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_MAX_RISK_ROUNDS":      "max_risk_discuss_rounds",
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
+    "TRADINGAGENTS_OUTCOME_HOLDING_DAYS": "outcome_holding_days",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
     "TRADINGAGENTS_LLM_MAX_RETRIES":      "llm_max_retries",
     # Provider-specific reasoning/thinking knobs (None = each provider's own
@@ -55,6 +56,25 @@ def _coerce(value: str, reference):
     return value
 
 
+def validate_outcome_holding_days(value) -> int:
+    """Return a positive integer outcome horizon or raise a clear error."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(
+            f"outcome_holding_days must be a positive integer, got {value!r}"
+        )
+    try:
+        holding_days = int(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"outcome_holding_days must be a positive integer, got {value!r}"
+        ) from exc
+    if holding_days <= 0:
+        raise ValueError(
+            f"outcome_holding_days must be a positive integer, got {value!r}"
+        )
+    return holding_days
+
+
 def _apply_env_overrides(config: dict) -> dict:
     """Apply TRADINGAGENTS_* env vars to the config dict in-place."""
     for env_var, key in _ENV_OVERRIDES.items():
@@ -62,7 +82,10 @@ def _apply_env_overrides(config: dict) -> dict:
         if raw is None or raw == "":
             continue
         try:
-            config[key] = _coerce(raw, config.get(key))
+            if key == "outcome_holding_days":
+                config[key] = validate_outcome_holding_days(raw)
+            else:
+                config[key] = _coerce(raw, config.get(key))
         except ValueError as exc:
             raise ValueError(f"Invalid value for {env_var}: {exc}") from exc
     return config
@@ -148,13 +171,15 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "tool_vendors": {
         # Example: "get_stock_data": "alpha_vantage",  # Override category default
     },
-    # Benchmark for alpha calculation in the reflection layer.
+    # Benchmark for excess-return calculation in the reflection layer.
     # ``benchmark_ticker`` (when set) overrides the suffix map for all
     # tickers; leave it None to use ``benchmark_map`` for auto-detection
     # based on the ticker's exchange suffix. SPY remains the US default
-    # so the reflection label keeps reading "Alpha vs SPY" for US tickers
+    # so the reflection label keeps reading "Excess return vs SPY" for US tickers
     # while non-US tickers get their regional index automatically.
     "benchmark_ticker": None,
+    # Number of common stock/benchmark sessions in a realized outcome window.
+    "outcome_holding_days": 5,
     "benchmark_map": {
         ".NS":  "^NSEI",       # NSE India (Nifty 50)
         ".BO":  "^BSESN",      # BSE India (Sensex)

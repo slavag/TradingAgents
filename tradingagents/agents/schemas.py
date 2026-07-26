@@ -215,16 +215,42 @@ class PortfolioDecision(BaseModel):
     )
     price_target: float | None = Field(
         default=None,
-        description="Optional target price in the instrument's quote currency.",
+        description=(
+            "Central-case price target in the instrument's quote currency at the "
+            "stated time horizon. Provide it whenever the debate contains a "
+            "verified reference price and evidence-backed valuation, support, or "
+            "resistance levels; use null only when the available evidence cannot "
+            "support a numeric target."
+        ),
     )
     time_horizon: str | None = Field(
         default=None,
-        description="Optional recommended holding period, e.g. '3-6 months'.",
+        description=(
+            "Time horizon for the central-case price target, e.g. '3-6 months'. "
+            "Provide it whenever a price target is provided."
+        ),
+    )
+    confidence_score: int | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description=(
+            "Model-rated evidence strength for the recommendation and target, "
+            "from 0 to 100. This is an uncalibrated conviction score, not a "
+            "statistical probability. Provide it whenever a target is provided."
+        ),
+    )
+    target_summary: str | None = Field(
+        default=None,
+        description=(
+            "One or two concise sentences identifying the evidence and quoted "
+            "levels that support the price target and confidence score."
+        ),
     )
 
-    @field_validator("price_target", mode="before")
+    @field_validator("price_target", "confidence_score", mode="before")
     @classmethod
-    def _nullish_float_to_none(cls, v):
+    def _nullish_numeric_to_none(cls, v):
         return _coerce_optional_float(v)
 
 
@@ -247,6 +273,10 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         parts.extend(["", f"**Price Target**: {decision.price_target}"])
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
+    if decision.confidence_score is not None:
+        parts.extend(["", f"**Decision Confidence**: {decision.confidence_score}/100"])
+    if decision.target_summary:
+        parts.extend(["", f"**Target Rationale**: {decision.target_summary}"])
     return "\n".join(parts)
 
 

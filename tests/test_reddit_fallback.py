@@ -10,6 +10,7 @@ from urllib.error import HTTPError
 import pytest
 
 from tradingagents.dataflows import reddit
+from tradingagents.dataflows.reddit import fetch_reddit_posts
 
 _SAMPLE_ATOM = """<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
@@ -212,3 +213,16 @@ class TestCryptoSearchTerm:
 
     def test_equity_passes_through(self):
         assert self._captured_ticker("NVDA") == "NVDA"
+
+
+@pytest.mark.unit
+def test_historical_reddit_is_unavailable_without_sleep_or_network(monkeypatch):
+    def fail_network(*args, **kwargs):
+        raise AssertionError("network must not be called")
+
+    monkeypatch.setattr("tradingagents.dataflows.reddit._fetch_subreddit", fail_network)
+    result = fetch_reddit_posts(
+        "NVDA", as_of_date="2020-01-02", inter_request_delay=0
+    )
+    assert result.startswith("DATA_UNAVAILABLE:")
+    assert "Reddit" in result

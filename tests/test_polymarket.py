@@ -14,6 +14,9 @@ import tradingagents.dataflows.config as config_module
 import tradingagents.default_config as default_config
 from tradingagents.dataflows import interface, polymarket
 from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.polymarket import get_prediction_markets
+from tradingagents.dataflows.temporal import use_analysis_context
+from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 
 def _market(question, prob, *, volume, end_date, closed=False, wk=None):
@@ -123,6 +126,50 @@ class PolymarketRoutingTests(unittest.TestCase):
         ):
             out = interface.route_to_vendor("get_prediction_markets", "fed", 5)
         self.assertEqual(out, "POLY_OK")
+
+
+@pytest.mark.unit
+def test_historical_polymarket_uses_request_context(monkeypatch):
+    def fail_network(*args, **kwargs):
+        raise AssertionError("network must not be called")
+
+    monkeypatch.setattr("tradingagents.dataflows.polymarket._request", fail_network)
+    with use_analysis_context("2020-01-02"):
+        result = get_prediction_markets("recession")
+    assert result.startswith("DATA_UNAVAILABLE:")
+    assert "Polymarket" in result
+
+
+@pytest.mark.unit
+def test_historical_production_graph_execution_blocks_polymarket_requests(monkeypatch):
+    """The production graph runner must establish the temporal request scope."""
+    class PolymarketCallingGraph:
+        def invoke(self, initial_state, **kwargs):
+            return {
+                "final_trade_decision": "Buy",
+                "polymarket": get_prediction_markets("recession"),
+            }
+
+    runner = object.__new__(TradingAgentsGraph)
+    runner.memory_log = mock.MagicMock()
+    runner.memory_log.get_past_context.return_value = ""
+    runner.resolve_instrument_context = mock.MagicMock(return_value=None)
+    runner.propagator = mock.MagicMock()
+    runner.propagator.create_initial_state.return_value = {}
+    runner.propagator.get_graph_args.return_value = {}
+    runner.config = {}
+    runner.debug = False
+    runner.graph = PolymarketCallingGraph()
+    runner._log_state = mock.MagicMock()
+    runner.process_signal = mock.MagicMock(return_value="Buy")
+
+    def fail_network(*args, **kwargs):
+        raise AssertionError("network must not be called")
+
+    monkeypatch.setattr("tradingagents.dataflows.polymarket._request", fail_network)
+    final_state, _ = TradingAgentsGraph._run_graph(runner, "NVDA", "2020-01-02")
+
+    assert final_state["polymarket"].startswith("DATA_UNAVAILABLE:")
 
 
 if __name__ == "__main__":

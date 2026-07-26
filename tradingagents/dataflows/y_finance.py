@@ -13,6 +13,7 @@ from .stockstats_utils import (
     yf_retry,
 )
 from .symbol_utils import NoMarketDataError, normalize_symbol
+from .temporal import historical_unavailable
 
 
 def get_YFin_data_online(
@@ -273,9 +274,12 @@ def get_stockstats_indicator(
 
 def get_fundamentals(
     ticker: Annotated[str, "ticker symbol of the company"],
-    curr_date: Annotated[str, "current date (not used for yfinance)"] = None
+    curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None,
 ):
     """Get company fundamentals overview from yfinance."""
+    unavailable = historical_unavailable("Yahoo Finance fundamentals", curr_date)
+    if unavailable:
+        return unavailable
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)
@@ -344,6 +348,9 @@ def get_balance_sheet(
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None
 ):
     """Get balance sheet data from yfinance."""
+    unavailable = historical_unavailable("Yahoo Finance balance sheets", curr_date)
+    if unavailable:
+        return unavailable
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)
@@ -379,6 +386,9 @@ def get_cashflow(
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None
 ):
     """Get cash flow data from yfinance."""
+    unavailable = historical_unavailable("Yahoo Finance cash flow statements", curr_date)
+    if unavailable:
+        return unavailable
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)
@@ -414,6 +424,9 @@ def get_income_statement(
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None
 ):
     """Get income statement data from yfinance."""
+    unavailable = historical_unavailable("Yahoo Finance income statements", curr_date)
+    if unavailable:
+        return unavailable
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)
@@ -447,6 +460,9 @@ def get_insider_transactions(
     ticker: Annotated[str, "ticker symbol of the company"]
 ):
     """Get insider transactions data from yfinance."""
+    unavailable = historical_unavailable("Yahoo Finance insider transactions")
+    if unavailable:
+        return unavailable
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)

@@ -39,6 +39,7 @@ from tradingagents.web.speaking_sources import (
 
 logger = logging.getLogger("tradingagents.web.service")
 
+
 RESULTS_ROOT = Path(DEFAULT_CONFIG["results_dir"]).resolve()
 MYAGENT_SCRIPT = Path(
     "/Users/slava/Documents/Development/private/investment/MyAgent/social_topn_aw_stwt_only_with_ta_cli.py"
@@ -949,10 +950,14 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     config=config,
                     callbacks=[stats_handler],
                 )
-                init_state = graph.propagator.create_initial_state(ticker, analysis_date)
-                args = graph.propagator.get_graph_args(callbacks=[stats_handler])
+                asset_type = "stock"
                 trace = []
-                for chunk in graph.graph.stream(init_state, **args):
+                for chunk in graph.stream(
+                    ticker,
+                    analysis_date,
+                    asset_type=asset_type,
+                    callbacks=[stats_handler],
+                ):
                     messages = chunk.get("messages") or []
                     if messages:
                         tracker.process_message(messages[-1])

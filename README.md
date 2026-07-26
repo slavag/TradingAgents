@@ -327,7 +327,7 @@ TradingAgents persists two kinds of state across runs.
 
 ### Decision log
 
-The decision log is always on. Each completed run appends its decision to `~/.tradingagents/memory/trading_memory.md`. On the next run for the same ticker, TradingAgents fetches the realised return (raw and alpha vs SPY), generates a one-paragraph reflection, and injects the most recent same-ticker decisions plus recent cross-ticker lessons into the Portfolio Manager prompt, so each analysis carries forward what worked and what didn't.
+The decision log is always on. Each completed run appends its decision to `~/.tradingagents/memory/trading_memory.md`. On the next run for the same ticker, TradingAgents fetches the realised gross raw return and excess return versus the configured benchmark, generates a one-paragraph reflection, and injects the most recent same-ticker decisions plus recent cross-ticker lessons into the Portfolio Manager prompt, so each analysis carries forward what worked and what didn't.
 
 Override the path with `TRADINGAGENTS_MEMORY_LOG_PATH`.
 
@@ -349,13 +349,24 @@ ta = TradingAgentsGraph(config=config)
 _, decision = ta.propagate("NVDA", "2026-01-15")
 ```
 
+## Historical analysis boundaries
+
+When you supply an analysis date, dated news, OHLCV, technical indicators, and FRED data vintages use that requested cutoff. Memory for any supplied analysis date, including today, excludes same-day, future, and malformed entries.
+
+StockTwits, Reddit, and Polymarket are unavailable historically because their integrations do not provide point-in-time archives. Current company overviews, insider feeds, and financial statements without public publication timestamps are also unavailable for historical analysis; a fiscal period alone is not proof that the information was public by the cutoff.
+
+Deferred outcomes model an executable signal: they enter at the next common trading session's adjusted open for the stock and benchmark, then exit at the adjusted close after the configured common-session horizon. Their benchmark difference is gross excess return before costs, not risk-adjusted alpha.
+
+The displayed model confidence is an uncalibrated evidence-strength score, not a statistical probability. It is emitted with an evidence-grounded target and
+remains unavailable when the analysis cannot support one.
+
 ## Reproducibility
 
 TradingAgents is LLM-driven, so two runs of the same ticker and date can differ. This is expected for a research tool built on language models, not a defect. The variation comes from a few distinct sources, and it helps to separate them.
 
 Language model sampling is non-deterministic. Even at a fixed temperature, providers do not guarantee byte-identical output across calls, and reasoning models (the default GPT-5.x family, and any thinking-mode model) vary the most because their internal reasoning is itself sampled.
 
-Live data moves. News, StockTwits, and Reddit return different content as time passes, so a run today sees different inputs than a run last week even for the same historical trade date. Pin the analysis date to hold the price and indicator window fixed, but the social and news sources still reflect "now".
+Historical social and prediction sources without point-in-time archives are unavailable. Dated news is filtered to the requested cutoff. Live runs remain variable. Current data changes over time.
 
 To reduce variation you can lower the sampling temperature. Set `temperature` in your config (or `TRADINGAGENTS_TEMPERATURE` in `.env`); lower values make models that honor it more repeatable. The current curated models are reasoning-first and largely ignore temperature, so for tighter reproducibility use a non-reasoning model, which you can set explicitly via the Custom model ID option.
 

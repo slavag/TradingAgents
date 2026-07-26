@@ -150,6 +150,20 @@ class FredFormattingTests(unittest.TestCase):
         self.assertEqual(obs_params["observation_end"], "2025-09-30")
         self.assertEqual(obs_params["observation_start"], "2025-07-02")  # 90d back
 
+    def test_observations_request_vintage_at_cutoff(self):
+        calls = []
+
+        def _capture(path, params):
+            calls.append((path, params.copy()))
+            return _META if path == "series" else _OBS
+
+        with mock.patch.object(fred, "_request", side_effect=_capture):
+            fred.get_macro_data("cpi", "2020-01-31")
+
+        params = next(params for path, params in calls if path == "series/observations")
+        self.assertEqual(params["realtime_start"], "2020-01-31")
+        self.assertEqual(params["realtime_end"], "2020-01-31")
+
 
 @pytest.mark.unit
 class FredRoutingTests(unittest.TestCase):

@@ -1,4 +1,5 @@
 from .alpha_vantage_common import _make_api_request, format_datetime_for_api
+from .temporal import historical_unavailable
 
 
 def get_news(ticker, start_date, end_date) -> dict[str, str] | str:
@@ -64,6 +65,10 @@ def get_insider_transactions(symbol: str) -> dict[str, str] | str:
     Returns:
         Dictionary containing insider transaction data or JSON string.
     """
+
+    unavailable = historical_unavailable("Alpha Vantage insider transactions")
+    if unavailable:
+        return unavailable
 
     params = {
         "symbol": symbol,
