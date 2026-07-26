@@ -607,70 +607,47 @@ git commit -m "fix: measure executable benchmark-relative outcomes"
 
 ---
 
-### Task 6: Remove fabricated target and confidence fallbacks
+### Task 6: Make target and confidence metrics evidence-grounded
 
 **Files:**
 - Modify: `cli/main.py`
+- Modify: `tradingagents/agents/schemas.py`
+- Modify: `tradingagents/agents/managers/portfolio_manager.py`
 - Create: `tests/test_target_profile.py`
+- Modify: `tests/test_structured_agents.py`
+- Modify: `tests/test_memory_log.py`
 - Modify: `tests/test_consolidated_report_formatting.py`
 
 **Interfaces:**
-- `estimate_target_profile` deterministically extracts only an explicit Portfolio Manager target and horizon.
-- `confidence_score` is always `None` until empirical calibration exists.
+- `PortfolioDecision` carries an evidence-grounded central-case target, horizon, uncalibrated evidence-strength score, and target rationale.
+- `estimate_target_profile` extracts structured fields first and invokes the report model only when a provider or older free-text decision omitted metrics.
+- Invalid, non-positive, out-of-range, or rating-direction-inconsistent fallback values remain unavailable.
 - `format_price_target(value, currency=None)` omits a currency prefix when currency is unknown.
 
 - [ ] **Step 1: Add failing target-integrity tests**
 
-```python
-def test_missing_target_and_confidence_remain_none():
-    final_state = {"final_trade_decision": "**Rating**: Hold\n\n**Executive Summary**: Wait."}
-    profile = estimate_target_profile(None, "NVDA", "2026-07-20", final_state, "Hold")
-    assert profile["price_target"] is None
-    assert profile["confidence_score"] is None
+Cover direct extraction, a SPAIF-shaped Sell decision whose report cites
+`1.56` and `2.05-2.17` but omits structured metrics, provider null sentinels,
+invalid fallback values, and the per-stock `Price Target` label.
 
+- [ ] **Step 2: Add structured Portfolio Manager metrics**
 
-def test_explicit_structured_target_is_extracted_without_llm_call():
-    llm = MagicMock()
-    final_state = {
-        "final_trade_decision": (
-            "**Rating**: Buy\n\n**Price Target**: 145.5\n\n**Time Horizon**: 3 months"
-        )
-    }
-    profile = estimate_target_profile(llm, "NVDA", "2026-07-20", final_state, "Buy")
-    assert profile["price_target"] == 145.5
-    assert profile["target_horizon"] == "3 months"
-    assert profile["confidence_score"] is None
-    llm.invoke.assert_not_called()
+Extend the schema and renderer with `confidence_score` and `target_summary`.
+Strengthen the target and horizon descriptions and tell the Portfolio Manager
+to provide decision-consistent metrics whenever verified price evidence exists.
 
+- [ ] **Step 3: Add the validated report fallback**
 
-def test_unknown_currency_does_not_render_usd_symbol():
-    assert format_price_target(145.5) == "145.50"
-    assert format_price_target(145.5, currency="USD") == "$145.50"
-```
+Parse the structured markdown first. If metrics are missing, ask the report
+model for strict JSON grounded in the completed decision and analyst reports.
+Require a short verbatim `supporting_quote` from that supplied evidence which
+contains the exact numeric price level and its price context. Reject
+non-positive targets, confidence outside `0..100`, non-finite values, uncited
+targets, and targets that contradict the rating direction. Clear the rest of
+the target profile when no target survives validation. Never substitute the
+reference price or a default confidence.
 
-- [ ] **Step 2: Run and verify the old fallback and LLM call fail the tests**
-
-Run: `/Users/slava/.pyenv/shims/python -m pytest tests/test_target_profile.py tests/test_consolidated_report_formatting.py -q`
-
-Expected: missing values become current price and 50, the LLM is called, and unknown currency renders `$`.
-
-- [ ] **Step 3: Replace probabilistic generation with deterministic extraction**
-
-Extract `**Price Target**` and `**Time Horizon**` from `final_trade_decision` with anchored, case-insensitive regular expressions. Keep `reference_price` extraction from the verified market snapshot. Return this exact shape:
-
-```python
-return {
-    "price_target": price_target,
-    "confidence_score": None,
-    "target_horizon": target_horizon,
-    "target_summary": "Explicit Portfolio Manager target." if price_target is not None else None,
-    "reference_price": current_price,
-}
-```
-
-Update Markdown and HTML headings from `Confidence` to `Model confidence (uncalibrated)`. Render `None` as `-`. Add the optional currency argument to `format_price_target`; use `$` only for `USD`, the ISO code plus a space for other known currencies, and no prefix when unknown.
-
-- [ ] **Step 4: Run report and target tests**
+- [ ] **Step 4: Run report, schema, and web tests**
 
 Run: `/Users/slava/.pyenv/shims/python -m pytest tests/test_target_profile.py tests/test_consolidated_report_formatting.py tests/test_web_service.py -q`
 
@@ -679,8 +656,8 @@ Expected: all selected tests pass.
 - [ ] **Step 5: Commit Task 6**
 
 ```bash
-git add cli/main.py tests/test_target_profile.py tests/test_consolidated_report_formatting.py
-git commit -m "fix: stop presenting invented target confidence"
+git add cli/main.py tradingagents/agents/schemas.py tradingagents/agents/managers/portfolio_manager.py tests/test_target_profile.py tests/test_structured_agents.py tests/test_memory_log.py tests/test_consolidated_report_formatting.py
+git commit -m "fix: restore evidence-grounded decision metrics"
 ```
 
 ---
@@ -863,7 +840,8 @@ def test_readme_documents_historical_data_boundaries():
     assert "Historical analysis boundaries" in readme
     assert "StockTwits, Reddit, and Polymarket are unavailable" in readme
     assert "next common trading session's adjusted open" in readme
-    assert "Model confidence is not a calibrated probability" in readme
+    assert "uncalibrated evidence-strength score" in readme
+    assert "not a statistical probability" in readme
 ```
 
 - [ ] **Step 2: Run and verify the documentation test fails**
@@ -881,7 +859,7 @@ Add a `Historical analysis boundaries` section explaining:
 - Memory is filtered strictly before the analysis date.
 - Deferred outcomes enter at the next common adjusted open and exit after the configured common-session horizon.
 - Benchmark difference is a gross excess return before costs, not risk-adjusted alpha.
-- Model confidence is not a calibrated probability and is omitted until calibration data exists.
+- Model confidence is an uncalibrated evidence-strength score and remains unavailable when no evidence-grounded target can be produced.
 
 - [ ] **Step 4: Run formatting and focused regression suites**
 

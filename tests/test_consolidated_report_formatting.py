@@ -34,6 +34,8 @@ def test_consolidated_reports_mark_uncalibrated_confidence_and_missing_target_un
     assert "| PENG | Hold | - | - | - |" in markdown
     assert "Model confidence (uncalibrated)" in html
     assert "Average target across completed runs: -" in html
+    assert "Average Price Target" not in html
+    assert "<span class='metric-label'>Price Target</span>" in html
 
 
 def test_consolidated_html_summary_renders_markdown_control_tokens():

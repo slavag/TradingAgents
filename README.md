@@ -357,7 +357,8 @@ StockTwits, Reddit, and Polymarket are unavailable historically because their in
 
 Deferred outcomes model an executable signal: they enter at the next common trading session's adjusted open for the stock and benchmark, then exit at the adjusted close after the configured common-session horizon. Their benchmark difference is gross excess return before costs, not risk-adjusted alpha.
 
-Model confidence is not a calibrated probability and is omitted until calibration data exists.
+The displayed model confidence is an uncalibrated evidence-strength score, not a statistical probability. It is emitted with an evidence-grounded target and
+remains unavailable when the analysis cannot support one.
 
 ## Reproducibility
 

@@ -7,7 +7,8 @@ def test_readme_documents_historical_data_boundaries():
     assert "Historical analysis boundaries" in readme
     assert "StockTwits, Reddit, and Polymarket are unavailable" in readme
     assert "next common trading session's adjusted open" in readme
-    assert "Model confidence is not a calibrated probability" in readme
+    assert "uncalibrated evidence-strength score" in readme
+    assert "not a statistical probability" in readme
     assert (
         "Memory for any supplied analysis date, including today, excludes same-day, "
         "future, and malformed entries." in readme

@@ -68,6 +68,8 @@ def create_portfolio_manager(llm):
 - When an adjustment is justified, move at most one tier on the five-tier scale unless the debate identifies a factual thesis invalidation.
 - Do not assume whether the user already owns the instrument. The rating expresses the forward risk/reward view; describe separate actions for existing and prospective positions when relevant.
 - Apply the same rating standard to materially identical evidence across runs.
+- When the supplied analysis contains a verified reference price and usable valuation or technical levels, provide a decision-consistent central-case price target, its time horizon, an uncalibrated evidence-strength score, and a short rationale citing those levels.
+- For Buy/Overweight, the target should normally be above the reference price; for Sell/Underweight, below it. Use null only when the supplied evidence genuinely cannot support a numeric target, never as a shortcut.
 
 Be decisive and ground every conclusion in specific evidence from the analysts.
 

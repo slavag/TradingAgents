@@ -60,13 +60,26 @@ The label remains a gross return because the application does not yet know portf
 
 ## Confidence and Price Targets
 
-The post-processing LLM may still summarize an explicit target already present in the structured Portfolio Manager decision, but it may not manufacture a target or calibrated probability.
+The Portfolio Manager's primary structured decision includes a central-case
+target, horizon, uncalibrated evidence-strength score, and short rationale when
+the supplied analysis contains a verified reference price and usable valuation
+or technical levels. The report layer extracts those fields directly.
+
+Provider fallback and older free-text decisions may omit one or more fields. In
+that case, the existing report model performs a narrowly scoped fallback using
+only the completed analysis. It must cite supplied levels, respect the rating
+direction, and return `null` when the evidence cannot support a target. A
+fallback target is accepted only when the model returns a short verbatim quote
+from the supplied analysis containing that exact numeric price level and its
+price context.
 
 - Missing target becomes `null`, never current price.
 - Missing confidence becomes `null`, never `50`.
-- Display code renders missing values as unavailable.
+- Generated targets that contradict the Buy/Overweight or Sell/Underweight direction are rejected.
+- Confidence, target horizon, and rationale are cleared whenever the target is absent or rejected.
+- Display code renders genuinely missing values as unavailable.
 - Existing numeric fields remain backward compatible for stored results.
-- The label changes from probability-like `Confidence` to `Model confidence (uncalibrated)` until the walk-forward calibration project replaces it with an empirical probability.
+- The label remains `Model confidence (uncalibrated)` because the score describes model-rated evidence strength, not an empirical probability.
 
 The formatter must use the instrument's quote currency when known and otherwise omit a currency symbol. Hard-coded USD formatting is out of scope for this release unless the resolved instrument identity already exposes the currency without another network call.
 
@@ -103,7 +116,7 @@ Tests will be added before each behavior change and will prove:
 - FRED receives the requested vintage boundary.
 - Historical memory excludes later and same-day entries.
 - Outcome returns use next-session open, common dates, and the configured holding horizon.
-- Target and confidence fallbacks remain `None`.
+- Unsupported target and confidence fallbacks remain `None`; supported SPAIF-shaped evidence produces decision-consistent metrics.
 - CLI and web use the shared graph lifecycle.
 - Interrupted streaming does not store a completed decision.
 - Existing live runs and stored result formats remain backward compatible.
