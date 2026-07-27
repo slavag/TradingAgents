@@ -1267,6 +1267,57 @@ def compact_report_text(content, max_chars=280):
     return f"{truncated}..." if truncated else f"{cleaned[:max_chars]}..."
 
 
+def build_tui_result_summary(analysis_results: list[dict]) -> Table:
+    """Build a compact post-run summary for one ticker or a batch."""
+    table = Table(
+        title="Analysis Results",
+        box=box.SIMPLE_HEAD,
+        header_style="bold magenta",
+        show_lines=True,
+        expand=True,
+        padding=(0, 0),
+        pad_edge=False,
+    )
+    table.add_column("Ticker", style="cyan", width=6, overflow="fold")
+    table.add_column("Decision", width=8, overflow="fold")
+    table.add_column("Target", justify="right", width=6, overflow="fold")
+    table.add_column(
+        "Confidence (uncalibrated)",
+        justify="right",
+        ratio=3,
+        overflow="fold",
+    )
+    table.add_column("Horizon", ratio=2, overflow="fold")
+    table.add_column("Outlook", ratio=2, min_width=7, overflow="fold")
+
+    for result in analysis_results:
+        error = result.get("error")
+        failed = error is not None
+        target = result.get("price_target")
+        confidence = result.get("confidence_score")
+        outlook_source = error if failed else result.get("target_summary")
+        outlook_text = "" if outlook_source is None else str(outlook_source)
+        outlook = (
+            compact_report_text(outlook_text, max_chars=160)
+            or outlook_text.strip()
+            or "—"
+        )
+
+        table.add_row(
+            Text(str(result.get("ticker") or "—")),
+            Text(
+                "Failed" if failed else str(result.get("decision") or "—"),
+                style="red" if failed else None,
+            ),
+            Text(format_price_target(target) if target is not None else "—"),
+            Text(f"{confidence}/100" if confidence is not None else "—"),
+            Text(str(result.get("target_horizon") or "—")),
+            Text(outlook),
+        )
+
+    return table
+
+
 def format_target_gap_percent(reference_price, price_target) -> str:
     """Format target gap as a percentage versus the reference price."""
     if reference_price in (None, 0) or price_target is None:
@@ -2642,6 +2693,7 @@ def run_analysis(checkpoint: bool | None = None):
 
     # Post-analysis prompts (outside Live context for clean interaction)
     console.print("\n[bold cyan]Batch Analysis Complete![/bold cyan]\n" if len(tickers) > 1 else "\n[bold cyan]Analysis Complete![/bold cyan]\n")
+    console.print(build_tui_result_summary(analysis_results))
     successful_results = [result for result in analysis_results if result.get("final_state")]
 
     if not successful_results and len(tickers) == 1:
