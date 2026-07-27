@@ -1267,6 +1267,45 @@ def compact_report_text(content, max_chars=280):
     return f"{truncated}..." if truncated else f"{cleaned[:max_chars]}..."
 
 
+def build_tui_result_summary(analysis_results: list[dict]) -> Table:
+    """Build a compact post-run summary for one ticker or a batch."""
+    table = Table(
+        title="Analysis Results",
+        box=box.SIMPLE_HEAD,
+        header_style="bold magenta",
+        show_lines=True,
+        expand=True,
+    )
+    table.add_column("Ticker", style="cyan", no_wrap=True)
+    table.add_column("Decision", no_wrap=True)
+    table.add_column("Target", justify="right", no_wrap=True)
+    table.add_column("Confidence (uncalibrated)", justify="right", no_wrap=True)
+    table.add_column("Horizon", no_wrap=True)
+    table.add_column("Outlook", ratio=2)
+
+    for result in analysis_results:
+        error = result.get("error")
+        failed = error is not None
+        target = result.get("price_target")
+        confidence = result.get("confidence_score")
+        outlook_source = error if failed else result.get("target_summary")
+        outlook = compact_report_text(str(outlook_source or ""), max_chars=160) or "—"
+
+        table.add_row(
+            Text(str(result.get("ticker") or "—")),
+            Text(
+                "Failed" if failed else str(result.get("decision") or "—"),
+                style="red" if failed else None,
+            ),
+            Text(format_price_target(target) if target is not None else "—"),
+            Text(f"{confidence}/100" if confidence is not None else "—"),
+            Text(str(result.get("target_horizon") or "—")),
+            Text(outlook),
+        )
+
+    return table
+
+
 def format_target_gap_percent(reference_price, price_target) -> str:
     """Format target gap as a percentage versus the reference price."""
     if reference_price in (None, 0) or price_target is None:
