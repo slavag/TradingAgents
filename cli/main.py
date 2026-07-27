@@ -2681,6 +2681,7 @@ def run_analysis(checkpoint: bool | None = None):
 
     # Post-analysis prompts (outside Live context for clean interaction)
     console.print("\n[bold cyan]Batch Analysis Complete![/bold cyan]\n" if len(tickers) > 1 else "\n[bold cyan]Analysis Complete![/bold cyan]\n")
+    console.print(build_tui_result_summary(analysis_results))
     successful_results = [result for result in analysis_results if result.get("final_state")]
 
     if not successful_results and len(tickers) == 1:
