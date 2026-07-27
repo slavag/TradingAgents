@@ -5,11 +5,11 @@ from rich.console import Console
 import cli.main as cli_main
 
 
-def render_table(results: list[dict]) -> str:
+def render_table(results: list[dict], *, width: int = 220) -> str:
     output = StringIO()
     console = Console(
         file=output,
-        width=220,
+        width=width,
         color_system=None,
         force_terminal=False,
     )
@@ -89,6 +89,61 @@ def test_tui_result_summary_renders_every_ticker_and_failure():
     assert output.count("BROKEN") == 1
     assert "Failed" in output
     assert "provider unavailable" in output
+
+
+def test_tui_result_summary_preserves_failure_details_at_narrow_widths():
+    failure_token = "ProviderConnectionFailureTokenWithoutAnyBreakCharacters"
+    results = [
+        {
+            "ticker": "BROKEN",
+            "decision": None,
+            "price_target": None,
+            "confidence_score": None,
+            "target_horizon": None,
+            "target_summary": None,
+            "error": RuntimeError(failure_token),
+        }
+    ]
+
+    for width in (60, 80):
+        output = render_table(results, width=width)
+        normalized_output = "".join(output.split())
+
+        for heading in (
+            "Ticker",
+            "Decision",
+            "Target",
+            "Confidence",
+            "(uncalibrated)",
+            "Horizon",
+            "Outlook",
+        ):
+            assert heading in output, (
+                f"{heading} missing at width {width}:\n{output}"
+            )
+        assert failure_token in normalized_output, (
+            f"failure details lost at width {width}:\n{output}"
+        )
+        assert "…" not in output
+
+
+def test_tui_result_summary_renders_falsey_non_string_error():
+    output = render_table(
+        [
+            {
+                "ticker": "BROKEN",
+                "decision": None,
+                "price_target": None,
+                "confidence_score": None,
+                "target_horizon": None,
+                "target_summary": None,
+                "error": False,
+            }
+        ]
+    )
+
+    assert "Failed" in output
+    assert "False" in output
 
 
 def test_run_analysis_prints_summary_before_full_report_prompt(monkeypatch):

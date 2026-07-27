@@ -1275,13 +1275,20 @@ def build_tui_result_summary(analysis_results: list[dict]) -> Table:
         header_style="bold magenta",
         show_lines=True,
         expand=True,
+        padding=(0, 0),
+        pad_edge=False,
     )
-    table.add_column("Ticker", style="cyan", no_wrap=True)
-    table.add_column("Decision", no_wrap=True)
-    table.add_column("Target", justify="right", no_wrap=True)
-    table.add_column("Confidence (uncalibrated)", justify="right", no_wrap=True)
-    table.add_column("Horizon", no_wrap=True)
-    table.add_column("Outlook", ratio=2)
+    table.add_column("Ticker", style="cyan", width=6, overflow="fold")
+    table.add_column("Decision", width=8, overflow="fold")
+    table.add_column("Target", justify="right", width=6, overflow="fold")
+    table.add_column(
+        "Confidence (uncalibrated)",
+        justify="right",
+        ratio=3,
+        overflow="fold",
+    )
+    table.add_column("Horizon", ratio=2, overflow="fold")
+    table.add_column("Outlook", ratio=2, min_width=7, overflow="fold")
 
     for result in analysis_results:
         error = result.get("error")
@@ -1289,7 +1296,12 @@ def build_tui_result_summary(analysis_results: list[dict]) -> Table:
         target = result.get("price_target")
         confidence = result.get("confidence_score")
         outlook_source = error if failed else result.get("target_summary")
-        outlook = compact_report_text(str(outlook_source or ""), max_chars=160) or "—"
+        outlook_text = "" if outlook_source is None else str(outlook_source)
+        outlook = (
+            compact_report_text(outlook_text, max_chars=160)
+            or outlook_text.strip()
+            or "—"
+        )
 
         table.add_row(
             Text(str(result.get("ticker") or "—")),
