@@ -10,7 +10,11 @@ to it.
 
 import pytest
 
-from tradingagents.agents.utils.rating import RATINGS_5_TIER, parse_rating
+from tradingagents.agents.utils.rating import (
+    RATINGS_5_TIER,
+    parse_decision_signal,
+    parse_rating,
+)
 from tradingagents.graph.signal_processing import SignalProcessor
 
 # ---------------------------------------------------------------------------
@@ -84,6 +88,16 @@ class TestSignalProcessor:
         llm.invoke.assert_not_called()
         llm.with_structured_output.assert_not_called()
 
-    def test_default_when_no_rating_present(self):
+    def test_unparseable_final_decision_is_unavailable(self):
         sp = SignalProcessor()
-        assert sp.process_signal("Plain prose without a recommendation.") == "Hold"
+        assert sp.process_signal("Plain prose without a recommendation.") == "Unavailable"
+
+    @pytest.mark.parametrize("status", ["Abstain", "Unavailable"])
+    def test_explicit_non_actionable_status_is_not_hold(self, status):
+        text = f"**Decision Status**: {status}\n\n**Executive Summary**: No trade."
+
+        assert parse_decision_signal(text) == status
+        assert SignalProcessor().process_signal(text) == status
+
+    def test_legacy_labeled_rating_remains_readable(self):
+        assert parse_decision_signal("**Rating**: Sell") == "Sell"

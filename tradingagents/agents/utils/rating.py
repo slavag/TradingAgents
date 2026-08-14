@@ -23,6 +23,24 @@ _RATING_SET = {r.lower() for r in RATINGS_5_TIER}
 # Matches "Rating: X" / "rating - X" / "Rating: **X**" — tolerates markdown
 # bold wrappers and either a colon or hyphen separator.
 _RATING_LABEL_RE = re.compile(r"rating.*?[:\-][\s*]*(\w+)", re.IGNORECASE)
+_STATUS_LABEL_RE = re.compile(
+    r"decision\s+status.*?[:\-][\s*]*(actionable|abstain|unavailable)",
+    re.IGNORECASE,
+)
+
+
+def _extract_rating(text: str) -> str | None:
+    for line in text.splitlines():
+        match = _RATING_LABEL_RE.search(line)
+        if match and match.group(1).lower() in _RATING_SET:
+            return match.group(1).capitalize()
+
+    for line in text.splitlines():
+        for word in line.lower().split():
+            clean = word.strip("*:.,")
+            if clean in _RATING_SET:
+                return clean.capitalize()
+    return None
 
 
 def parse_rating(text: str, default: str = "Hold") -> str:
@@ -34,15 +52,19 @@ def parse_rating(text: str, default: str = "Hold") -> str:
 
     Returns a Title-cased rating string, or ``default`` if no rating word appears.
     """
-    for line in text.splitlines():
-        m = _RATING_LABEL_RE.search(line)
-        if m and m.group(1).lower() in _RATING_SET:
-            return m.group(1).capitalize()
+    return _extract_rating(text) or default
 
-    for line in text.splitlines():
-        for word in line.lower().split():
-            clean = word.strip("*:.,")
-            if clean in _RATING_SET:
-                return clean.capitalize()
 
-    return default
+def parse_decision_signal(text: str) -> str:
+    """Parse a final decision without inventing a neutral Hold fallback."""
+    for line in text.splitlines():
+        match = _STATUS_LABEL_RE.search(line)
+        if not match:
+            continue
+        status = match.group(1).capitalize()
+        if status in {"Abstain", "Unavailable"}:
+            return status
+        return _extract_rating(text) or "Unavailable"
+
+    # Legacy rendered decisions had no status line but did have a rating.
+    return _extract_rating(text) or "Unavailable"

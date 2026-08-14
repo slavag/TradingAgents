@@ -176,14 +176,18 @@ class TestTradingMemoryLogCore:
         logs = [make_log(tmp_path), make_log(tmp_path)]
         logs[0]._log_path.write_text("", encoding="utf-8")
         barrier = threading.Barrier(2)
-        original_parse_rating = memory_module.parse_rating
+        original_parse_signal = memory_module.parse_decision_signal
 
-        def synchronized_parse_rating(decision):
-            rating = original_parse_rating(decision)
+        def synchronized_parse_signal(decision):
+            rating = original_parse_signal(decision)
             barrier.wait(timeout=5)
             return rating
 
-        monkeypatch.setattr(memory_module, "parse_rating", synchronized_parse_rating)
+        monkeypatch.setattr(
+            memory_module,
+            "parse_decision_signal",
+            synchronized_parse_signal,
+        )
         with ThreadPoolExecutor(max_workers=2) as executor:
             futures = [
                 executor.submit(
@@ -363,10 +367,33 @@ class TestTradingMemoryLogCore:
         log.store_decision("AAPL", "2026-01-11", DECISION_OVERWEIGHT)
         assert log.load_entries()[0]["rating"] == "Overweight"
 
-    def test_rating_fallback_hold(self, tmp_path):
+    def test_unparseable_decision_is_unavailable_without_pending_outcome(self, tmp_path):
         log = make_log(tmp_path)
         log.store_decision("MSFT", "2026-01-12", DECISION_NO_RATING)
-        assert log.load_entries()[0]["rating"] == "Hold"
+        entry = log.load_entries()[0]
+        assert entry["rating"] == "Unavailable"
+        assert entry["pending"] is False
+        assert entry["raw"] == "no-outcome"
+
+    @pytest.mark.parametrize("status", ["Abstain", "Unavailable"])
+    def test_non_actionable_decision_is_stored_without_pending_outcome(
+        self,
+        tmp_path,
+        status,
+    ):
+        log = make_log(tmp_path)
+        decision = (
+            f"**Decision Status**: {status}\n\n"
+            "**Executive Summary**: No executable trade."
+        )
+
+        log.store_decision("NVDA", "2026-08-14", decision)
+
+        entry = log.load_entries()[0]
+        assert entry["rating"] == status
+        assert entry["pending"] is False
+        assert entry["raw"] == "no-outcome"
+        assert log.get_pending_entries() == []
 
     def test_rating_priority_over_prose(self, tmp_path):
         """'Rating: X' label wins even when an opposing rating word appears earlier in prose."""

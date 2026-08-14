@@ -8,7 +8,7 @@ from pathlib import Path
 
 from filelock import FileLock
 
-from tradingagents.agents.utils.rating import parse_rating
+from tradingagents.agents.utils.rating import RATINGS_5_TIER, parse_decision_signal
 
 
 class TradingMemoryLog:
@@ -46,15 +46,16 @@ class TradingMemoryLog:
         """Append pending entry at end of propagate(). No LLM call."""
         if not self._log_path:
             return
-        rating = parse_rating(final_trade_decision)
-        tag = f"[{trade_date} | {ticker} | {rating} | pending]"
+        rating = parse_decision_signal(final_trade_decision)
+        outcome_state = "pending" if rating in RATINGS_5_TIER else "no-outcome"
+        tag = f"[{trade_date} | {ticker} | {rating} | {outcome_state}]"
         entry = f"{tag}\n\nDECISION:\n{final_trade_decision}{self._SEPARATOR}"
         with self._file_lock:
             raw = self._read_text_unlocked()
             # The idempotency read and append must be one transaction so
             # simultaneous completion callbacks cannot store duplicates.
             for line in raw.splitlines():
-                if line.startswith(f"[{trade_date} | {ticker} |") and line.endswith("| pending]"):
+                if line.startswith(f"[{trade_date} | {ticker} |") and line.endswith("]"):
                     return
             self._replace_text_atomically(raw + entry)
 
