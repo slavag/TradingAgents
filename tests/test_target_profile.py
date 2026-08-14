@@ -25,12 +25,15 @@ def test_explicit_structured_target_profile_is_extracted_without_fallback():
 
     final_state = {
         "final_trade_decision": (
+            "**Decision Status**: Actionable\n\n"
             "**Rating**: Buy\n\n"
             "**Price Target**: 145.5\n\n"
             "**Time Horizon**: 3 months\n\n"
             "**Decision Confidence**: 78/100\n\n"
-            "**Target Rationale**: Earnings growth supports the target."
-        )
+            "**Target Rationale**: Earnings growth supports the target.\n\n"
+            "**Target Supporting Quote**: Resistance: 145.5"
+        ),
+        "market_report": "Verified close: 125. Resistance: 145.5",
     }
 
     with patch("cli.main.fetch_reference_price", return_value=125.0):
@@ -42,6 +45,39 @@ def test_explicit_structured_target_profile_is_extracted_without_fallback():
     assert profile["target_horizon"] == "3 months"
     assert profile["confidence_score"] == 78
     assert profile["target_summary"] == "Earnings growth supports the target."
+    assert profile["supporting_quote"] == "Resistance: 145.5"
+    assert profile["target_validation_status"] == "Accepted"
+    assert profile["target_rejection_reason"] is None
+
+
+def test_primary_rendered_target_requires_supporting_quote_from_evidence():
+    """Primary markdown must not bypass the same provenance check as fallback JSON."""
+    final_state = {
+        "final_trade_decision": (
+            "**Decision Status**: Actionable\n\n"
+            "**Rating**: Buy\n\n"
+            "**Price Target**: 999\n\n"
+            "**Time Horizon**: 12 months\n\n"
+            "**Decision Confidence**: 90/100\n\n"
+            "**Target Rationale**: Large upside.\n\n"
+            "**Target Supporting Quote**: Price target: 999."
+        ),
+        "market_report": "Verified close: 100. Resistance: 120.",
+    }
+
+    with patch("cli.main.fetch_reference_price", return_value=100.0):
+        profile = estimate_target_profile(
+            None,
+            "TEST",
+            "2026-08-14",
+            final_state,
+            "Buy",
+        )
+
+    assert profile["price_target"] is None
+    assert profile["confidence_score"] is None
+    assert profile["target_rejection_reason"] == "supporting_quote_not_in_evidence"
+    assert profile["target_validation_status"] == "Rejected"
 
 
 def test_missing_structured_metrics_are_estimated_from_existing_analysis():
@@ -84,6 +120,9 @@ def test_missing_structured_metrics_are_estimated_from_existing_analysis():
             "Downside target is the cited 200-day support; zero revenue and "
             "dilution support the Sell rating."
         ),
+        "supporting_quote": "200 SMA: 1.56",
+        "target_validation_status": "Accepted",
+        "target_rejection_reason": None,
         "reference_price": 1.95,
     }
 
@@ -132,6 +171,9 @@ def test_uncited_fallback_target_is_rejected_as_unsupported():
         "confidence_score": None,
         "target_horizon": None,
         "target_summary": None,
+        "supporting_quote": None,
+        "target_validation_status": "Rejected",
+        "target_rejection_reason": "supporting_quote_not_in_evidence",
         "reference_price": 100.0,
     }
 
@@ -163,6 +205,9 @@ def test_non_price_number_near_generic_price_word_is_rejected():
         "confidence_score": None,
         "target_horizon": None,
         "target_summary": None,
+        "supporting_quote": None,
+        "target_validation_status": "Rejected",
+        "target_rejection_reason": "supporting_quote_not_price_context",
         "reference_price": 100.0,
     }
 
@@ -190,6 +235,9 @@ def test_confidence_horizon_and_outlook_are_cleared_without_a_target():
         "confidence_score": None,
         "target_horizon": None,
         "target_summary": None,
+        "supporting_quote": None,
+        "target_validation_status": "Rejected",
+        "target_rejection_reason": "target_bundle_incomplete",
         "reference_price": 100.0,
     }
 
@@ -220,6 +268,9 @@ def test_direction_inconsistent_target_clears_the_entire_profile():
         "confidence_score": None,
         "target_horizon": None,
         "target_summary": None,
+        "supporting_quote": None,
+        "target_validation_status": "Rejected",
+        "target_rejection_reason": "target_direction_conflict",
         "reference_price": 100.0,
     }
 

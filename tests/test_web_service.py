@@ -71,6 +71,32 @@ class _EmptyUnderlyingStreamGraph(TradingAgentsGraph):
 
 
 class WebServiceTests(unittest.TestCase):
+    def test_serialize_result_preserves_target_validation_metadata(self):
+        result = {
+            "ticker": "TEST",
+            "analysis_date": "2026-08-14",
+            "decision": "Buy",
+            "price_target": None,
+            "confidence_score": None,
+            "target_horizon": None,
+            "target_summary": None,
+            "supporting_quote": None,
+            "target_validation_status": "Rejected",
+            "target_rejection_reason": "supporting_quote_not_in_evidence",
+            "results_dir": "/tmp/test",
+            "report_path": "/tmp/test/report.md",
+            "final_state": {},
+        }
+
+        serialized = web_service.serialize_result(result)
+
+        self.assertEqual(serialized["target_validation_status"], "Rejected")
+        self.assertEqual(
+            serialized["target_rejection_reason"],
+            "supporting_quote_not_in_evidence",
+        )
+        self.assertIsNone(serialized["price_target"])
+
     def test_web_graph_config_defaults_to_repeatable_temperature(self):
         config = web_service.build_graph_config({})
 

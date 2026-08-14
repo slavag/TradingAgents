@@ -48,6 +48,16 @@ from cli.utils import (
     select_research_depth,
     select_shallow_thinking_agent,
 )
+from tradingagents.agents.schemas import (
+    DecisionStatus,
+    PortfolioDecisionDraft,
+    PortfolioRating,
+    TargetValidationStatus,
+)
+from tradingagents.agents.utils.decision_integrity import (
+    build_decision_evidence,
+    finalize_portfolio_decision,
+)
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.analyst_execution import (
     AnalystWallTimeTracker,
@@ -858,75 +868,6 @@ def parse_json_response(raw_content: str) -> dict | None:
         return None
 
 
-def _fallback_target_has_provenance(
-    price_target: float,
-    supporting_quote,
-    evidence_text: str,
-) -> bool:
-    """Verify that a fallback target is copied from a cited price-level quote."""
-    if not isinstance(supporting_quote, str):
-        return False
-
-    quote = re.sub(r"\s+", " ", supporting_quote).strip()
-    evidence = re.sub(r"\s+", " ", evidence_text).strip()
-    if not quote or len(quote) > 300 or quote.casefold() not in evidence.casefold():
-        return False
-
-    price_label = (
-        r"(?:price(?:\s+target)?|target(?:\s+price)?|reference\s+price|"
-        r"close|open|high|low|support|resistance|sma|ema|vwma|"
-        r"bollinger(?:\s+(?:middle|upper|lower))?(?:\s+band)?|"
-        r"fair\s+value|valuation|price\s+level|level)"
-    )
-    currency_marker = r"(?:[$€£¥]|\b(?:USD|EUR|GBP|JPY|CAD|AUD|CHF|CNY|HKD)\b)"
-    connector = (
-        r"(?:\s|[:=~≈@()\[\],-]|"
-        r"\b(?:is|at|near|around|of|about|approximately|approx|roughly|"
-        r"estimate|estimated|to)\b)*"
-    )
-
-    cited_numbers = re.finditer(
-        r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?![\w.])",
-        quote,
-    )
-    for cited_match in cited_numbers:
-        try:
-            cited_value = float(cited_match.group(0).replace(",", ""))
-        except ValueError:
-            continue
-        if not math.isclose(
-            cited_value,
-            price_target,
-            rel_tol=1e-9,
-            abs_tol=0.005,
-        ):
-            continue
-
-        following = quote[cited_match.end() : cited_match.end() + 24]
-        if re.match(
-            r"\s*(?:%|percent\b|x\b|shares?\b|units?\b|volume\b|"
-            r"thousand\b|million\b|billion\b|trillion\b|[KMBT]\b)",
-            following,
-            re.IGNORECASE,
-        ):
-            continue
-
-        preceding = quote[max(0, cited_match.start() - 80) : cited_match.start()]
-        follows_price_label = re.search(
-            rf"(?:{price_label}|{currency_marker}){connector}$",
-            preceding,
-            re.IGNORECASE,
-        )
-        precedes_price_label = re.match(
-            rf"{connector}(?:{price_label}|{currency_marker})",
-            following,
-            re.IGNORECASE,
-        )
-        if follows_price_label or precedes_price_label:
-            return True
-    return False
-
-
 def fetch_reference_price(ticker: str, analysis_date: str) -> float | None:
     """Fetch the latest close near the analysis date for target estimation."""
     try:
@@ -952,57 +893,102 @@ def fetch_reference_price(ticker: str, analysis_date: str) -> float | None:
 def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, decision: str):
     """Build decision metrics from the PM output, with an evidence-grounded fallback."""
     current_price = fetch_reference_price(ticker, analysis_date)
-    price_target = None
-    confidence_score = None
-    target_horizon = None
-    target_summary = None
     final_trade_decision = extract_content_string(final_state.get("final_trade_decision")) or ""
+    evidence_text = build_decision_evidence(final_state)
 
-    target_match = re.search(
-        r"(?im)^\s*\*\*price target\*\*\s*:\s*(.+?)\s*$",
-        final_trade_decision,
-    )
-    if target_match:
-        numeric_target = re.fullmatch(
-            r"\$?\s*(-?\d[\d,]*(?:\.\d+)?)\s*(?:USD)?",
-            target_match.group(1).strip(),
-            re.IGNORECASE,
+    rating_by_value = {rating.value.casefold(): rating for rating in PortfolioRating}
+    rating = rating_by_value.get((decision or "").strip().casefold())
+
+    def markdown_field(label_pattern: str) -> str | None:
+        match = re.search(
+            rf"(?im)^\s*\*\*{label_pattern}\*\*\s*:\s*(.+?)\s*$",
+            final_trade_decision,
         )
-        if numeric_target:
-            parsed_target = float(numeric_target.group(1).replace(",", ""))
-            if math.isfinite(parsed_target) and parsed_target > 0:
-                price_target = round(parsed_target, 2)
+        if not match:
+            return None
+        return match.group(1).strip() or None
 
-    horizon_match = re.search(
-        r"(?im)^\s*\*\*time horizon\*\*\s*:\s*(.+?)\s*$",
+    def parse_target(raw_value) -> float | None:
+        if isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
+            parsed = float(raw_value)
+        elif isinstance(raw_value, str):
+            numeric = re.fullmatch(
+                r"\$?\s*(-?\d[\d,]*(?:\.\d+)?)\s*(?:[A-Z]{3})?",
+                raw_value.strip(),
+                re.IGNORECASE,
+            )
+            if not numeric:
+                return None
+            parsed = float(numeric.group(1).replace(",", ""))
+        else:
+            return None
+        return round(parsed, 2) if math.isfinite(parsed) else parsed
+
+    def parse_confidence(raw_value) -> int | None:
+        if isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
+            numeric = float(raw_value)
+            parsed = int(round(numeric)) if math.isfinite(numeric) else None
+        elif isinstance(raw_value, str):
+            numeric = re.fullmatch(
+                r"\s*(\d{1,3})(?:\s*/\s*100|\s*%)?\s*",
+                raw_value,
+            )
+            parsed = int(numeric.group(1)) if numeric else None
+        else:
+            parsed = None
+        return parsed if parsed is not None and 0 <= parsed <= 100 else None
+
+    price_target = parse_target(markdown_field("price target"))
+    target_horizon = markdown_field("time horizon")
+    confidence_score = parse_confidence(
+        markdown_field(r"(?:decision|model)?\s*confidence(?:\s*\(uncalibrated\))?")
+    )
+    target_summary = markdown_field("target rationale")
+    supporting_quote = markdown_field("target supporting quote")
+
+    rejection_match = re.search(
+        r"(?im)^\s*\*\*target validation\*\*\s*:\s*"
+        r"rejected\s*\(([^)]+)\)\s*$",
         final_trade_decision,
     )
-    if horizon_match:
-        target_horizon = horizon_match.group(1).strip() or None
-
-    confidence_match = re.search(
-        r"(?im)^\s*\*\*(?:decision|model)?\s*confidence"
-        r"(?:\s*\(uncalibrated\))?\*\*\s*:\s*"
-        r"(\d{1,3})(?:\s*/\s*100|\s*%)?\s*$",
-        final_trade_decision,
+    prevalidated_rejection = rejection_match.group(1).strip() if rejection_match else None
+    has_explicit_status = bool(
+        re.search(r"(?im)^\s*\*\*decision status\*\*\s*:", final_trade_decision)
     )
-    if confidence_match:
-        parsed_confidence = int(confidence_match.group(1))
-        if 0 <= parsed_confidence <= 100:
-            confidence_score = parsed_confidence
 
-    summary_match = re.search(
-        r"(?im)^\s*\*\*target rationale\*\*\s*:\s*(.+?)\s*$",
-        final_trade_decision,
+    if rating is None:
+        return {
+            "price_target": None,
+            "confidence_score": None,
+            "target_horizon": None,
+            "target_summary": None,
+            "supporting_quote": None,
+            "target_validation_status": TargetValidationStatus.NOT_PROPOSED.value,
+            "target_rejection_reason": None,
+            "reference_price": current_price,
+        }
+
+    if prevalidated_rejection:
+        return {
+            "price_target": None,
+            "confidence_score": None,
+            "target_horizon": None,
+            "target_summary": None,
+            "supporting_quote": None,
+            "target_validation_status": TargetValidationStatus.REJECTED.value,
+            "target_rejection_reason": prevalidated_rejection,
+            "reference_price": current_price,
+        }
+
+    proposed_fields = (
+        price_target,
+        confidence_score,
+        target_horizon,
+        target_summary,
+        supporting_quote,
     )
-    if summary_match:
-        target_summary = summary_match.group(1).strip() or None
-
-    needs_fallback = (
-        price_target is None
-        or confidence_score is None
-        or target_horizon is None
-        or target_summary is None
+    needs_fallback = not has_explicit_status and not all(
+        value is not None for value in proposed_fields
     )
     payload = None
     if llm is not None and needs_fallback:
@@ -1019,16 +1005,6 @@ def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, d
         )
         trader_text = compact_report_text(
             final_state.get("trader_investment_plan"), max_chars=1000
-        )
-        evidence_text = "\n".join(
-            (
-                decision_text,
-                market_text,
-                fundamentals_text,
-                news_text,
-                social_text,
-                trader_text,
-            )
         )
         messages = [
             (
@@ -1085,48 +1061,10 @@ Fill only metrics supported by this evidence. Return strict JSON only.""",
 
     if payload:
         if price_target is None:
-            raw_target = payload.get("price_target")
-            parsed_target = None
-            if isinstance(raw_target, (int, float)) and not isinstance(raw_target, bool):
-                parsed_target = float(raw_target)
-            elif isinstance(raw_target, str):
-                numeric_target = re.fullmatch(
-                    r"\$?\s*(-?\d[\d,]*(?:\.\d+)?)\s*(?:[A-Z]{3})?",
-                    raw_target.strip(),
-                    re.IGNORECASE,
-                )
-                if numeric_target:
-                    parsed_target = float(numeric_target.group(1).replace(",", ""))
-            if (
-                parsed_target is not None
-                and math.isfinite(parsed_target)
-                and parsed_target > 0
-                and _fallback_target_has_provenance(
-                    parsed_target,
-                    payload.get("supporting_quote"),
-                    evidence_text,
-                )
-            ):
-                price_target = round(parsed_target, 2)
+            price_target = parse_target(payload.get("price_target"))
 
         if confidence_score is None:
-            raw_confidence = payload.get("confidence_score")
-            parsed_confidence = None
-            if isinstance(raw_confidence, (int, float)) and not isinstance(
-                raw_confidence, bool
-            ):
-                numeric_confidence = float(raw_confidence)
-                if math.isfinite(numeric_confidence):
-                    parsed_confidence = int(round(numeric_confidence))
-            elif isinstance(raw_confidence, str):
-                numeric_confidence = re.fullmatch(
-                    r"\s*(\d{1,3})(?:\s*/\s*100|\s*%)?\s*",
-                    raw_confidence,
-                )
-                if numeric_confidence:
-                    parsed_confidence = int(numeric_confidence.group(1))
-            if parsed_confidence is not None and 0 <= parsed_confidence <= 100:
-                confidence_score = parsed_confidence
+            confidence_score = parse_confidence(payload.get("confidence_score"))
 
         if target_horizon is None:
             fallback_horizon = str(payload.get("horizon") or "").strip()
@@ -1135,29 +1073,39 @@ Fill only metrics supported by this evidence. Return strict JSON only.""",
         if target_summary is None:
             fallback_summary = str(payload.get("summary") or "").strip()
             target_summary = fallback_summary or None
+        if supporting_quote is None:
+            fallback_quote = payload.get("supporting_quote")
+            supporting_quote = (
+                fallback_quote.strip()
+                if isinstance(fallback_quote, str) and fallback_quote.strip()
+                else None
+            )
 
-    normalized_decision = (decision or "").strip().lower()
-    if current_price is not None and price_target is not None:
-        contradicts_decision = (
-            normalized_decision in {"buy", "overweight"}
-            and price_target <= current_price
-        ) or (
-            normalized_decision in {"sell", "underweight"}
-            and price_target >= current_price
-        )
-        if contradicts_decision:
-            price_target = None
-
-    if price_target is None:
-        confidence_score = None
-        target_horizon = None
-        target_summary = None
+    draft = PortfolioDecisionDraft(
+        status=DecisionStatus.ACTIONABLE,
+        rating=rating,
+        executive_summary="Target profile extracted from the completed decision.",
+        investment_thesis="Target metrics remain subject to deterministic evidence checks.",
+        price_target=price_target,
+        confidence_score=confidence_score,
+        time_horizon=target_horizon,
+        target_summary=target_summary,
+        supporting_quote=supporting_quote,
+    )
+    validated = finalize_portfolio_decision(
+        draft,
+        evidence_text=evidence_text,
+        reference_price=current_price,
+    )
 
     return {
-        "price_target": price_target,
-        "confidence_score": confidence_score,
-        "target_horizon": target_horizon,
-        "target_summary": target_summary,
+        "price_target": validated.price_target,
+        "confidence_score": validated.confidence_score,
+        "target_horizon": validated.time_horizon,
+        "target_summary": validated.target_summary,
+        "supporting_quote": validated.supporting_quote,
+        "target_validation_status": validated.target_validation_status.value,
+        "target_rejection_reason": validated.target_validation_reason,
         "reference_price": current_price,
     }
 
@@ -1267,6 +1215,18 @@ def compact_report_text(content, max_chars=280):
     return f"{truncated}..." if truncated else f"{cleaned[:max_chars]}..."
 
 
+def target_outlook_text(result: dict) -> str:
+    """Return a visible outlook or deterministic target-rejection explanation."""
+    summary = result.get("target_summary")
+    if summary:
+        return str(summary)
+    rejection = result.get("target_rejection_reason")
+    if rejection:
+        readable = str(rejection).replace("_", " ")
+        return f"Target rejected: {readable}"
+    return "No target outlook generated."
+
+
 def build_tui_result_summary(analysis_results: list[dict]) -> Table:
     """Build a compact post-run summary for one ticker or a batch."""
     table = Table(
@@ -1295,7 +1255,15 @@ def build_tui_result_summary(analysis_results: list[dict]) -> Table:
         failed = error is not None
         target = result.get("price_target")
         confidence = result.get("confidence_score")
-        outlook_source = error if failed else result.get("target_summary")
+        outlook_source = (
+            error
+            if failed
+            else (
+                target_outlook_text(result)
+                if result.get("target_rejection_reason")
+                else result.get("target_summary")
+            )
+        )
         outlook_text = "" if outlook_source is None else str(outlook_source)
         outlook = (
             compact_report_text(outlook_text, max_chars=160)
@@ -1571,7 +1539,7 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
                 f"Decision: {result.get('decision') or 'Unknown'}",
                 "",
                 "### Target Outlook",
-                sanitize_report_language(result.get("target_summary") or "No target outlook generated."),
+                sanitize_report_language(target_outlook_text(result)),
                 "",
                 "### Portfolio Management Decision",
                 section_summaries["Portfolio Management Decision"],
@@ -1727,7 +1695,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             "</div>"
             "<div class='confidence-strip'>"
             f"<div class='confidence-bar'><span style='width:{confidence_width}%'></span></div>"
-            f"<div class='confidence-copy'>{escape(sanitize_report_language(result.get('target_summary') or 'No target outlook generated.'))}</div>"
+            f"<div class='confidence-copy'>{escape(sanitize_report_language(target_outlook_text(result)))}</div>"
             "</div>"
             "<div class='narrative-block'>"
             "<h3>Portfolio Management Decision</h3>"

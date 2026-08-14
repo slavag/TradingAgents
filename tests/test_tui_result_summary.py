@@ -62,6 +62,25 @@ def test_tui_result_summary_keeps_missing_metrics_unavailable():
     assert "50/100" not in output
 
 
+def test_tui_result_summary_explains_rejected_target():
+    output = render_table(
+        [
+            {
+                "ticker": "TEST",
+                "decision": "Buy",
+                "price_target": None,
+                "confidence_score": None,
+                "target_horizon": None,
+                "target_summary": None,
+                "target_validation_status": "Rejected",
+                "target_rejection_reason": "supporting_quote_not_in_evidence",
+            }
+        ]
+    )
+
+    assert "Target rejected: supporting quote not in evidence" in output
+
+
 def test_tui_result_summary_renders_every_ticker_and_failure():
     output = render_table(
         [
