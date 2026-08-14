@@ -21,7 +21,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # LLMs sometimes write a placeholder string ("None", "N/A", ...) into an optional
 # numeric field instead of omitting it. Coerce those to None so the structured
@@ -49,6 +49,34 @@ class PortfolioRating(str, Enum):
     HOLD = "Hold"
     UNDERWEIGHT = "Underweight"
     SELL = "Sell"
+
+
+class DecisionStatus(str, Enum):
+    """Whether a final Portfolio Manager decision can drive a position signal."""
+
+    ACTIONABLE = "Actionable"
+    ABSTAIN = "Abstain"
+    UNAVAILABLE = "Unavailable"
+
+
+class TargetValidationStatus(str, Enum):
+    """Deterministic validation state for the optional target bundle."""
+
+    NOT_PROPOSED = "Not Proposed"
+    ACCEPTED = "Accepted"
+    REJECTED = "Rejected"
+
+
+class TargetValidationReason(str, Enum):
+    """Stable reasons an optional target bundle can be rejected."""
+
+    BUNDLE_INCOMPLETE = "target_bundle_incomplete"
+    TARGET_NOT_POSITIVE_FINITE = "target_not_positive_finite"
+    SUPPORTING_QUOTE_MISSING = "supporting_quote_missing"
+    SUPPORTING_QUOTE_NOT_IN_EVIDENCE = "supporting_quote_not_in_evidence"
+    SUPPORTING_QUOTE_NUMBER_MISMATCH = "supporting_quote_number_mismatch"
+    SUPPORTING_QUOTE_NOT_PRICE_CONTEXT = "supporting_quote_not_price_context"
+    TARGET_DIRECTION_CONFLICT = "target_direction_conflict"
 
 
 class TraderAction(str, Enum):
@@ -185,19 +213,52 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
 # ---------------------------------------------------------------------------
 
 
+class PortfolioDecisionDraft(BaseModel):
+    """Provider-facing Portfolio Manager response before deterministic validation."""
+
+    status: DecisionStatus = DecisionStatus.ACTIONABLE
+    rating: PortfolioRating | None = Field(
+        default=None,
+        description=(
+            "A five-tier rating for actionable decisions. Use null for Abstain "
+            "or Unavailable."
+        ),
+    )
+    executive_summary: str = Field(
+        description="Concise action or non-action summary. Two to four sentences.",
+    )
+    investment_thesis: str = Field(
+        description="Detailed reasoning grounded in the supplied evidence.",
+    )
+    price_target: float | None = Field(default=None)
+    time_horizon: str | None = Field(default=None)
+    confidence_score: int | None = Field(default=None, ge=0, le=100)
+    target_summary: str | None = Field(default=None)
+    supporting_quote: str | None = Field(default=None)
+
+    @field_validator("price_target", "confidence_score", mode="before")
+    @classmethod
+    def _nullish_numeric_to_none(cls, v):
+        return _coerce_optional_float(v)
+
+    @model_validator(mode="after")
+    def _validate_status_rating(self):
+        if self.status is DecisionStatus.ACTIONABLE and self.rating is None:
+            raise ValueError("actionable decisions require a rating")
+        if self.status is not DecisionStatus.ACTIONABLE and self.rating is not None:
+            raise ValueError("non-actionable decisions cannot carry a rating")
+        return self
+
+
 class PortfolioDecision(BaseModel):
-    """Structured output produced by the Portfolio Manager.
+    """Final Portfolio Manager decision after deterministic validation."""
 
-    The model fills every field as part of its primary LLM call; no separate
-    extraction pass is required. Field descriptions double as the model's
-    output instructions, so the prompt body only needs to convey context and
-    the rating-scale guidance.
-    """
-
-    rating: PortfolioRating = Field(
+    status: DecisionStatus = DecisionStatus.ACTIONABLE
+    rating: PortfolioRating | None = Field(
+        default=None,
         description=(
             "The final position rating. Exactly one of Buy / Overweight / Hold / "
-            "Underweight / Sell, picked based on the analysts' debate."
+            "Underweight / Sell for actionable decisions; null otherwise."
         ),
     )
     executive_summary: str = Field(
@@ -247,11 +308,73 @@ class PortfolioDecision(BaseModel):
             "levels that support the price target and confidence score."
         ),
     )
+    supporting_quote: str | None = Field(
+        default=None,
+        description=(
+            "Verbatim quote from the supplied evidence containing the exact "
+            "target and nearby price-level context."
+        ),
+    )
+    target_validation_status: TargetValidationStatus = (
+        TargetValidationStatus.NOT_PROPOSED
+    )
+    target_validation_reason: str | None = None
+    status_reason: str | None = None
 
     @field_validator("price_target", "confidence_score", mode="before")
     @classmethod
     def _nullish_numeric_to_none(cls, v):
         return _coerce_optional_float(v)
+
+    @model_validator(mode="after")
+    def _validate_final_contract(self):
+        if self.status is DecisionStatus.ACTIONABLE and self.rating is None:
+            raise ValueError("actionable decisions require a rating")
+        if self.status is not DecisionStatus.ACTIONABLE and self.rating is not None:
+            raise ValueError("non-actionable decisions cannot carry a rating")
+
+        bundle = (
+            self.price_target,
+            self.time_horizon,
+            self.confidence_score,
+            self.target_summary,
+            self.supporting_quote,
+        )
+        has_any = any(value is not None for value in bundle)
+        has_all = all(value is not None for value in bundle)
+        if has_any and not has_all:
+            raise ValueError("finalized target bundle must be complete or absent")
+        if (
+            self.target_validation_status is TargetValidationStatus.ACCEPTED
+            and not has_all
+        ):
+            raise ValueError("accepted target validation requires a complete bundle")
+        if (
+            self.target_validation_status is not TargetValidationStatus.ACCEPTED
+            and has_any
+        ):
+            raise ValueError("only accepted target validation may retain target fields")
+        if (
+            self.target_validation_status is TargetValidationStatus.REJECTED
+            and not self.target_validation_reason
+        ):
+            raise ValueError("rejected target validation requires a reason")
+        if self.status is not DecisionStatus.ACTIONABLE and has_any:
+            raise ValueError("non-actionable decisions cannot carry a target bundle")
+        return self
+
+    @classmethod
+    def unavailable(cls, reason_code: str) -> PortfolioDecision:
+        """Create a sanitized non-actionable decision for a technical failure."""
+        return cls(
+            status=DecisionStatus.UNAVAILABLE,
+            rating=None,
+            executive_summary="Final decision unavailable.",
+            investment_thesis=(
+                "The Portfolio Manager could not produce a validated structured decision."
+            ),
+            status_reason=reason_code,
+        )
 
 
 def render_pm_decision(decision: PortfolioDecision) -> str:
@@ -262,13 +385,17 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     ``**Executive Summary**``, ``**Investment Thesis**``) that downstream
     parsers and the report writers already handle.
     """
-    parts = [
-        f"**Rating**: {decision.rating.value}",
+    parts = [f"**Decision Status**: {decision.status.value}"]
+    if decision.rating is not None:
+        parts.extend(["", f"**Rating**: {decision.rating.value}"])
+    parts.extend([
         "",
         f"**Executive Summary**: {decision.executive_summary}",
         "",
         f"**Investment Thesis**: {decision.investment_thesis}",
-    ]
+    ])
+    if decision.status_reason:
+        parts.extend(["", f"**Decision Reason**: {decision.status_reason}"])
     if decision.price_target is not None:
         parts.extend(["", f"**Price Target**: {decision.price_target}"])
     if decision.time_horizon:
@@ -277,6 +404,13 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         parts.extend(["", f"**Decision Confidence**: {decision.confidence_score}/100"])
     if decision.target_summary:
         parts.extend(["", f"**Target Rationale**: {decision.target_summary}"])
+    if decision.supporting_quote:
+        parts.extend(["", f"**Target Supporting Quote**: {decision.supporting_quote}"])
+    if decision.target_validation_status is TargetValidationStatus.REJECTED:
+        parts.extend([
+            "",
+            f"**Target Validation**: Rejected ({decision.target_validation_reason})",
+        ])
     return "\n".join(parts)
 
 

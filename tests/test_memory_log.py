@@ -16,7 +16,11 @@ import pytest
 
 from tradingagents import default_config as default_config_module
 from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
-from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
+from tradingagents.agents.schemas import (
+    PortfolioDecision,
+    PortfolioRating,
+    TargetValidationStatus,
+)
 from tradingagents.agents.utils import memory as memory_module
 from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.graph.propagation import Propagator
@@ -1152,6 +1156,8 @@ class TestPortfolioManagerInjection:
             time_horizon="3-6 months",
             confidence_score=82,
             target_summary="Earnings revisions and trend support the central-case target.",
+            supporting_quote="Resistance: 215.",
+            target_validation_status=TargetValidationStatus.ACCEPTED,
         )
         llm = _structured_pm_llm(captured, decision)
         pm_node = create_portfolio_manager(llm)
@@ -1167,6 +1173,7 @@ class TestPortfolioManagerInjection:
             "**Target Rationale**: Earnings revisions and trend support the "
             "central-case target."
         ) in md
+        assert "**Target Supporting Quote**: Resistance: 215." in md
 
     def test_pm_falls_back_to_freetext_when_structured_unavailable(self):
         """If a provider does not support with_structured_output, the agent
