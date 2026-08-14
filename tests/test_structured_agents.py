@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from tradingagents.agents.analysts.sentiment_analyst import create_sentiment_analyst
 from tradingagents.agents.managers.research_manager import create_research_manager
 from tradingagents.agents.schemas import (
-    PortfolioDecision,
+    PortfolioDecisionDraft,
     PortfolioRating,
     ResearchPlan,
     SentimentBand,
@@ -89,7 +89,7 @@ class TestNullishFloatCoercion:
         assert p.entry_price == 189.5
 
     def test_pm_nullish_price_target_coerces_to_none(self):
-        d = PortfolioDecision(
+        d = PortfolioDecisionDraft(
             rating=PortfolioRating.OVERWEIGHT,
             executive_summary="s",
             investment_thesis="t",
@@ -98,7 +98,7 @@ class TestNullishFloatCoercion:
         assert d.price_target is None
 
     def test_pm_nullish_confidence_coerces_to_none(self):
-        d = PortfolioDecision(
+        d = PortfolioDecisionDraft(
             rating=PortfolioRating.HOLD,
             executive_summary="s",
             investment_thesis="t",

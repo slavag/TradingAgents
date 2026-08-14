@@ -22,7 +22,7 @@ import logging
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,21 @@ NO_EXTERNAL_TOOLS = (
 )
 
 
-def bind_structured(llm: Any, schema: type[T], agent_name: str) -> Any | None:
+class StructuredOutputFailure(RuntimeError):
+    """Sanitized failure from a structured-required decision boundary."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def bind_structured(
+    llm: Any,
+    schema: type[T],
+    agent_name: str,
+    *,
+    fallback_to_text: bool = True,
+) -> Any | None:
     """Return ``llm.with_structured_output(schema)`` or ``None`` if unsupported.
 
     Logs a warning when the binding fails so the user understands the agent
@@ -48,10 +62,16 @@ def bind_structured(llm: Any, schema: type[T], agent_name: str) -> Any | None:
     try:
         return llm.with_structured_output(schema)
     except (NotImplementedError, AttributeError) as exc:
+        next_step = (
+            "falling back to free-text generation"
+            if fallback_to_text
+            else "the required structured decision will be unavailable"
+        )
         logger.warning(
-            "%s: provider does not support with_structured_output (%s); "
-            "falling back to free-text generation",
-            agent_name, exc,
+            "%s: provider does not support with_structured_output (%s); %s",
+            agent_name,
+            exc,
+            next_step,
         )
         return None
 
@@ -87,3 +107,33 @@ def invoke_structured_or_freetext(
 
     response = plain_llm.invoke(prompt)
     return response.content
+
+
+def invoke_structured_required(
+    structured_llm: Any | None,
+    prompt: Any,
+    agent_name: str,
+) -> BaseModel:
+    """Invoke a required structured response without an unchecked text fallback."""
+    if structured_llm is None:
+        raise StructuredOutputFailure("structured_binding_unsupported")
+
+    try:
+        result = structured_llm.invoke(prompt)
+    except ValidationError as exc:
+        logger.warning("%s: structured response failed schema validation: %s", agent_name, exc)
+        raise StructuredOutputFailure("structured_response_invalid") from exc
+    except Exception as exc:
+        logger.warning("%s: structured invocation failed: %s", agent_name, exc)
+        raise StructuredOutputFailure("structured_invocation_failed") from exc
+
+    if result is None:
+        raise StructuredOutputFailure("structured_response_missing")
+    if not isinstance(result, BaseModel):
+        logger.warning(
+            "%s: structured response returned unexpected type %s",
+            agent_name,
+            type(result).__name__,
+        )
+        raise StructuredOutputFailure("structured_response_invalid")
+    return result

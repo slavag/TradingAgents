@@ -79,12 +79,12 @@ def test_research_manager_prompt_states_constraint():
 
 @pytest.mark.unit
 def test_portfolio_manager_prompt_states_constraint():
-    from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
+    from tradingagents.agents.schemas import PortfolioDecisionDraft, PortfolioRating
 
     captured = {}
     llm = _capturing_llm(
         captured,
-        PortfolioDecision(
+        PortfolioDecisionDraft(
             rating=PortfolioRating.HOLD,
             executive_summary="x",
             investment_thesis="y",

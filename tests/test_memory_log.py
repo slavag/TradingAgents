@@ -17,9 +17,8 @@ import pytest
 from tradingagents import default_config as default_config_module
 from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
 from tradingagents.agents.schemas import (
-    PortfolioDecision,
+    PortfolioDecisionDraft,
     PortfolioRating,
-    TargetValidationStatus,
 )
 from tradingagents.agents.utils import memory as memory_module
 from tradingagents.agents.utils.memory import TradingMemoryLog
@@ -115,7 +114,7 @@ def _make_pm_state(past_context=""):
             "current_neutral_response": "",
             "count": 1,
         },
-        "market_report": "Market report.",
+        "market_report": "Verified close: 190. Resistance: 215.",
         "sentiment_report": "Sentiment report.",
         "news_report": "News report.",
         "fundamentals_report": "Fundamentals report.",
@@ -124,12 +123,12 @@ def _make_pm_state(past_context=""):
     }
 
 
-def _structured_pm_llm(captured: dict, decision: PortfolioDecision | None = None):
+def _structured_pm_llm(captured: dict, decision: PortfolioDecisionDraft | None = None):
     """Build a MagicMock LLM whose with_structured_output binding captures the
-    prompt and returns a real PortfolioDecision (so render_pm_decision works).
+    prompt and returns a real PortfolioDecisionDraft.
     """
     if decision is None:
-        decision = PortfolioDecision(
+        decision = PortfolioDecisionDraft(
             rating=PortfolioRating.HOLD,
             executive_summary="Hold the position; await catalyst.",
             investment_thesis="Balanced view; neither side carried the debate.",
@@ -1148,7 +1147,7 @@ class TestPortfolioManagerInjection:
         downstream consumers (memory log, signal processor, CLI display)
         can parse without any extra LLM call."""
         captured = {}
-        decision = PortfolioDecision(
+        decision = PortfolioDecisionDraft(
             rating=PortfolioRating.OVERWEIGHT,
             executive_summary="Build position gradually over the next two weeks.",
             investment_thesis="AI capex cycle remains intact; institutional flows constructive.",
@@ -1156,8 +1155,7 @@ class TestPortfolioManagerInjection:
             time_horizon="3-6 months",
             confidence_score=82,
             target_summary="Earnings revisions and trend support the central-case target.",
-            supporting_quote="Resistance: 215.",
-            target_validation_status=TargetValidationStatus.ACCEPTED,
+            supporting_quote="Verified close: 190. Resistance: 215.",
         )
         llm = _structured_pm_llm(captured, decision)
         pm_node = create_portfolio_manager(llm)
@@ -1173,19 +1171,24 @@ class TestPortfolioManagerInjection:
             "**Target Rationale**: Earnings revisions and trend support the "
             "central-case target."
         ) in md
-        assert "**Target Supporting Quote**: Resistance: 215." in md
+        assert (
+            "**Target Supporting Quote**: Verified close: 190. Resistance: 215."
+            in md
+        )
 
-    def test_pm_falls_back_to_freetext_when_structured_unavailable(self):
-        """If a provider does not support with_structured_output, the agent
-        falls back to a plain invoke and returns whatever prose the model
-        produced, so the pipeline never blocks."""
+    def test_pm_is_unavailable_when_structured_output_is_unsupported(self):
+        """Provider incompatibility must never become an unchecked Sell signal."""
         plain_response = "**Rating**: Sell\n\nExit ahead of guidance."
         llm = MagicMock()
         llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
         llm.invoke.return_value = MagicMock(content=plain_response)
         pm_node = create_portfolio_manager(llm)
         result = pm_node(_make_pm_state())
-        assert result["final_trade_decision"] == plain_response
+        decision = result["final_trade_decision"]
+        assert "**Decision Status**: Unavailable" in decision
+        assert "structured_binding_unsupported" in decision
+        assert "**Rating**" not in decision
+        llm.invoke.assert_not_called()
 
     # get_past_context ordering and limits
 
