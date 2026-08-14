@@ -9,6 +9,9 @@ class WebModelCatalogTests(unittest.TestCase):
     def test_shared_web_catalog_uses_current_openai_models(self):
         values = [value for _, value in get_web_model_options()["openai"]]
 
+        self.assertIn("gpt-5.6-sol", values)
+        self.assertIn("gpt-5.6-terra", values)
+        self.assertIn("gpt-5.6-luna", values)
         self.assertIn("gpt-5.5", values)
         self.assertIn("gpt-5.4-mini", values)
         self.assertIn("gpt-5.4-nano", values)
@@ -42,6 +45,9 @@ class WebModelCatalogTests(unittest.TestCase):
         html = _render_index_response().body.decode("utf-8")
 
         self.assertIn("window.TRADINGAGENTS_MODEL_OPTIONS", html)
+        self.assertIn("gpt-5.6-sol", html)
+        self.assertIn("gpt-5.6-terra", html)
+        self.assertIn("gpt-5.6-luna", html)
         self.assertIn("gpt-5.5", html)
         self.assertIn("claude-fable-5", html)
         self.assertIn("gemini-3.5-flash", html)
