@@ -5,10 +5,12 @@ Default path is Reddit's public Atom/RSS search feed
 (``/search.json``) is reliably WAF-blocked (``HTTP 403``) for public clients
 (issue #862), and probing it on every call only doubled our request volume
 against Reddit's per-IP rate limit — tripping ``429`` on the RSS fallback — so
-it is kept (``_fetch_subreddit_json``) but not used by default. On a 429 we back
-off once (honouring ``Retry-After``). RSS lacks score / comment counts, so those
-posts are marked and the formatter omits the metrics rather than printing fake
-zeros.
+it is kept (``_fetch_subreddit_json``) but not used by default. On a 429 we use
+bounded exponential backoff with jitter (honouring ``Retry-After``), publish a
+process-wide cooldown, and stop the remaining subreddit sweep after exhaustion.
+Successful results are cached briefly to avoid duplicate calls. RSS lacks score
+/ comment counts, so those posts are marked and the formatter omits the metrics
+rather than printing fake zeros.
 
 No API key required. Returns formatted plaintext blocks ready for prompt
 injection and degrades gracefully — returns a placeholder string rather than
@@ -185,8 +187,8 @@ def _fetch_subreddit_rss(
 
     Carries no score / comment counts, so those fields are left None and the
     post is tagged ``source="rss"`` for honest display. On a 429 (Reddit's
-    per-IP rate limit) we back off once — honouring ``Retry-After`` when
-    present — before giving up, so a transient burst doesn't blank the feed.
+    per-IP rate limit) we retry with bounded exponential delays and a shared
+    process cooldown, honouring ``Retry-After`` when present.
     """
     url = _RSS.format(sub=sub, qs=_search_qs(ticker, limit))
     req = Request(url, headers={"User-Agent": _UA})
@@ -309,9 +311,9 @@ def fetch_reddit_posts(
     """Fetch recent Reddit posts mentioning ``ticker`` across finance
     subreddits and return them as a formatted plaintext block.
 
-    ``inter_request_delay`` paces the (now RSS-only) per-subreddit requests to
-    stay under Reddit's public per-IP rate limit; combined with the RSS-first
-    path it makes 429s rare even when several analyses run back-to-back.
+    ``inter_request_delay`` paces the RSS-only per-subreddit requests. Repeated
+    429s stop the remaining sweep, while a short successful-result cache avoids
+    duplicate calls when analyses run back-to-back.
     """
     unavailable = historical_unavailable("Reddit", as_of_date)
     if unavailable:
