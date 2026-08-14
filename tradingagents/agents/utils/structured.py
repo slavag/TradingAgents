@@ -1,19 +1,13 @@
-"""Shared helpers for invoking an agent with structured output and a graceful fallback.
+"""Shared helpers for optional and required structured agent output.
 
-The Portfolio Manager, Trader, and Research Manager all follow the same
-canonical pattern:
+Research Manager and Trader retain a graceful free-text fallback for providers
+without structured output. The final Portfolio Manager decision uses the strict
+helper instead: a binding, provider, or schema failure becomes an explicit
+non-actionable decision.
 
-1. At agent creation, wrap the LLM with ``with_structured_output(Schema)``
-   so the model returns a typed Pydantic instance. If the provider does
-   not support structured output (rare; mostly older Ollama models), the
-   wrap is skipped and the agent uses free-text generation instead.
-2. At invocation, run the structured call and render the result back to
-   markdown. If the structured call itself fails for any reason
-   (malformed JSON from a weak model, transient provider issue), fall
-   back to a plain ``llm.invoke`` so the pipeline never blocks.
-
-Centralising the pattern here keeps the agent factories small and ensures
-all three agents log the same warnings when fallback fires.
+Both paths bind the provider through ``with_structured_output(Schema)`` and log
+internal diagnostic details. Only stable failure codes cross the strict final
+decision boundary.
 """
 
 from __future__ import annotations
@@ -56,12 +50,18 @@ def bind_structured(
 ) -> Any | None:
     """Return ``llm.with_structured_output(schema)`` or ``None`` if unsupported.
 
-    Logs a warning when the binding fails so the user understands the agent
-    will use free-text generation for every call instead of one-shot fallback.
+    ``fallback_to_text=False`` converts any binding failure into ``None`` for a
+    strict caller to handle. The default preserves the narrower legacy fallback
+    behavior for Research Manager and Trader.
     """
     try:
         return llm.with_structured_output(schema)
-    except (NotImplementedError, AttributeError) as exc:
+    except Exception as exc:
+        if fallback_to_text and not isinstance(
+            exc,
+            (NotImplementedError, AttributeError),
+        ):
+            raise
         next_step = (
             "falling back to free-text generation"
             if fallback_to_text

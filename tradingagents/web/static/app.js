@@ -569,6 +569,9 @@ function resultCard(result) {
   const targetValidation = result.target_rejection_reason
     ? `<p class="result-text"><strong>Target validation:</strong> ${escapeHtml(result.target_rejection_reason.replaceAll("_", " "))}</p>`
     : "";
+  const targetEvidence = result.supporting_quote
+    ? `<p class="result-text"><strong>Target evidence:</strong> ${escapeHtml(result.supporting_quote)}</p>`
+    : "";
   return `
     <article class="result-card">
       <div class="result-topline">
@@ -580,6 +583,7 @@ function resultCard(result) {
         <div class="metric-box"><span>Confidence</span><strong>${escapeHtml(result.confidence_label || "—")}</strong></div>
       </div>
       <p class="result-text"><strong>Outlook:</strong> ${escapeHtml(result.target_summary || "—")}</p>
+      ${targetEvidence}
       ${targetValidation}
       <p class="result-text">${escapeHtml(result.executiveSummary || result.executive_summary || "")}</p>
       <p class="result-text">

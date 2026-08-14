@@ -80,7 +80,7 @@ class WebServiceTests(unittest.TestCase):
             "confidence_score": None,
             "target_horizon": None,
             "target_summary": None,
-            "supporting_quote": None,
+            "supporting_quote": "Resistance: 120.",
             "target_validation_status": "Rejected",
             "target_rejection_reason": "supporting_quote_not_in_evidence",
             "results_dir": "/tmp/test",
@@ -95,6 +95,7 @@ class WebServiceTests(unittest.TestCase):
             serialized["target_rejection_reason"],
             "supporting_quote_not_in_evidence",
         )
+        self.assertEqual(serialized["supporting_quote"], "Resistance: 120.")
         self.assertIsNone(serialized["price_target"])
 
     def test_web_graph_config_defaults_to_repeatable_temperature(self):

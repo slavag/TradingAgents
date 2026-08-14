@@ -327,7 +327,7 @@ TradingAgents persists two kinds of state across runs.
 
 ### Decision log
 
-The decision log is always on. Each completed run appends its decision to `~/.tradingagents/memory/trading_memory.md`. On the next run for the same ticker, TradingAgents fetches the realised gross raw return and excess return versus the configured benchmark, generates a one-paragraph reflection, and injects the most recent same-ticker decisions plus recent cross-ticker lessons into the Portfolio Manager prompt, so each analysis carries forward what worked and what didn't.
+The decision log is always on. Each completed run appends its decision to `~/.tradingagents/memory/trading_memory.md`. Actionable Buy / Overweight / Hold / Underweight / Sell decisions are stored as pending forecasts. Explicit `Abstain` and `Unavailable` decisions are stored as `no-outcome`, so a missing or technically invalid decision is never evaluated as if it were an intentional Hold. On the next run for the same ticker, TradingAgents fetches the realised gross raw return and excess return versus the configured benchmark for eligible pending decisions, generates a one-paragraph reflection, and injects the most recent same-ticker decisions plus recent cross-ticker lessons into the Portfolio Manager prompt, so each analysis carries forward what worked and what didn't.
 
 Override the path with `TRADINGAGENTS_MEMORY_LOG_PATH`.
 
@@ -357,8 +357,12 @@ StockTwits, Reddit, and Polymarket are unavailable historically because their in
 
 Deferred outcomes model an executable signal: they enter at the next common trading session's adjusted open for the stock and benchmark, then exit at the adjusted close after the configured common-session horizon. Their benchmark difference is gross excess return before costs, not risk-adjusted alpha.
 
-The displayed model confidence is an uncalibrated evidence-strength score, not a statistical probability. It is emitted with an evidence-grounded target and
-remains unavailable when the analysis cannot support one.
+Every new Portfolio Manager result carries an explicit decision status:
+`Actionable`, `Abstain`, or `Unavailable`. The final decision requires provider
+structured output; binding, invocation, or schema failures become `Unavailable`
+instead of being retried as unchecked prose or silently interpreted as Hold.
+
+The displayed model confidence is an uncalibrated evidence-strength score, not a statistical probability. It is emitted only with a complete evidence-grounded target bundle: target, horizon, rationale, and a verbatim supporting quote containing the exact price level. Primary and fallback targets use the same deterministic provenance and direction checks. Rejected targets are removed together with their dependent metrics while the valid five-tier rating remains available.
 
 ## Reproducibility
 

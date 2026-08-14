@@ -54,7 +54,7 @@
 - Produces: `DecisionStatus`, `TargetValidationStatus`, `TargetValidationReason`, `PortfolioDecisionDraft`, `PortfolioDecision`, `PortfolioDecision.unavailable(reason)`, and `render_pm_decision(decision)`.
 - Contract: `PortfolioDecisionDraft` may contain a partial target proposal; `PortfolioDecision` may contain either a complete accepted bundle or no target fields.
 
-- [ ] **Step 1: Write failing status/rating contract tests**
+- [x] **Step 1: Write failing status/rating contract tests**
 
 ```python
 def test_actionable_draft_requires_rating():
@@ -78,13 +78,13 @@ def test_non_actionable_draft_rejects_rating(status):
         )
 ```
 
-- [ ] **Step 2: Run the status tests and verify RED**
+- [x] **Step 2: Run the status tests and verify RED**
 
 Run: `python -m pytest tests/test_decision_integrity.py -k "draft_requires or draft_rejects" -q`
 
 Expected: collection or import failure because the new status and draft types do not exist.
 
-- [ ] **Step 3: Add the provider-facing draft and status enums**
+- [x] **Step 3: Add the provider-facing draft and status enums**
 
 ```python
 class DecisionStatus(str, Enum):
@@ -129,13 +129,13 @@ class PortfolioDecisionDraft(BaseModel):
         return self
 ```
 
-- [ ] **Step 4: Run the status tests and verify GREEN**
+- [x] **Step 4: Run the status tests and verify GREEN**
 
 Run: `python -m pytest tests/test_decision_integrity.py -k "draft_requires or draft_rejects" -q`
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Write failing finalized-bundle and rendering tests**
+- [x] **Step 5: Write failing finalized-bundle and rendering tests**
 
 ```python
 def test_final_decision_rejects_partial_target_bundle():
@@ -158,13 +158,13 @@ def test_unavailable_factory_renders_explicit_status_without_rating():
     assert "structured_response_invalid" in rendered
 ```
 
-- [ ] **Step 6: Run finalized-schema tests and verify RED**
+- [x] **Step 6: Run finalized-schema tests and verify RED**
 
 Run: `python -m pytest tests/test_decision_integrity.py -k "final_decision or unavailable_factory" -q`
 
 Expected: failure because finalized validation, factory, and status rendering are absent.
 
-- [ ] **Step 7: Implement finalized decision invariants and renderer**
+- [x] **Step 7: Implement finalized decision invariants and renderer**
 
 Implement `PortfolioDecision` with system-owned `target_validation_status`, `target_validation_reason`, the five optional target fields, and an after-model validator that enforces:
 
@@ -188,13 +188,13 @@ if self.target_validation_status is TargetValidationStatus.ACCEPTED and not all(
 
 Render `Decision Status` first, omit `Rating` for non-actionable decisions, render accepted supporting evidence as `**Target Supporting Quote**`, and render rejected reason as `**Target Validation**: Rejected (<reason>)`.
 
-- [ ] **Step 8: Run schema and existing structured-agent tests**
+- [x] **Step 8: Run schema and existing structured-agent tests**
 
 Run: `python -m pytest tests/test_decision_integrity.py tests/test_structured_agents.py tests/test_memory_log.py -k "decision or pm_nullish or pm_returns" -q`
 
 Expected: selected tests pass after updating existing constructors to use the finalized contract where required.
 
-- [ ] **Step 9: Commit Task 1**
+- [x] **Step 9: Commit Task 1**
 
 ```bash
 git add tradingagents/agents/schemas.py tests/test_decision_integrity.py tests/test_structured_agents.py tests/test_memory_log.py
@@ -213,7 +213,7 @@ git commit -m "feat: define explicit portfolio decision states"
 - Consumes: `PortfolioDecisionDraft`, completed graph-state evidence, optional verified reference price.
 - Produces: `build_decision_evidence(state: Mapping[str, Any]) -> str`, `extract_verified_reference_price(text: str) -> float | None`, and `finalize_portfolio_decision(draft, evidence_text, reference_price=None) -> PortfolioDecision`.
 
-- [ ] **Step 1: Write failing accepted-target provenance test**
+- [x] **Step 1: Write failing accepted-target provenance test**
 
 ```python
 def test_finalize_accepts_complete_verbatim_price_quote():
@@ -233,17 +233,17 @@ def test_finalize_accepts_complete_verbatim_price_quote():
     assert result.price_target == 120.0
 ```
 
-- [ ] **Step 2: Run the accepted-target test and verify RED**
+- [x] **Step 2: Run the accepted-target test and verify RED**
 
 Run: `python -m pytest tests/test_decision_integrity.py::test_finalize_accepts_complete_verbatim_price_quote -q`
 
 Expected: import or name failure because the integrity module does not exist.
 
-- [ ] **Step 3: Implement evidence normalization and exact price-context matching**
+- [x] **Step 3: Implement evidence normalization and exact price-context matching**
 
 Move the proven numeric and context matching behavior from `_fallback_target_has_provenance` into private helpers in `decision_integrity.py`. Use whitespace-normalized substring matching, `math.isclose(..., rel_tol=1e-9, abs_tol=0.005)`, the existing price-label/currency patterns, a 300-character quote bound, and explicit rejection of percentage, volume, share, and magnitude suffixes.
 
-- [ ] **Step 4: Implement finalization for accepted bundles**
+- [x] **Step 4: Implement finalization for accepted bundles**
 
 ```python
 def finalize_portfolio_decision(
@@ -270,27 +270,27 @@ def finalize_portfolio_decision(
     )
 ```
 
-- [ ] **Step 5: Run the accepted-target test and verify GREEN**
+- [x] **Step 5: Run the accepted-target test and verify GREEN**
 
 Run: `python -m pytest tests/test_decision_integrity.py::test_finalize_accepts_complete_verbatim_price_quote -q`
 
 Expected: pass.
 
-- [ ] **Step 6: Write failing rejection-matrix tests**
+- [x] **Step 6: Write failing rejection-matrix tests**
 
 Use parametrized cases for incomplete bundles, non-positive/non-finite targets, missing quotes, quotes absent from evidence, mismatched numbers, percentages, dates, ratios, volume/share counts, oversized quotes, and bullish/bearish direction conflicts. Every case must assert that all five target fields are cleared, the rating is preserved, status remains actionable, and the exact rejection reason is recorded.
 
-- [ ] **Step 7: Run the rejection matrix and verify RED**
+- [x] **Step 7: Run the rejection matrix and verify RED**
 
 Run: `python -m pytest tests/test_decision_integrity.py -k "rejects or incomplete or direction" -q`
 
 Expected: failures for each rejection path not yet implemented.
 
-- [ ] **Step 8: Implement rejection reasons, evidence assembly, and conservative reference-price extraction**
+- [x] **Step 8: Implement rejection reasons, evidence assembly, and conservative reference-price extraction**
 
 `build_decision_evidence` joins non-empty values from `market_report`, `sentiment_report`, `news_report`, `fundamentals_report`, `investment_plan`, `trader_investment_plan`, risk-debate history, and `past_context`, with stable section labels. `extract_verified_reference_price` accepts only explicit `Verified close: <number>` text and returns `None` for ambiguous unlabeled numbers.
 
-- [ ] **Step 9: Run all integrity tests and Ruff**
+- [x] **Step 9: Run all integrity tests and Ruff**
 
 Run: `python -m pytest tests/test_decision_integrity.py -q`
 
@@ -298,7 +298,7 @@ Run: `python -m ruff check tradingagents/agents/utils/decision_integrity.py trad
 
 Expected: all tests pass and Ruff reports no errors.
 
-- [ ] **Step 10: Commit Task 2**
+- [x] **Step 10: Commit Task 2**
 
 ```bash
 git add tradingagents/agents/utils/decision_integrity.py tradingagents/agents/schemas.py tests/test_decision_integrity.py
@@ -320,7 +320,7 @@ git commit -m "feat: validate portfolio targets against supplied evidence"
 - Consumes: `finalize_portfolio_decision` and `PortfolioDecision.unavailable`.
 - Constraint: existing `invoke_structured_or_freetext` behavior for Research Manager and Trader remains unchanged.
 
-- [ ] **Step 1: Write failing strict-invocation tests**
+- [x] **Step 1: Write failing strict-invocation tests**
 
 ```python
 @pytest.mark.parametrize(
@@ -352,21 +352,21 @@ def test_required_structured_invocation_returns_sanitized_unavailable(
     llm.invoke.assert_not_called()
 ```
 
-- [ ] **Step 2: Run strict-invocation tests and verify RED**
+- [x] **Step 2: Run strict-invocation tests and verify RED**
 
 Run: `python -m pytest tests/test_portfolio_manager_integrity.py -k "required_structured or unavailable" -q`
 
 Expected: failures because Portfolio Manager still retries unchecked free text.
 
-- [ ] **Step 3: Add the structured-required helper**
+- [x] **Step 3: Add the structured-required helper**
 
 Implement a small exception carrying only a stable code. Translate binding absence, missing parsed result, Pydantic validation failure, and generic invocation failure into the four approved codes. Log exception details internally, but expose only the code to the manager.
 
-- [ ] **Step 4: Bind `PortfolioDecisionDraft` and finalize successful results**
+- [x] **Step 4: Bind `PortfolioDecisionDraft` and finalize successful results**
 
 In `create_portfolio_manager`, bind `PortfolioDecisionDraft`. Build deterministic evidence from state, extract an optional verified close from that evidence, call `invoke_structured_required`, finalize the draft, and render the final decision. On `StructuredOutputFailure`, render `PortfolioDecision.unavailable(exc.code)`.
 
-- [ ] **Step 5: Add a failing primary-target rejection integration test**
+- [x] **Step 5: Add a failing primary-target rejection integration test**
 
 ```python
 def test_primary_pm_target_without_verbatim_quote_is_removed_but_rating_survives():
@@ -386,19 +386,19 @@ def test_primary_pm_target_without_verbatim_quote_is_removed_but_rating_survives
     assert "supporting_quote_not_in_evidence" in result
 ```
 
-- [ ] **Step 6: Run the primary-target test and verify RED, then implement the evidence path**
+- [x] **Step 6: Run the primary-target test and verify RED, then implement the evidence path**
 
 Run: `python -m pytest tests/test_portfolio_manager_integrity.py::test_primary_pm_target_without_verbatim_quote_is_removed_but_rating_survives -q`
 
 Expected before implementation: target remains present or validation metadata is absent.
 
-- [ ] **Step 7: Run Portfolio Manager and existing structured fallback tests**
+- [x] **Step 7: Run Portfolio Manager and existing structured fallback tests**
 
 Run: `python -m pytest tests/test_portfolio_manager_integrity.py tests/test_memory_log.py tests/test_structured_agents.py -q`
 
 Expected: Portfolio Manager strict tests pass; Research Manager and Trader free-text fallback tests still pass.
 
-- [ ] **Step 8: Commit Task 3**
+- [x] **Step 8: Commit Task 3**
 
 ```bash
 git add tradingagents/agents/utils/structured.py tradingagents/agents/managers/portfolio_manager.py tests/test_portfolio_manager_integrity.py tests/test_memory_log.py
@@ -421,7 +421,7 @@ git commit -m "fix: fail closed on portfolio decision generation"
 - Compatibility: `parse_rating(text, default="Hold")` remains available for legacy callers.
 - Memory format: actionable decisions use `pending`; Abstain and Unavailable use `no-outcome` and are excluded from `get_pending_entries()`.
 
-- [ ] **Step 1: Write failing strict-signal tests**
+- [x] **Step 1: Write failing strict-signal tests**
 
 ```python
 def test_explicit_abstain_and_unavailable_are_not_hold():
@@ -437,23 +437,23 @@ def test_legacy_labeled_rating_remains_readable():
     assert SignalProcessor().process_signal("**Rating**: Sell") == "Sell"
 ```
 
-- [ ] **Step 2: Run strict-signal tests and verify RED**
+- [x] **Step 2: Run strict-signal tests and verify RED**
 
 Run: `python -m pytest tests/test_signal_processing.py -k "abstain or unavailable or legacy_labeled" -q`
 
 Expected: explicit statuses and plain prose currently become Hold.
 
-- [ ] **Step 3: Implement strict final-decision parsing**
+- [x] **Step 3: Implement strict final-decision parsing**
 
 Parse an explicit `Decision Status` label first. For actionable or legacy text, parse a five-tier rating with no default. Return `Unavailable` when neither a valid status nor rating exists. Update `SignalProcessor` to call this strict helper.
 
-- [ ] **Step 4: Run signal tests and verify GREEN**
+- [x] **Step 4: Run signal tests and verify GREEN**
 
 Run: `python -m pytest tests/test_signal_processing.py -q`
 
 Expected: strict tests pass after updating the old default-Hold expectation; legacy `parse_rating` tests continue to pass.
 
-- [ ] **Step 5: Write failing memory eligibility tests**
+- [x] **Step 5: Write failing memory eligibility tests**
 
 ```python
 @pytest.mark.parametrize("status", ["Abstain", "Unavailable"])
@@ -471,23 +471,23 @@ def test_non_actionable_decision_is_stored_without_pending_outcome(tmp_path, sta
     assert log.get_pending_entries() == []
 ```
 
-- [ ] **Step 6: Run memory eligibility tests and verify RED**
+- [x] **Step 6: Run memory eligibility tests and verify RED**
 
 Run: `python -m pytest tests/test_memory_log.py -k "non_actionable_decision" -q`
 
 Expected: current memory parser stores a fabricated Hold as pending.
 
-- [ ] **Step 7: Persist explicit non-actionable records**
+- [x] **Step 7: Persist explicit non-actionable records**
 
 Use `parse_decision_signal`. Write `[date | ticker | <status> | no-outcome]` for Abstain and Unavailable, and the existing pending tag for five-tier ratings. Preserve idempotency and legacy tag parsing.
 
-- [ ] **Step 8: Run signal and memory suites**
+- [x] **Step 8: Run signal and memory suites**
 
 Run: `python -m pytest tests/test_signal_processing.py tests/test_memory_log.py -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 9: Commit Task 4**
+- [x] **Step 9: Commit Task 4**
 
 ```bash
 git add tradingagents/agents/utils/rating.py tradingagents/graph/signal_processing.py tradingagents/agents/utils/memory.py tests/test_signal_processing.py tests/test_memory_log.py
@@ -510,7 +510,7 @@ git commit -m "fix: distinguish abstention from hold in final signals"
 - Produces from `estimate_target_profile`: existing five keys plus `supporting_quote`, `target_validation_status`, and `target_rejection_reason`.
 - Constraint: CLI and web continue sharing the same Python function; web must not fork validation logic.
 
-- [ ] **Step 1: Write failing primary-profile provenance test**
+- [x] **Step 1: Write failing primary-profile provenance test**
 
 ```python
 def test_primary_rendered_target_requires_supporting_quote_from_evidence():
@@ -532,41 +532,41 @@ def test_primary_rendered_target_requires_supporting_quote_from_evidence():
     assert profile["target_rejection_reason"] == "supporting_quote_not_in_evidence"
 ```
 
-- [ ] **Step 2: Run the primary-profile test and verify RED**
+- [x] **Step 2: Run the primary-profile test and verify RED**
 
 Run: `python -m pytest tests/test_target_profile.py -k "primary_rendered_target_requires" -q`
 
 Expected: current primary parsing accepts 999 without provenance validation.
 
-- [ ] **Step 3: Replace local validation with the shared boundary**
+- [x] **Step 3: Replace local validation with the shared boundary**
 
 Remove `_fallback_target_has_provenance`. Parse all five target fields from rendered new decisions, including `Target Supporting Quote`, and build a typed draft. For older reports or missing fields, retain the existing constrained fallback prompt. Finalize primary and fallback bundles through the same shared validator and return its validation metadata.
 
-- [ ] **Step 4: Add fallback and direction parity assertions**
+- [x] **Step 4: Add fallback and direction parity assertions**
 
 Update existing target-profile tests so accepted bundles include `supporting_quote` and `Accepted`; rejected bundles assert the exact stable rejection reason. Preserve `None` for all dependent metrics whenever validation rejects the target.
 
-- [ ] **Step 5: Run target-profile tests and verify GREEN**
+- [x] **Step 5: Run target-profile tests and verify GREEN**
 
 Run: `python -m pytest tests/test_target_profile.py -q`
 
 Expected: all primary and fallback provenance cases pass.
 
-- [ ] **Step 6: Write failing web-serialization and display tests**
+- [x] **Step 6: Write failing web-serialization and display tests**
 
 Assert `_run_job` retains `target_validation_status` and `target_rejection_reason` in serialized results. Assert `app.js` includes a visible `Target validation:` message when a rejection reason exists and does not show rejected target metrics.
 
-- [ ] **Step 7: Run web tests and verify RED**
+- [x] **Step 7: Run web tests and verify RED**
 
 Run: `python -m pytest tests/test_web_service.py tests/test_web_static_tape.py -k "target_validation" -q`
 
 Expected: validation metadata is not yet asserted or displayed.
 
-- [ ] **Step 8: Implement web metadata display without new validation logic**
+- [x] **Step 8: Implement web metadata display without new validation logic**
 
 Use escaped server-returned rejection text in the result detail. Keep Python validation centralized in `estimate_target_profile`; JavaScript only presents the result.
 
-- [ ] **Step 9: Run CLI/web target suites and Ruff**
+- [x] **Step 9: Run CLI/web target suites and Ruff**
 
 Run: `python -m pytest tests/test_target_profile.py tests/test_web_service.py tests/test_web_static_tape.py tests/test_tui_result_summary.py -q`
 
@@ -574,7 +574,7 @@ Run: `python -m ruff check cli/main.py tradingagents/web/service.py tests/test_t
 
 Expected: all tests pass and Ruff reports no errors.
 
-- [ ] **Step 10: Commit Task 5**
+- [x] **Step 10: Commit Task 5**
 
 ```bash
 git add cli/main.py tradingagents/web/static/app.js tests/test_target_profile.py tests/test_web_service.py tests/test_web_static_tape.py
@@ -592,7 +592,7 @@ git commit -m "fix: unify target validation across decision surfaces"
 **Interfaces:**
 - Verifies all Phase 1 contracts and backward compatibility.
 
-- [ ] **Step 1: Run all focused decision-integrity tests**
+- [x] **Step 1: Run all focused decision-integrity tests**
 
 Run:
 
@@ -611,7 +611,7 @@ python -m pytest \
 
 Expected: zero failures.
 
-- [ ] **Step 2: Run Ruff on every changed Python file**
+- [x] **Step 2: Run Ruff on every changed Python file**
 
 Run:
 
@@ -637,13 +637,13 @@ python -m ruff check \
 
 Expected: no Ruff errors.
 
-- [ ] **Step 3: Run the full project suite**
+- [x] **Step 3: Run the full project suite**
 
 Run: `python -m pytest -q`
 
 Expected: zero failures; optional dependency skips are reported explicitly.
 
-- [ ] **Step 4: Verify repository diff and contract coverage**
+- [x] **Step 4: Verify repository diff and contract coverage**
 
 Run: `git diff --check`
 
@@ -653,11 +653,11 @@ Run: `git diff --stat main...HEAD`
 
 Read the approved design line by line and confirm every Phase 1 requirement has a corresponding implementation and passing test. Record any gap rather than marking the plan complete.
 
-- [ ] **Step 5: Update user documentation only if the visible output contract changed materially**
+- [x] **Step 5: Update user documentation only if the visible output contract changed materially**
 
 If README examples describe final decision output, update them to show explicit status and non-actionable outcomes. Do not add performance claims or model recommendations to this correctness branch.
 
-- [ ] **Step 6: Commit verification documentation**
+- [x] **Step 6: Commit verification documentation**
 
 ```bash
 git add README.md docs/superpowers/plans/2026-08-14-decision-integrity-foundation.md

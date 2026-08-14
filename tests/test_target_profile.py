@@ -143,6 +143,8 @@ def test_missing_structured_metrics_are_estimated_from_existing_analysis():
     assert "<span class='metric-label'>Target Gap</span><strong>-20.00%</strong>" in html
     assert "<strong>74/100</strong>" in html
     assert "Downside target is the cited 200-day support" in html
+    assert "class='target-evidence'" in html
+    assert "<strong>Target evidence:</strong> 200 SMA: 1.56" in html
 
 
 def test_uncited_fallback_target_is_rejected_as_unsupported():

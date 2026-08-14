@@ -1227,6 +1227,12 @@ def target_outlook_text(result: dict) -> str:
     return "No target outlook generated."
 
 
+def target_evidence_text(result: dict) -> str | None:
+    """Return the accepted verbatim target evidence, when available."""
+    quote = result.get("supporting_quote")
+    return str(quote) if quote else None
+
+
 def build_tui_result_summary(analysis_results: list[dict]) -> Table:
     """Build a compact post-run summary for one ticker or a batch."""
     table = Table(
@@ -1534,12 +1540,22 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
 
         final_state = result["final_state"]
         section_summaries = get_consolidated_section_summaries(result, summary_llm=summary_llm)
+        supporting_evidence = target_evidence_text(result)
         lines.extend(
             [
                 f"Decision: {result.get('decision') or 'Unknown'}",
                 "",
                 "### Target Outlook",
                 sanitize_report_language(target_outlook_text(result)),
+                *(
+                    [
+                        "",
+                        "### Target Supporting Evidence",
+                        supporting_evidence,
+                    ]
+                    if supporting_evidence
+                    else []
+                ),
                 "",
                 "### Portfolio Management Decision",
                 section_summaries["Portfolio Management Decision"],
@@ -1674,6 +1690,13 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
 
         final_state = result["final_state"]
         section_summaries = get_consolidated_section_summaries(result, summary_llm=summary_llm)
+        supporting_evidence = target_evidence_text(result)
+        target_evidence_html = (
+            "<div class='target-evidence'><strong>Target evidence:</strong> "
+            f"{escape(supporting_evidence)}</div>"
+            if supporting_evidence
+            else ""
+        )
         reference_price = format_price_target(result.get("reference_price"))
         delta_label = format_target_gap_percent(
             result.get("reference_price"),
@@ -1696,6 +1719,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             "<div class='confidence-strip'>"
             f"<div class='confidence-bar'><span style='width:{confidence_width}%'></span></div>"
             f"<div class='confidence-copy'>{escape(sanitize_report_language(target_outlook_text(result)))}</div>"
+            f"{target_evidence_html}"
             "</div>"
             "<div class='narrative-block'>"
             "<h3>Portfolio Management Decision</h3>"

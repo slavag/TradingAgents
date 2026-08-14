@@ -74,10 +74,23 @@ def test_unsupported_structured_binding_returns_unavailable_without_plain_retry(
     llm.invoke.assert_not_called()
 
 
+def test_unexpected_structured_binding_failure_is_sanitized():
+    """A binding-time provider error must not abort graph construction or leak details."""
+    llm = MagicMock()
+    llm.with_structured_output.side_effect = RuntimeError("secret binding detail")
+
+    result = create_portfolio_manager(llm)(make_pm_state())["final_trade_decision"]
+
+    assert "**Decision Status**: Unavailable" in result
+    assert "structured_binding_unsupported" in result
+    assert "secret binding detail" not in result
+
+
 @pytest.mark.parametrize(
     ("llm", "expected_code"),
     [
         (configured_llm(result=None), "structured_response_missing"),
+        (configured_llm(result={"rating": "Buy"}), "structured_response_invalid"),
         (
             configured_llm(invoke_error=RuntimeError("secret provider detail")),
             "structured_invocation_failed",
