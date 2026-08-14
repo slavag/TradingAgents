@@ -21,7 +21,9 @@ import html
 import http.client
 import json
 import logging
+import random
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
@@ -48,6 +50,34 @@ _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 # discussion. wallstreetbets has the most volume but most noise; stocks /
 # investing trend more measured. Caller can override.
 DEFAULT_SUBREDDITS = ("wallstreetbets", "stocks", "investing")
+
+_RETRY_DELAYS = (5.0, 15.0, 30.0)
+_BACKOFF_JITTER = 0.20
+_RATE_LIMIT_LOCK = threading.Lock()
+_rate_limited_until = 0.0
+
+
+def _reset_process_state() -> None:
+    """Reset process-local Reddit state; intended for deterministic tests."""
+    global _rate_limited_until
+    with _RATE_LIMIT_LOCK:
+        _rate_limited_until = 0.0
+
+
+def _wait_for_rate_limit_cooldown() -> None:
+    """Wait once for the longest cooldown observed by this process."""
+    with _RATE_LIMIT_LOCK:
+        remaining = max(0.0, _rate_limited_until - time.monotonic())
+    if remaining:
+        time.sleep(remaining)
+
+
+def _extend_rate_limit_cooldown(seconds: float) -> None:
+    """Publish a cooldown deadline for concurrent and subsequent requests."""
+    global _rate_limited_until
+    deadline = time.monotonic() + seconds
+    with _RATE_LIMIT_LOCK:
+        _rate_limited_until = max(_rate_limited_until, deadline)
 
 
 def _search_qs(ticker: str, limit: int) -> str:
@@ -91,6 +121,15 @@ def _retry_after_seconds(exc: HTTPError) -> float | None:
         return None
 
 
+def _retry_delay(exc: HTTPError, retry_index: int) -> float:
+    """Return Retry-After or a bounded, jittered exponential delay."""
+    retry_after = _retry_after_seconds(exc)
+    if retry_after is not None:
+        return retry_after
+    base = _RETRY_DELAYS[min(retry_index, len(_RETRY_DELAYS) - 1)]
+    return base * random.uniform(1.0 - _BACKOFF_JITTER, 1.0 + _BACKOFF_JITTER)
+
+
 def _fetch_subreddit_rss(
     ticker: str,
     sub: str,
@@ -107,25 +146,36 @@ def _fetch_subreddit_rss(
     """
     url = _RSS.format(sub=sub, qs=_search_qs(ticker, limit))
     req = Request(url, headers={"User-Agent": _UA})
-    try:
-        with urlopen(req, timeout=timeout) as resp:
-            root = ET.fromstring(resp.read())
-    except HTTPError as exc:
-        if exc.code == 429 and _retry:
-            wait = _retry_after_seconds(exc) or 5.0
+    retry_budget = len(_RETRY_DELAYS) if _retry else 0
+    for attempt in range(retry_budget + 1):
+        _wait_for_rate_limit_cooldown()
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                root = ET.fromstring(resp.read())
+            break
+        except HTTPError as exc:
+            if exc.code != 429:
+                logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
+                return []
+
+            delay = _retry_delay(exc, min(attempt, len(_RETRY_DELAYS) - 1))
+            _extend_rate_limit_cooldown(delay)
+            if attempt >= retry_budget:
+                logger.warning(
+                    "Reddit RSS fetch failed for r/%s · %s after %d attempts: %s",
+                    sub, ticker, attempt + 1, exc,
+                )
+                return []
+
             logger.warning(
-                "Reddit RSS 429 for r/%s · %s — backing off %.1fs then retrying once",
-                sub, ticker, wait,
+                "Reddit RSS 429 for r/%s · %s — backing off %.1fs then retrying (%d/%d)",
+                sub, ticker, delay, attempt + 1, retry_budget,
             )
-            time.sleep(wait)
-            return _fetch_subreddit_rss(ticker, sub, limit, timeout, _retry=False)
-        logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
-        return []
-    except (OSError, http.client.HTTPException, ET.ParseError) as exc:
-        # OSError covers URLError/TimeoutError/connection resets; HTTPException
-        # covers chunked-transfer errors (IncompleteRead/BadStatusLine, #1024).
-        logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
-        return []
+        except (OSError, http.client.HTTPException, ET.ParseError) as exc:
+            # OSError covers URLError/TimeoutError/connection resets; HTTPException
+            # covers chunked-transfer errors (IncompleteRead/BadStatusLine, #1024).
+            logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
+            return []
 
     posts = []
     for entry in root.findall("atom:entry", _ATOM_NS)[:limit]:

@@ -28,6 +28,17 @@ _SAMPLE_ATOM = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+@pytest.fixture(autouse=True)
+def _reset_reddit_process_state():
+    """Keep module-level cooldown/cache state isolated between tests."""
+    reset = getattr(reddit, "_reset_process_state", None)
+    if reset:
+        reset()
+    yield
+    if reset:
+        reset()
+
+
 def _resp(read_fn):
     """A minimal context-manager response whose read() runs ``read_fn``."""
     class _Resp:
@@ -124,29 +135,60 @@ class TestJsonPathFallsBackToRss:
 
 @pytest.mark.unit
 class TestRss429Backoff:
-    def test_429_then_success_retries_once(self):
+    def test_429_retries_with_bounded_exponential_schedule(self):
         err = HTTPError("url", 429, "Too Many Requests", {}, None)
-        with patch.object(reddit, "urlopen", side_effect=[err, _atom_resp()]) as op, \
+        with patch.object(
+            reddit,
+            "urlopen",
+            side_effect=[err, err, err, _atom_resp()],
+        ) as op, \
+             patch.object(reddit, "random", create=True) as random_module, \
+             patch.object(reddit.time, "monotonic", return_value=100.0), \
              patch.object(reddit.time, "sleep") as slept:
+            random_module.uniform.return_value = 1.0
             posts = reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
-        assert op.call_count == 2          # original + exactly one retry
-        slept.assert_called_once()         # backed off before retrying
+        assert op.call_count == 4
+        assert [call.args[0] for call in slept.call_args_list] == [5.0, 15.0, 30.0]
         assert len(posts) == 2
 
-    def test_429_twice_gives_up_after_one_retry(self):
+    def test_429_exhausts_after_three_retries(self):
         err = HTTPError("url", 429, "Too Many Requests", {}, None)
-        with patch.object(reddit, "urlopen", side_effect=[err, err]) as op, \
-             patch.object(reddit.time, "sleep"):
+        with patch.object(reddit, "urlopen", side_effect=[err, err, err, err]) as op, \
+             patch.object(reddit, "random", create=True) as random_module, \
+             patch.object(reddit.time, "monotonic", return_value=100.0), \
+             patch.object(reddit.time, "sleep") as slept:
+            random_module.uniform.return_value = 1.0
             posts = reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
-        assert op.call_count == 2          # one retry, then gives up cleanly
+        assert op.call_count == 4
+        assert [call.args[0] for call in slept.call_args_list] == [5.0, 15.0, 30.0]
         assert posts == []
+
+    def test_default_backoff_has_bounded_jitter(self):
+        err = HTTPError("url", 429, "Too Many Requests", {}, None)
+        with patch.object(reddit, "urlopen", side_effect=[err, _atom_resp()]), \
+             patch.object(reddit, "random", create=True) as random_module, \
+             patch.object(reddit.time, "monotonic", return_value=100.0), \
+             patch.object(reddit.time, "sleep") as slept:
+            random_module.uniform.return_value = 1.2
+            reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
+        slept.assert_called_once_with(6.0)
 
     def test_retry_after_header_is_honoured(self):
         err = HTTPError("url", 429, "Too Many Requests", {"Retry-After": "12"}, None)
         with patch.object(reddit, "urlopen", side_effect=[err, _atom_resp()]), \
+             patch.object(reddit.time, "monotonic", return_value=100.0), \
              patch.object(reddit.time, "sleep") as slept:
             reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
         slept.assert_called_once_with(12.0)
+
+    def test_existing_shared_cooldown_delays_next_request(self):
+        with patch.object(reddit, "_rate_limited_until", 110.0, create=True), \
+             patch.object(reddit.time, "monotonic", return_value=100.0), \
+             patch.object(reddit.time, "sleep") as slept, \
+             patch.object(reddit, "urlopen", return_value=_atom_resp()):
+            posts = reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
+        slept.assert_called_once_with(10.0)
+        assert len(posts) == 2
 
 
 @pytest.mark.unit
