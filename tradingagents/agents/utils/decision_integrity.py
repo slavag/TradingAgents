@@ -98,6 +98,13 @@ def _base_fields(draft: PortfolioDecisionDraft) -> dict[str, Any]:
         "rating": draft.rating,
         "executive_summary": draft.executive_summary,
         "investment_thesis": draft.investment_thesis,
+        "thesis": draft.thesis,
+        "existing_position_action": draft.existing_position_action,
+        "existing_position_summary": draft.existing_position_summary,
+        "new_position_action": draft.new_position_action,
+        "new_position_summary": draft.new_position_summary,
+        "conditional_plan": draft.conditional_plan,
+        "recommendation_confidence_score": draft.recommendation_confidence_score,
     }
 
 
@@ -194,6 +201,19 @@ def _target_rejection_reason(
     return None
 
 
+def _find_exact_price_quote(
+    price_target: float,
+    evidence_text: str,
+) -> str | None:
+    for raw_line in evidence_text.splitlines():
+        candidate = _normalize_whitespace(raw_line)
+        if not candidate or len(candidate) > 300:
+            continue
+        if _quote_rejection_reason(price_target, candidate, evidence_text) is None:
+            return candidate
+    return None
+
+
 def finalize_portfolio_decision(
     draft: PortfolioDecisionDraft,
     evidence_text: str,
@@ -210,16 +230,33 @@ def finalize_portfolio_decision(
             TargetValidationReason.BUNDLE_INCOMPLETE,
         )
 
-    reason = _target_rejection_reason(draft, evidence_text, reference_price)
+    validated_draft = draft
+    quote_reason = _quote_rejection_reason(
+        draft.price_target,
+        draft.supporting_quote,
+        evidence_text,
+    )
+    if quote_reason is TargetValidationReason.SUPPORTING_QUOTE_NOT_IN_EVIDENCE:
+        exact_quote = _find_exact_price_quote(draft.price_target, evidence_text)
+        if exact_quote is not None:
+            validated_draft = draft.model_copy(
+                update={"supporting_quote": exact_quote},
+            )
+
+    reason = _target_rejection_reason(
+        validated_draft,
+        evidence_text,
+        reference_price,
+    )
     if reason is not None:
         return _without_target(draft, TargetValidationStatus.REJECTED, reason)
 
     return PortfolioDecision(
-        **_base_fields(draft),
-        price_target=draft.price_target,
-        time_horizon=draft.time_horizon,
-        confidence_score=draft.confidence_score,
-        target_summary=draft.target_summary,
-        supporting_quote=draft.supporting_quote,
+        **_base_fields(validated_draft),
+        price_target=validated_draft.price_target,
+        time_horizon=validated_draft.time_horizon,
+        confidence_score=validated_draft.confidence_score,
+        target_summary=validated_draft.target_summary,
+        supporting_quote=validated_draft.supporting_quote,
         target_validation_status=TargetValidationStatus.ACCEPTED,
     )

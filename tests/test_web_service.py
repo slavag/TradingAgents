@@ -78,11 +78,25 @@ class WebServiceTests(unittest.TestCase):
             "decision": "Buy",
             "price_target": None,
             "confidence_score": None,
+            "recommendation_confidence_score": 82,
+            "run_id": "job-current",
+            "snapshot_mode": "live_current_day",
+            "evidence_fingerprint": "sha256:current",
+            "comparison_status": "evidence_changed",
+            "previous_run_id": "job-prior",
             "target_horizon": None,
             "target_summary": None,
             "supporting_quote": "Resistance: 120.",
             "target_validation_status": "Rejected",
             "target_rejection_reason": "supporting_quote_not_in_evidence",
+            "thesis": "Bullish",
+            "existing_position_action": "Hold",
+            "existing_position_summary": "Keep a medium position.",
+            "new_position_action": "Conditional Buy",
+            "new_position_summary": "Wait for confirmation.",
+            "conditional_confirmation": "Buy above 120.",
+            "conditional_alternative": "Accumulate near 100.",
+            "conditional_invalidation": "A break below 90 weakens the setup.",
             "results_dir": "/tmp/test",
             "report_path": "/tmp/test/report.md",
             "final_state": {},
@@ -97,6 +111,19 @@ class WebServiceTests(unittest.TestCase):
         )
         self.assertEqual(serialized["supporting_quote"], "Resistance: 120.")
         self.assertIsNone(serialized["price_target"])
+        self.assertEqual(serialized["price_target_label"], "No validated target")
+        self.assertEqual(serialized["recommendation_confidence_score"], 82)
+        self.assertEqual(serialized["recommendation_confidence_label"], "82/100")
+        self.assertEqual(serialized["comparison_status"], "evidence_changed")
+        self.assertEqual(serialized["previous_run_id"], "job-prior")
+        self.assertEqual(
+            serialized["target_status_label"],
+            "Rejected: supporting quote not in evidence",
+        )
+        self.assertEqual(serialized["thesis"], "Bullish")
+        self.assertEqual(serialized["existing_position_action"], "Hold")
+        self.assertEqual(serialized["new_position_action"], "Conditional Buy")
+        self.assertEqual(serialized["conditional_confirmation"], "Buy above 120.")
 
     def test_web_graph_config_defaults_to_repeatable_temperature(self):
         config = web_service.build_graph_config({})
@@ -157,6 +184,7 @@ class WebServiceTests(unittest.TestCase):
             }
             observed = {}
             tmp_path = Path(tmpdir)
+            save_report = MagicMock(return_value=tmp_path / "ticker.md")
 
             with web_service._JOB_LOCK:
                 web_service._JOBS[job_id] = {
@@ -200,7 +228,7 @@ class WebServiceTests(unittest.TestCase):
                         "reference_price": 100.0,
                     },
                 ),
-                patch.object(web_service, "save_report_to_disk", return_value=tmp_path / "ticker.md"),
+                patch.object(web_service, "save_report_to_disk", save_report),
                 patch.object(web_service, "build_consolidated_report", side_effect=build_markdown),
                 patch.object(web_service, "build_consolidated_report_html", return_value="html"),
                 patch.object(
@@ -224,6 +252,21 @@ class WebServiceTests(unittest.TestCase):
             self.assertEqual(len(stream_call["callbacks"]), 1)
             self.assertIsInstance(stream_call["callbacks"][0], StatsCallbackHandler)
             self.assertFalse(hasattr(web_service, "_stream_graph_in_analysis_context"))
+            report_call = save_report.call_args
+            self.assertEqual(
+                report_call.args[2],
+                web_service.RESULTS_ROOT
+                / "AAA"
+                / "2026-07-05"
+                / "runs"
+                / job_id
+                / "web_report",
+            )
+            self.assertEqual(report_call.kwargs["run_metadata"]["run_id"], job_id)
+            self.assertEqual(
+                report_call.kwargs["run_metadata"]["snapshot_mode"],
+                "historical_frozen",
+            )
 
     def test_empty_graph_execution_is_reported_as_failure_not_decision(self):
         with TemporaryDirectory() as tmpdir:

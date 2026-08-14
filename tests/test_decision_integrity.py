@@ -4,11 +4,15 @@ import pytest
 from pydantic import ValidationError
 
 from tradingagents.agents.schemas import (
+    ConditionalActionPlan,
     DecisionStatus,
+    ExistingPositionAction,
+    NewPositionAction,
     PortfolioDecision,
     PortfolioDecisionDraft,
     PortfolioRating,
     TargetValidationStatus,
+    ThesisRating,
     render_pm_decision,
 )
 from tradingagents.agents.utils.decision_integrity import (
@@ -24,6 +28,17 @@ def actionable_draft(**overrides):
         "rating": PortfolioRating.BUY,
         "executive_summary": "Build gradually.",
         "investment_thesis": "Verified evidence supports the thesis.",
+        "thesis": ThesisRating.BULLISH,
+        "existing_position_action": ExistingPositionAction.HOLD,
+        "existing_position_summary": "Keep a medium position.",
+        "new_position_action": NewPositionAction.CONDITIONAL_BUY,
+        "new_position_summary": "Wait for confirmation or a controlled pullback.",
+        "recommendation_confidence_score": 72,
+        "conditional_plan": ConditionalActionPlan(
+            confirmation="Buy after a sustained move above 248-253.",
+            alternative="Accumulate near 222, with 211 as deeper support.",
+            invalidation="A sustained break below 210 weakens the setup.",
+        ),
     }
     values.update(overrides)
     return PortfolioDecisionDraft(**values)
@@ -55,6 +70,98 @@ def test_non_actionable_draft_rejects_rating(status):
         )
 
 
+def test_actionable_draft_requires_position_bundle():
+    with pytest.raises(ValidationError, match="actionable decisions require position guidance"):
+        PortfolioDecisionDraft(
+            status=DecisionStatus.ACTIONABLE,
+            rating=PortfolioRating.HOLD,
+            executive_summary="Maintain exposure.",
+            investment_thesis="Evidence is balanced.",
+            recommendation_confidence_score=50,
+        )
+
+
+@pytest.mark.parametrize(
+    "new_action",
+    [NewPositionAction.CONDITIONAL_BUY, NewPositionAction.CONDITIONAL_SELL],
+)
+def test_conditional_new_position_action_requires_plan(new_action):
+    with pytest.raises(ValidationError, match="conditional actions require a conditional plan"):
+        actionable_draft(
+            new_position_action=new_action,
+            conditional_plan=None,
+        )
+
+
+def test_bullish_wait_with_plan_normalizes_to_conditional_buy():
+    draft = actionable_draft(new_position_action=NewPositionAction.WAIT)
+
+    assert draft.new_position_action is NewPositionAction.CONDITIONAL_BUY
+
+
+def test_bearish_wait_with_plan_normalizes_to_conditional_sell():
+    draft = actionable_draft(
+        thesis=ThesisRating.BEARISH,
+        new_position_action=NewPositionAction.WAIT,
+    )
+
+    assert draft.new_position_action is NewPositionAction.CONDITIONAL_SELL
+
+
+def test_wait_without_explicit_watch_plan_is_rejected():
+    with pytest.raises(ValidationError, match="wait actions require a conditional plan"):
+        actionable_draft(
+            thesis=ThesisRating.NEUTRAL,
+            new_position_action=NewPositionAction.WAIT,
+            conditional_plan=None,
+        )
+
+
+def test_non_conditional_new_position_action_rejects_plan():
+    with pytest.raises(ValidationError, match="only conditional actions may carry a conditional plan"):
+        actionable_draft(new_position_action=NewPositionAction.AVOID)
+
+
+def test_actionable_draft_requires_recommendation_confidence():
+    with pytest.raises(
+        ValidationError,
+        match="actionable decisions require recommendation confidence",
+    ):
+        actionable_draft(recommendation_confidence_score=None)
+
+
+def test_non_actionable_draft_rejects_position_guidance():
+    with pytest.raises(ValidationError, match="non-actionable decisions cannot carry position guidance"):
+        PortfolioDecisionDraft(
+            status=DecisionStatus.ABSTAIN,
+            rating=None,
+            executive_summary="Evidence is insufficient.",
+            investment_thesis="No directional thesis is supported.",
+            thesis=ThesisRating.NEUTRAL,
+        )
+
+
+def test_finalize_preserves_and_renders_position_bundle():
+    result = finalize_portfolio_decision(
+        actionable_draft(),
+        evidence_text="Verified close: 236.22.",
+        reference_price=236.22,
+    )
+
+    rendered = render_pm_decision(result)
+
+    assert result.thesis is ThesisRating.BULLISH
+    assert result.existing_position_action is ExistingPositionAction.HOLD
+    assert result.new_position_action is NewPositionAction.CONDITIONAL_BUY
+    assert result.conditional_plan is not None
+    assert "**Thesis**: Bullish" in rendered
+    assert "**Existing Position**: Hold" in rendered
+    assert "**New Position**: Conditional Buy" in rendered
+    assert "**Conditional Confirmation**: Buy after a sustained move above 248-253." in rendered
+    assert "**Conditional Alternative**: Accumulate near 222, with 211 as deeper support." in rendered
+    assert "**Conditional Invalidation**: A sustained break below 210 weakens the setup." in rendered
+
+
 def test_final_decision_rejects_partial_target_bundle():
     """Removing any accepted target field must invalidate the finalized object."""
     with pytest.raises(
@@ -66,6 +173,17 @@ def test_final_decision_rejects_partial_target_bundle():
             rating=PortfolioRating.BUY,
             executive_summary="Build gradually.",
             investment_thesis="Supported thesis.",
+            thesis=ThesisRating.BULLISH,
+            existing_position_action=ExistingPositionAction.HOLD,
+            existing_position_summary="Keep a medium position.",
+            new_position_action=NewPositionAction.CONDITIONAL_BUY,
+            new_position_summary="Wait for confirmation.",
+            conditional_plan=ConditionalActionPlan(
+                confirmation="Buy after a sustained breakout.",
+                alternative="Accumulate on a controlled pullback.",
+                invalidation="Exit if support fails.",
+            ),
+            recommendation_confidence_score=72,
             price_target=120.0,
             target_validation_status=TargetValidationStatus.ACCEPTED,
         )
@@ -101,6 +219,74 @@ def test_finalize_accepts_complete_verbatim_price_quote():
     assert result.target_validation_status is TargetValidationStatus.ACCEPTED
     assert result.price_target == 120.0
     assert result.supporting_quote == "Verified close: 100. Resistance: 120."
+
+
+def test_target_rejection_preserves_recommendation_confidence():
+    draft = actionable_draft(
+        price_target=130.0,
+        time_horizon="3 months",
+        confidence_score=78,
+        target_summary="Resistance supports the central case.",
+        supporting_quote="This quote was not in the evidence: 130.",
+    )
+
+    result = finalize_portfolio_decision(
+        draft,
+        evidence_text="Verified close: 100. Resistance: 120.",
+        reference_price=100.0,
+    )
+
+    assert result.target_validation_status is TargetValidationStatus.REJECTED
+    assert result.price_target is None
+    assert result.confidence_score is None
+    assert result.recommendation_confidence_score == 72
+
+
+def test_finalize_repairs_paraphrased_quote_from_exact_price_evidence():
+    """A supported target must survive harmless model paraphrasing of its quote."""
+    evidence = (
+        "Near-term support: 221.94.\n"
+        "Near-term resistance: 50 SMA at 248.39.\n"
+        "Upper Bollinger band: 253.19."
+    )
+    draft = actionable_draft(
+        price_target=248.39,
+        time_horizon="3 months",
+        confidence_score=68,
+        target_summary="The medium-term resistance is the central case.",
+        supporting_quote="The 50-day SMA is near 248.39.",
+    )
+
+    result = finalize_portfolio_decision(
+        draft,
+        evidence_text=evidence,
+        reference_price=236.22,
+    )
+
+    assert result.target_validation_status is TargetValidationStatus.ACCEPTED
+    assert result.price_target == 248.39
+    assert result.supporting_quote == "Near-term resistance: 50 SMA at 248.39."
+
+
+def test_finalize_repairs_quote_from_markdown_price_context():
+    """Markdown emphasis around a labelled price must not hide valid evidence."""
+    evidence = "- Goldman reportedly raised its price target to **$509**"
+    draft = actionable_draft(
+        price_target=509.0,
+        time_horizon="12 months",
+        confidence_score=54,
+        target_summary="The published analyst target supplies an upside case.",
+        supporting_quote="Goldman's price target was raised to $509.",
+    )
+
+    result = finalize_portfolio_decision(
+        draft,
+        evidence_text=evidence,
+        reference_price=400.0,
+    )
+
+    assert result.target_validation_status is TargetValidationStatus.ACCEPTED
+    assert result.supporting_quote == evidence
 
 
 @pytest.mark.parametrize(

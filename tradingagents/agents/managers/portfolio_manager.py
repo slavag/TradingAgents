@@ -78,10 +78,18 @@ def create_portfolio_manager(llm):
 ---
 
 **Consistency Protocol:**
-- Use the Research Manager rating as the baseline.
-- Adjust it only when the risk debate adds concrete evidence that was not already reflected in the research plan; rhetoric alone is not new evidence.
-- When an adjustment is justified, move at most one tier on the five-tier scale unless the debate identifies a factual thesis invalidation.
+- Determine the thesis from evidence before choosing position actions. Treat upstream recommendations as arguments, not independent votes.
+- Compare the independent thesis with the Research Manager and Trader conclusions, and explain material disagreements from the underlying evidence rather than resolving them by vote count.
+- Do not move more than one tier away from a well-supported Research Manager rating unless the evidence identifies a factual thesis invalidation or a materially different horizon.
 - Do not assume whether the user already owns the instrument. The rating expresses the forward risk/reward view; describe separate actions for existing and prospective positions when relevant.
+- Existing Position must choose Add, Hold, Trim, or Exit for a reader who already owns the instrument, with concise sizing and execution guidance.
+- New Position must choose Buy, Conditional Buy, Wait, Avoid, Conditional Sell, or Sell for a reader considering a new long or short position.
+- Conditional Buy requires a confirmation trigger, an optional pullback entry, and a downside invalidation grounded in the supplied evidence.
+- Conditional Sell requires a breakdown trigger, an optional failed-rally exit or short entry, and an upside invalidation grounded in the supplied evidence.
+- Wait requires an explicit watch plan: what evidence or price behavior permits entry, an optional alternate setup, and what invalidates or materially weakens the setup. Do not return a generic instruction to revisit later.
+- A bullish or strongly bullish thesis with future entry conditions is Conditional Buy, not Wait. A bearish or strongly bearish thesis with future sell or short conditions is Conditional Sell, not Wait.
+- Recommendation Confidence is required for every actionable decision. Score the evidence strength for the recommendation from 0 to 100 independently of target confidence; it must remain meaningful even when no numeric target can be validated.
+- Never invent a price level. Use price ranges only when the supplied evidence contains those levels; otherwise express the condition without a number.
 - Apply the same rating standard to materially identical evidence across runs.
 - When the supplied analysis contains a verified reference price and usable valuation or technical levels, provide a decision-consistent central-case price target, its time horizon, an uncalibrated evidence-strength score, and a short rationale citing those levels.
 - When you provide a target, include a short verbatim supporting quote copied from the supplied evidence. The quote must contain the exact target number and nearby price-level context.

@@ -19,6 +19,7 @@ class WebModelCatalogTests(unittest.TestCase):
     def test_shared_web_catalog_uses_current_anthropic_models(self):
         values = [value for _, value in get_web_model_options()["anthropic"]]
 
+        self.assertIn("claude-opus-5", values)
         self.assertIn("claude-fable-5", values)
         self.assertIn("claude-opus-4-8", values)
         self.assertIn("claude-sonnet-5", values)
@@ -29,6 +30,8 @@ class WebModelCatalogTests(unittest.TestCase):
     def test_shared_web_catalog_uses_current_google_models(self):
         values = [value for _, value in get_web_model_options()["google"]]
 
+        self.assertIn("gemini-3.6-flash", values)
+        self.assertIn("gemini-3.5-flash-lite", values)
         self.assertIn("gemini-3.5-flash", values)
         self.assertIn("gemini-3.1-flash-lite", values)
         self.assertIn("gemini-3.1-pro-preview", values)
@@ -37,6 +40,7 @@ class WebModelCatalogTests(unittest.TestCase):
     def test_shared_web_catalog_uses_current_xai_models(self):
         values = [value for _, value in get_web_model_options()["xai"]]
 
+        self.assertIn("grok-4.5", values)
         self.assertIn("grok-4.3", values)
         self.assertIn("grok-build-0.1", values)
         self.assertNotIn("grok-4-1-fast-reasoning", values)
@@ -49,9 +53,23 @@ class WebModelCatalogTests(unittest.TestCase):
         self.assertIn("gpt-5.6-terra", html)
         self.assertIn("gpt-5.6-luna", html)
         self.assertIn("gpt-5.5", html)
+        self.assertIn("claude-opus-5", html)
         self.assertIn("claude-fable-5", html)
+        self.assertIn("gemini-3.6-flash", html)
+        self.assertIn("gemini-3.5-flash-lite", html)
         self.assertIn("gemini-3.5-flash", html)
+        self.assertIn("grok-4.5", html)
         self.assertIn("grok-build-0.1", html)
+
+    def test_each_role_exposes_curated_non_us_providers(self):
+        html = _render_index_response().body.decode("utf-8")
+
+        for provider in ("deepseek", "qwen", "glm", "minimax"):
+            self.assertEqual(
+                html.count(f'<option value="{provider}">'),
+                3,
+                f"{provider} must be selectable for every model role",
+            )
 
     def test_analysis_request_defaults_to_repeatable_temperature(self):
         request = AnalysisRequest(tickers="PENG", analysis_date="2026-07-19")

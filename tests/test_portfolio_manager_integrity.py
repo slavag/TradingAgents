@@ -6,9 +6,13 @@ import pytest
 
 from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
 from tradingagents.agents.schemas import (
+    ConditionalActionPlan,
     DecisionStatus,
+    ExistingPositionAction,
+    NewPositionAction,
     PortfolioDecisionDraft,
     PortfolioRating,
+    ThesisRating,
 )
 
 
@@ -43,6 +47,17 @@ def actionable_draft(**overrides):
         "rating": PortfolioRating.BUY,
         "executive_summary": "Build gradually.",
         "investment_thesis": "Evidence supports the thesis.",
+        "thesis": ThesisRating.BULLISH,
+        "existing_position_action": ExistingPositionAction.HOLD,
+        "existing_position_summary": "Keep a medium position.",
+        "new_position_action": NewPositionAction.CONDITIONAL_BUY,
+        "new_position_summary": "Wait for confirmation or a controlled pullback.",
+        "recommendation_confidence_score": 72,
+        "conditional_plan": ConditionalActionPlan(
+            confirmation="Buy after a sustained move above 110-120.",
+            alternative="Accumulate near support at 100.",
+            invalidation="A sustained break below 90 weakens the setup.",
+        ),
     }
     values.update(overrides)
     return PortfolioDecisionDraft(**values)
@@ -143,3 +158,19 @@ def test_primary_target_with_verbatim_quote_is_rendered():
     assert "**Price Target**: 120.0" in result
     assert f"**Target Supporting Quote**: {quote}" in result
     assert "Target Validation" not in result
+
+
+def test_prompt_defines_independent_thesis_and_symmetric_conditional_actions():
+    llm = configured_llm(result=actionable_draft())
+
+    create_portfolio_manager(llm)(make_pm_state())
+
+    structured = llm.with_structured_output.return_value
+    prompt = structured.invoke.call_args.args[0]
+    assert "Determine the thesis from evidence before choosing position actions" in prompt
+    assert "Treat upstream recommendations as arguments, not independent votes" in prompt
+    assert "Conditional Buy requires" in prompt
+    assert "Conditional Sell requires" in prompt
+    assert "Wait requires" in prompt
+    assert "Recommendation Confidence" in prompt
+    assert "Never invent a price level" in prompt

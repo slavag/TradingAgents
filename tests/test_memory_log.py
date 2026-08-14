@@ -17,8 +17,12 @@ import pytest
 from tradingagents import default_config as default_config_module
 from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
 from tradingagents.agents.schemas import (
+    ConditionalActionPlan,
+    ExistingPositionAction,
+    NewPositionAction,
     PortfolioDecisionDraft,
     PortfolioRating,
+    ThesisRating,
 )
 from tradingagents.agents.utils import memory as memory_module
 from tradingagents.agents.utils.memory import TradingMemoryLog
@@ -123,6 +127,22 @@ def _make_pm_state(past_context=""):
     }
 
 
+def _position_guidance():
+    return {
+        "thesis": ThesisRating.NEUTRAL,
+        "existing_position_action": ExistingPositionAction.HOLD,
+        "existing_position_summary": "Keep a medium position.",
+        "new_position_action": NewPositionAction.WAIT,
+        "new_position_summary": "Wait for a clearer setup.",
+        "recommendation_confidence_score": 60,
+        "conditional_plan": ConditionalActionPlan(
+            confirmation="Reassess after fundamental and price confirmation.",
+            alternative="Reassess after risk/reward improves.",
+            invalidation="Avoid entry if the thesis weakens materially.",
+        ),
+    }
+
+
 def _structured_pm_llm(captured: dict, decision: PortfolioDecisionDraft | None = None):
     """Build a MagicMock LLM whose with_structured_output binding captures the
     prompt and returns a real PortfolioDecisionDraft.
@@ -132,6 +152,7 @@ def _structured_pm_llm(captured: dict, decision: PortfolioDecisionDraft | None =
             rating=PortfolioRating.HOLD,
             executive_summary="Hold the position; await catalyst.",
             investment_thesis="Balanced view; neither side carried the debate.",
+            **_position_guidance(),
         )
     structured = MagicMock()
     structured.invoke.side_effect = lambda prompt: (
@@ -1158,16 +1179,17 @@ class TestPortfolioManagerInjection:
         pm_node(state)
         assert "Lessons from prior decisions" not in captured["prompt"]
 
-    def test_pm_prompt_anchors_rating_without_assuming_ownership(self):
+    def test_pm_prompt_builds_independent_thesis_without_assuming_ownership(self):
         captured = {}
         llm = _structured_pm_llm(captured)
         pm_node = create_portfolio_manager(llm)
         pm_node(_make_pm_state())
 
         prompt = captured["prompt"]
-        assert "Research Manager rating as the baseline" in prompt
+        assert "Determine the thesis from evidence before choosing position actions" in prompt
+        assert "Treat upstream recommendations as arguments, not independent votes" in prompt
         assert "Do not assume whether the user already owns the instrument" in prompt
-        assert "move at most one tier" in prompt
+        assert "Do not move more than one tier" in prompt
 
     def test_pm_returns_rendered_markdown_with_rating(self):
         """The structured PortfolioDecision is rendered to markdown that
@@ -1183,6 +1205,7 @@ class TestPortfolioManagerInjection:
             confidence_score=82,
             target_summary="Earnings revisions and trend support the central-case target.",
             supporting_quote="Verified close: 190. Resistance: 215.",
+            **_position_guidance(),
         )
         llm = _structured_pm_llm(captured, decision)
         pm_node = create_portfolio_manager(llm)
@@ -1191,9 +1214,13 @@ class TestPortfolioManagerInjection:
         assert "**Rating**: Overweight" in md
         assert "**Executive Summary**: Build position gradually" in md
         assert "**Investment Thesis**: AI capex cycle" in md
+        assert "**Thesis**: Neutral" in md
+        assert "**Existing Position**: Hold" in md
+        assert "**New Position**: Wait" in md
         assert "**Price Target**: 215.0" in md
         assert "**Time Horizon**: 3-6 months" in md
-        assert "**Decision Confidence**: 82/100" in md
+        assert "**Recommendation Confidence**: 60/100" in md
+        assert "**Target Confidence**: 82/100" in md
         assert (
             "**Target Rationale**: Earnings revisions and trend support the "
             "central-case target."

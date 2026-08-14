@@ -15,11 +15,15 @@ from pydantic import ValidationError
 from tradingagents.agents.analysts.sentiment_analyst import create_sentiment_analyst
 from tradingagents.agents.managers.research_manager import create_research_manager
 from tradingagents.agents.schemas import (
+    ConditionalActionPlan,
+    ExistingPositionAction,
+    NewPositionAction,
     PortfolioDecisionDraft,
     PortfolioRating,
     ResearchPlan,
     SentimentBand,
     SentimentReport,
+    ThesisRating,
     TraderAction,
     TraderProposal,
     render_research_plan,
@@ -27,6 +31,22 @@ from tradingagents.agents.schemas import (
     render_trader_proposal,
 )
 from tradingagents.agents.trader.trader import create_trader
+
+
+def _pm_position_guidance():
+    return {
+        "thesis": ThesisRating.NEUTRAL,
+        "existing_position_action": ExistingPositionAction.HOLD,
+        "existing_position_summary": "hold",
+        "new_position_action": NewPositionAction.WAIT,
+        "new_position_summary": "wait",
+        "recommendation_confidence_score": 50,
+        "conditional_plan": ConditionalActionPlan(
+            confirmation="Reassess when evidence improves.",
+            invalidation="Avoid entry if evidence deteriorates.",
+        ),
+    }
+
 
 # ---------------------------------------------------------------------------
 # Render functions
@@ -94,6 +114,7 @@ class TestNullishFloatCoercion:
             executive_summary="s",
             investment_thesis="t",
             price_target="N/A",
+            **_pm_position_guidance(),
         )
         assert d.price_target is None
 
@@ -103,6 +124,7 @@ class TestNullishFloatCoercion:
             executive_summary="s",
             investment_thesis="t",
             confidence_score="N/A",
+            **_pm_position_guidance(),
         )
         assert d.confidence_score is None
 

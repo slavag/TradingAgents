@@ -7,6 +7,18 @@ from cli.main import (
     format_price_target,
 )
 
+NO_POSITION_GUIDANCE = {
+    "recommendation_confidence_score": None,
+    "thesis": None,
+    "existing_position_action": None,
+    "existing_position_summary": None,
+    "new_position_action": None,
+    "new_position_summary": None,
+    "conditional_confirmation": None,
+    "conditional_alternative": None,
+    "conditional_invalidation": None,
+}
+
 
 def test_missing_target_and_confidence_remain_none():
     final_state = {"final_trade_decision": "**Rating**: Hold\n\n**Executive Summary**: Wait."}
@@ -48,6 +60,65 @@ def test_explicit_structured_target_profile_is_extracted_without_fallback():
     assert profile["supporting_quote"] == "Resistance: 145.5"
     assert profile["target_validation_status"] == "Accepted"
     assert profile["target_rejection_reason"] is None
+
+
+def test_target_profile_uses_the_verified_evidence_price_without_refetching():
+    final_state = {
+        "final_trade_decision": (
+            "**Decision Status**: Actionable\n\n"
+            "**Rating**: Buy\n\n"
+            "**Recommendation Confidence**: 80/100\n\n"
+            "**Price Target**: 120\n\n"
+            "**Time Horizon**: 3 months\n\n"
+            "**Target Confidence**: 70/100\n\n"
+            "**Target Rationale**: Resistance supports the target.\n\n"
+            "**Target Supporting Quote**: Resistance: 120."
+        ),
+        "market_report": "Verified close: 100. Resistance: 120.",
+    }
+
+    with patch("cli.main.fetch_reference_price", return_value=105.0) as fetch:
+        profile = estimate_target_profile(
+            None,
+            "TEST",
+            "2026-08-14",
+            final_state,
+            "Buy",
+        )
+
+    assert profile["reference_price"] == 100.0
+    fetch.assert_not_called()
+
+
+def test_position_aware_guidance_is_extracted_from_stable_markdown_labels():
+    final_state = {
+        "final_trade_decision": (
+            "**Decision Status**: Actionable\n\n"
+            "**Rating**: Hold\n\n"
+            "**Recommendation Confidence**: 78/100\n\n"
+            "**Thesis**: Bullish\n\n"
+            "**Existing Position**: Hold\n\n"
+            "**Existing Position Guidance**: Keep a medium position.\n\n"
+            "**New Position**: Conditional Buy\n\n"
+            "**New Position Guidance**: Wait for confirmation or a controlled pullback.\n\n"
+            "**Conditional Confirmation**: Buy after a sustained move above 248-253.\n\n"
+            "**Conditional Alternative**: Accumulate near 222, with 211 as deeper support.\n\n"
+            "**Conditional Invalidation**: A sustained break below 210 weakens the setup."
+        )
+    }
+
+    with patch("cli.main.fetch_reference_price", return_value=236.22):
+        profile = estimate_target_profile(None, "BE", "2026-08-14", final_state, "Hold")
+
+    assert profile["thesis"] == "Bullish"
+    assert profile["recommendation_confidence_score"] == 78
+    assert profile["existing_position_action"] == "Hold"
+    assert profile["existing_position_summary"] == "Keep a medium position."
+    assert profile["new_position_action"] == "Conditional Buy"
+    assert profile["new_position_summary"] == "Wait for confirmation or a controlled pullback."
+    assert profile["conditional_confirmation"] == "Buy after a sustained move above 248-253."
+    assert profile["conditional_alternative"] == "Accumulate near 222, with 211 as deeper support."
+    assert profile["conditional_invalidation"] == "A sustained break below 210 weakens the setup."
 
 
 def test_primary_rendered_target_requires_supporting_quote_from_evidence():
@@ -124,6 +195,7 @@ def test_missing_structured_metrics_are_estimated_from_existing_analysis():
         "target_validation_status": "Accepted",
         "target_rejection_reason": None,
         "reference_price": 1.95,
+        **NO_POSITION_GUIDANCE,
     }
 
     html = build_consolidated_report_html(
@@ -141,7 +213,7 @@ def test_missing_structured_metrics_are_estimated_from_existing_analysis():
     )
     assert "<span class='metric-label'>Price Target</span><strong>1.56</strong>" in html
     assert "<span class='metric-label'>Target Gap</span><strong>-20.00%</strong>" in html
-    assert "<strong>74/100</strong>" in html
+    assert "Target confidence: 74/100" in html
     assert "Downside target is the cited 200-day support" in html
     assert "class='target-evidence'" in html
     assert "<strong>Target evidence:</strong> 200 SMA: 1.56" in html
@@ -177,6 +249,7 @@ def test_uncited_fallback_target_is_rejected_as_unsupported():
         "target_validation_status": "Rejected",
         "target_rejection_reason": "supporting_quote_not_in_evidence",
         "reference_price": 100.0,
+        **NO_POSITION_GUIDANCE,
     }
 
 
@@ -211,6 +284,7 @@ def test_non_price_number_near_generic_price_word_is_rejected():
         "target_validation_status": "Rejected",
         "target_rejection_reason": "supporting_quote_not_price_context",
         "reference_price": 100.0,
+        **NO_POSITION_GUIDANCE,
     }
 
 
@@ -241,6 +315,7 @@ def test_confidence_horizon_and_outlook_are_cleared_without_a_target():
         "target_validation_status": "Rejected",
         "target_rejection_reason": "target_bundle_incomplete",
         "reference_price": 100.0,
+        **NO_POSITION_GUIDANCE,
     }
 
 
@@ -274,6 +349,7 @@ def test_direction_inconsistent_target_clears_the_entire_profile():
         "target_validation_status": "Rejected",
         "target_rejection_reason": "target_direction_conflict",
         "reference_price": 100.0,
+        **NO_POSITION_GUIDANCE,
     }
 
 

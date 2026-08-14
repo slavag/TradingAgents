@@ -79,6 +79,106 @@ class TargetValidationReason(str, Enum):
     TARGET_DIRECTION_CONFLICT = "target_direction_conflict"
 
 
+class ThesisRating(str, Enum):
+    """Evidence-led directional thesis, separate from portfolio action."""
+
+    STRONGLY_BULLISH = "Strongly Bullish"
+    BULLISH = "Bullish"
+    NEUTRAL = "Neutral"
+    BEARISH = "Bearish"
+    STRONGLY_BEARISH = "Strongly Bearish"
+
+
+class ExistingPositionAction(str, Enum):
+    """Action for a reader who already owns the instrument."""
+
+    ADD = "Add"
+    HOLD = "Hold"
+    TRIM = "Trim"
+    EXIT = "Exit"
+
+
+class NewPositionAction(str, Enum):
+    """Action for a reader considering a new long or short position."""
+
+    BUY = "Buy"
+    CONDITIONAL_BUY = "Conditional Buy"
+    WAIT = "Wait"
+    AVOID = "Avoid"
+    CONDITIONAL_SELL = "Conditional Sell"
+    SELL = "Sell"
+
+
+class ConditionalActionPlan(BaseModel):
+    """Evidence-led conditions for a prospective conditional action."""
+
+    confirmation: str = Field(
+        min_length=1,
+        description="Primary confirmation required before taking the action.",
+    )
+    alternative: str | None = Field(
+        default=None,
+        description="Optional pullback, failed-rally, or alternate entry/exit setup.",
+    )
+    invalidation: str = Field(
+        min_length=1,
+        description="Condition that weakens or cancels the prospective setup.",
+    )
+
+
+def _validate_position_guidance(
+    *,
+    status: DecisionStatus,
+    thesis: ThesisRating | None,
+    existing_action: ExistingPositionAction | None,
+    existing_summary: str | None,
+    new_action: NewPositionAction | None,
+    new_summary: str | None,
+    conditional_plan: ConditionalActionPlan | None,
+) -> None:
+    required_bundle = (
+        thesis,
+        existing_action,
+        existing_summary,
+        new_action,
+        new_summary,
+    )
+    has_guidance = any(value is not None for value in (*required_bundle, conditional_plan))
+    if status is not DecisionStatus.ACTIONABLE:
+        if has_guidance:
+            raise ValueError("non-actionable decisions cannot carry position guidance")
+        return
+
+    if not all(value is not None for value in required_bundle):
+        raise ValueError("actionable decisions require position guidance")
+
+    requires_plan = new_action in {
+        NewPositionAction.CONDITIONAL_BUY,
+        NewPositionAction.WAIT,
+        NewPositionAction.CONDITIONAL_SELL,
+    }
+    if new_action is NewPositionAction.WAIT and conditional_plan is None:
+        raise ValueError("wait actions require a conditional plan")
+    if requires_plan and conditional_plan is None:
+        raise ValueError("conditional actions require a conditional plan")
+    if not requires_plan and conditional_plan is not None:
+        raise ValueError("only conditional actions may carry a conditional plan")
+
+
+def _normalize_directional_wait(
+    thesis: ThesisRating | None,
+    new_action: NewPositionAction | None,
+) -> NewPositionAction | None:
+    """Turn a directional wait into the actionable condition it represents."""
+    if new_action is not NewPositionAction.WAIT:
+        return new_action
+    if thesis in {ThesisRating.BULLISH, ThesisRating.STRONGLY_BULLISH}:
+        return NewPositionAction.CONDITIONAL_BUY
+    if thesis in {ThesisRating.BEARISH, ThesisRating.STRONGLY_BEARISH}:
+        return NewPositionAction.CONDITIONAL_SELL
+    return new_action
+
+
 class TraderAction(str, Enum):
     """3-tier transaction direction used by the Trader.
 
@@ -230,13 +330,58 @@ class PortfolioDecisionDraft(BaseModel):
     investment_thesis: str = Field(
         description="Detailed reasoning grounded in the supplied evidence.",
     )
+    thesis: ThesisRating | None = Field(
+        default=None,
+        description="Evidence-led directional thesis, independent of position ownership.",
+    )
+    existing_position_action: ExistingPositionAction | None = Field(
+        default=None,
+        description="Action for a reader who already owns the instrument.",
+    )
+    existing_position_summary: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Sizing and execution guidance for an existing holder.",
+    )
+    new_position_action: NewPositionAction | None = Field(
+        default=None,
+        description="Action for a reader considering a new long or short position.",
+    )
+    new_position_summary: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Concise guidance for a prospective position.",
+    )
+    conditional_plan: ConditionalActionPlan | None = Field(
+        default=None,
+        description="Required for Conditional Buy, Conditional Sell, or Wait.",
+    )
+    recommendation_confidence_score: int | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description=(
+            "Uncalibrated evidence-strength score for the recommendation, "
+            "independent of whether a numeric target is validated."
+        ),
+    )
     price_target: float | None = Field(default=None)
     time_horizon: str | None = Field(default=None)
-    confidence_score: int | None = Field(default=None, ge=0, le=100)
+    confidence_score: int | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="Uncalibrated evidence-strength score for the numeric target.",
+    )
     target_summary: str | None = Field(default=None)
     supporting_quote: str | None = Field(default=None)
 
-    @field_validator("price_target", "confidence_score", mode="before")
+    @field_validator(
+        "price_target",
+        "confidence_score",
+        "recommendation_confidence_score",
+        mode="before",
+    )
     @classmethod
     def _nullish_numeric_to_none(cls, v):
         return _coerce_optional_float(v)
@@ -247,6 +392,29 @@ class PortfolioDecisionDraft(BaseModel):
             raise ValueError("actionable decisions require a rating")
         if self.status is not DecisionStatus.ACTIONABLE and self.rating is not None:
             raise ValueError("non-actionable decisions cannot carry a rating")
+        if (
+            self.status is DecisionStatus.ACTIONABLE
+            and self.recommendation_confidence_score is None
+        ):
+            raise ValueError("actionable decisions require recommendation confidence")
+        if (
+            self.status is not DecisionStatus.ACTIONABLE
+            and self.recommendation_confidence_score is not None
+        ):
+            raise ValueError("non-actionable decisions cannot carry recommendation confidence")
+        self.new_position_action = _normalize_directional_wait(
+            self.thesis,
+            self.new_position_action,
+        )
+        _validate_position_guidance(
+            status=self.status,
+            thesis=self.thesis,
+            existing_action=self.existing_position_action,
+            existing_summary=self.existing_position_summary,
+            new_action=self.new_position_action,
+            new_summary=self.new_position_summary,
+            conditional_plan=self.conditional_plan,
+        )
         return self
 
 
@@ -274,6 +442,21 @@ class PortfolioDecision(BaseModel):
             "incorporate them; otherwise rely solely on the current analysis."
         ),
     )
+    thesis: ThesisRating | None = None
+    existing_position_action: ExistingPositionAction | None = None
+    existing_position_summary: str | None = Field(default=None, min_length=1)
+    new_position_action: NewPositionAction | None = None
+    new_position_summary: str | None = Field(default=None, min_length=1)
+    conditional_plan: ConditionalActionPlan | None = None
+    recommendation_confidence_score: int | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description=(
+            "Uncalibrated evidence-strength score for the recommendation, "
+            "independent of target validation."
+        ),
+    )
     price_target: float | None = Field(
         default=None,
         description=(
@@ -296,9 +479,9 @@ class PortfolioDecision(BaseModel):
         ge=0,
         le=100,
         description=(
-            "Model-rated evidence strength for the recommendation and target, "
-            "from 0 to 100. This is an uncalibrated conviction score, not a "
-            "statistical probability. Provide it whenever a target is provided."
+            "Model-rated evidence strength for the numeric target, from 0 to 100. "
+            "This is an uncalibrated conviction score, not a statistical "
+            "probability. Provide it whenever a target is provided."
         ),
     )
     target_summary: str | None = Field(
@@ -321,7 +504,12 @@ class PortfolioDecision(BaseModel):
     target_validation_reason: str | None = None
     status_reason: str | None = None
 
-    @field_validator("price_target", "confidence_score", mode="before")
+    @field_validator(
+        "price_target",
+        "confidence_score",
+        "recommendation_confidence_score",
+        mode="before",
+    )
     @classmethod
     def _nullish_numeric_to_none(cls, v):
         return _coerce_optional_float(v)
@@ -332,6 +520,29 @@ class PortfolioDecision(BaseModel):
             raise ValueError("actionable decisions require a rating")
         if self.status is not DecisionStatus.ACTIONABLE and self.rating is not None:
             raise ValueError("non-actionable decisions cannot carry a rating")
+        if (
+            self.status is DecisionStatus.ACTIONABLE
+            and self.recommendation_confidence_score is None
+        ):
+            raise ValueError("actionable decisions require recommendation confidence")
+        if (
+            self.status is not DecisionStatus.ACTIONABLE
+            and self.recommendation_confidence_score is not None
+        ):
+            raise ValueError("non-actionable decisions cannot carry recommendation confidence")
+        self.new_position_action = _normalize_directional_wait(
+            self.thesis,
+            self.new_position_action,
+        )
+        _validate_position_guidance(
+            status=self.status,
+            thesis=self.thesis,
+            existing_action=self.existing_position_action,
+            existing_summary=self.existing_position_summary,
+            new_action=self.new_position_action,
+            new_summary=self.new_position_summary,
+            conditional_plan=self.conditional_plan,
+        )
 
         bundle = (
             self.price_target,
@@ -394,6 +605,41 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         "",
         f"**Investment Thesis**: {decision.investment_thesis}",
     ])
+    if decision.thesis is not None:
+        parts.extend(["", f"**Thesis**: {decision.thesis.value}"])
+    if decision.existing_position_action is not None:
+        parts.extend([
+            "",
+            f"**Existing Position**: {decision.existing_position_action.value}",
+            "",
+            f"**Existing Position Guidance**: {decision.existing_position_summary}",
+        ])
+    if decision.new_position_action is not None:
+        parts.extend([
+            "",
+            f"**New Position**: {decision.new_position_action.value}",
+            "",
+            f"**New Position Guidance**: {decision.new_position_summary}",
+        ])
+    if decision.conditional_plan is not None:
+        parts.extend([
+            "",
+            f"**Conditional Confirmation**: {decision.conditional_plan.confirmation}",
+        ])
+        if decision.conditional_plan.alternative:
+            parts.extend([
+                "",
+                f"**Conditional Alternative**: {decision.conditional_plan.alternative}",
+            ])
+        parts.extend([
+            "",
+            f"**Conditional Invalidation**: {decision.conditional_plan.invalidation}",
+        ])
+    if decision.recommendation_confidence_score is not None:
+        parts.extend([
+            "",
+            f"**Recommendation Confidence**: {decision.recommendation_confidence_score}/100",
+        ])
     if decision.status_reason:
         parts.extend(["", f"**Decision Reason**: {decision.status_reason}"])
     if decision.price_target is not None:
@@ -401,7 +647,7 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
     if decision.confidence_score is not None:
-        parts.extend(["", f"**Decision Confidence**: {decision.confidence_score}/100"])
+        parts.extend(["", f"**Target Confidence**: {decision.confidence_score}/100"])
     if decision.target_summary:
         parts.extend(["", f"**Target Rationale**: {decision.target_summary}"])
     if decision.supporting_quote:

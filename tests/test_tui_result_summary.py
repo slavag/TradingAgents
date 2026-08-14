@@ -25,6 +25,7 @@ def test_tui_result_summary_renders_successful_metrics():
                 "decision": "Buy",
                 "price_target": 185.25,
                 "confidence_score": 78,
+                "recommendation_confidence_score": 84,
                 "target_horizon": "3 months",
                 "target_summary": "Earnings growth supports the target.",
             }
@@ -33,11 +34,11 @@ def test_tui_result_summary_renders_successful_metrics():
 
     assert "Ticker" in output
     assert "Decision" in output
-    assert "Confidence (uncalibrated)" in output
+    assert "Recommendation Confidence (uncalibrated)" in output
     assert "NVDA" in output
     assert "Buy" in output
     assert "185.25" in output
-    assert "78/100" in output
+    assert "84/100" in output
     assert "3 months" in output
     assert "Earnings growth supports the target." in output
 
@@ -50,6 +51,7 @@ def test_tui_result_summary_keeps_missing_metrics_unavailable():
                 "decision": "Hold",
                 "price_target": None,
                 "confidence_score": None,
+                "recommendation_confidence_score": None,
                 "target_horizon": None,
                 "target_summary": None,
             }
@@ -58,7 +60,7 @@ def test_tui_result_summary_keeps_missing_metrics_unavailable():
 
     assert "PENG" in output
     assert "Hold" in output
-    assert output.count("—") >= 4
+    assert output.count("—") >= 3
     assert "50/100" not in output
 
 
@@ -70,6 +72,7 @@ def test_tui_result_summary_explains_rejected_target():
                 "decision": "Buy",
                 "price_target": None,
                 "confidence_score": None,
+                "recommendation_confidence_score": 82,
                 "target_horizon": None,
                 "target_summary": None,
                 "target_validation_status": "Rejected",
@@ -78,7 +81,9 @@ def test_tui_result_summary_explains_rejected_target():
         ]
     )
 
-    assert "Target rejected: supporting quote not in evidence" in output
+    assert "Target rejected: supporting quote not in evidence" in " ".join(output.split())
+    assert "No validated target" in output
+    assert "82/100" in output
 
 
 def test_tui_result_summary_renders_every_ticker_and_failure():
@@ -133,11 +138,11 @@ def test_tui_result_summary_preserves_failure_details_at_narrow_widths():
             "Decision",
             "Target",
             "Confidence",
-            "(uncalibrated)",
+            "(uncalibrated",
             "Horizon",
             "Outlook",
         ):
-            assert heading in output, (
+            assert heading in normalized_output, (
                 f"{heading} missing at width {width}:\n{output}"
             )
         assert failure_token in normalized_output, (

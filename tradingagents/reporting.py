@@ -6,15 +6,109 @@ CLI and ``TradingAgentsGraph.save_reports`` both call this, so a headless / API
 run produces the same on-disk report tree a CLI run does.
 """
 
-from datetime import datetime
+import hashlib
+import json
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 
+_EVIDENCE_KEYS = (
+    "market_report",
+    "sentiment_report",
+    "news_report",
+    "fundamentals_report",
+    "investment_plan",
+    "trader_investment_plan",
+    "past_context",
+    "instrument_context",
+    "company_of_interest",
+    "asset_type",
+)
+_DECISION_OUTCOME_LABELS = (
+    "Decision Status",
+    "Rating",
+    "Thesis",
+    "Existing Position",
+    "New Position",
+    "Price Target",
+    "Target Validation",
+)
 
-def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
+
+def _fingerprint(payload) -> str:
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def _decision_outcome(final_trade_decision) -> dict:
+    text = str(final_trade_decision or "")
+    outcome = {}
+    for label in _DECISION_OUTCOME_LABELS:
+        match = re.search(
+            rf"(?im)^\s*\*\*{re.escape(label)}\*\*\s*:\s*(.+?)\s*$",
+            text,
+        )
+        if match:
+            outcome[label] = match.group(1).strip()
+    return outcome or {"legacy_decision": text.strip()}
+
+
+def build_run_manifest(
+    final_state: dict,
+    ticker: str,
+    run_metadata: dict | None = None,
+) -> dict:
+    """Build stable fingerprints that make two saved runs comparable."""
+    manifest = dict(run_metadata or {})
+    risk_state = final_state.get("risk_debate_state") or {}
+    evidence = {key: final_state.get(key) for key in _EVIDENCE_KEYS}
+    evidence["risk_debate_history"] = (
+        risk_state.get("history") if isinstance(risk_state, dict) else None
+    )
+    manifest.setdefault("schema_version", 1)
+    manifest["ticker"] = ticker
+    manifest.setdefault("generated_at", datetime.now(timezone.utc).isoformat())
+    manifest.setdefault("evidence_fingerprint", _fingerprint(evidence))
+    decision = final_state.get("final_trade_decision")
+    manifest.setdefault("decision_fingerprint", _fingerprint(_decision_outcome(decision)))
+    manifest.setdefault("decision_content_fingerprint", _fingerprint(decision))
+    return manifest
+
+
+def compare_run_manifests(current: dict, previous: dict | None) -> str:
+    """Classify whether a changed decision came from input drift or model drift."""
+    if previous is None:
+        return "first_recorded_run"
+    if current.get("evidence_fingerprint") != previous.get("evidence_fingerprint"):
+        return "evidence_changed"
+    if current.get("decision_fingerprint") != previous.get("decision_fingerprint"):
+        return "decision_changed_same_evidence"
+    return "reproduced"
+
+
+def write_report_tree(
+    final_state: dict,
+    ticker: str,
+    save_path,
+    *,
+    run_metadata: dict | None = None,
+) -> Path:
     """Save a completed run's reports to ``save_path``; return the complete-report path."""
     save_path = Path(save_path)
     save_path.mkdir(parents=True, exist_ok=True)
     sections = []
+    if run_metadata is not None:
+        manifest = build_run_manifest(final_state, ticker, run_metadata)
+        (save_path / "run_manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     # 1. Analysts
     analysts_dir = save_path / "1_analysts"

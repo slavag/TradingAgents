@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 WEB_STATIC_ROOT = Path(__file__).resolve().parents[1] / "tradingagents" / "web" / "static"
 
 
@@ -70,3 +69,32 @@ def test_bottom_chatter_tape_shows_why_each_ticker_is_present():
     assert "Chatter Candidates" in index_html
     assert "Rank Score" in index_html
     assert "Avg Checks" in index_html
+
+
+def test_result_cards_render_position_aware_thesis_and_conditions():
+    app_js = (WEB_STATIC_ROOT / "app.js").read_text()
+    styles_css = (WEB_STATIC_ROOT / "styles.css").read_text()
+
+    assert "function thesisVisual" in app_js
+    assert "function positionPlan" in app_js
+    assert "result.existing_position_action" in app_js
+    assert "result.new_position_action" in app_js
+    assert "result.conditional_confirmation" in app_js
+    assert "result.conditional_alternative" in app_js
+    assert "result.conditional_invalidation" in app_js
+    assert "aria-label=\"${label}\"" in app_js
+    assert "escapeHtml(value)" in app_js
+    assert "result.recommendation_confidence_label" in app_js
+    assert "Recommendation confidence" in app_js
+    assert "result.target_status_label" in app_js
+    assert 'result.snapshot_mode === "live_current_day"' in app_js
+    assert "Live current-day snapshot" in app_js
+    assert "result.evidence_fingerprint" in app_js
+    assert "result.comparison_status" in app_js
+    assert "Decision changed despite identical evidence" in app_js
+
+    assert ".result-position-plan" in styles_css
+    assert ".result-thesis-icon.bullish" in styles_css
+    assert ".result-thesis-icon.bearish" in styles_css
+    assert ".result-condition.confirmation" in styles_css
+    assert ".result-condition.invalidation" in styles_css

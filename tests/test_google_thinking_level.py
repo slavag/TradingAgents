@@ -44,3 +44,9 @@ def test_no_thinking_level_is_omitted():
     kw = _captured_kwargs("gemini-3.5-flash")
     assert "thinking_level" not in kw
     assert "thinking_budget" not in kw
+
+
+@pytest.mark.parametrize("model", ["gemini-3.6-flash", "gemini-3.5-flash-lite"])
+def test_latest_flash_models_omit_deprecated_temperature(model):
+    kw = _captured_kwargs(model, temperature=0.0)
+    assert "temperature" not in kw

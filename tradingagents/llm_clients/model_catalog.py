@@ -128,6 +128,7 @@ MODEL_OPTIONS: ProviderModeOptions = {
         ],
         "deep": [
             ("Claude Fable 5 - Most capable, long-running agents", "claude-fable-5"),
+            ("Claude Opus 5 - Frontier reasoning at half the cost of Fable", "claude-opus-5"),
             ("Claude Opus 4.8 - Frontier agentic coding and reasoning", "claude-opus-4-8"),
             ("Claude Sonnet 5 - Near-frontier intelligence at Sonnet cost", "claude-sonnet-5"),
             ("Claude Opus 4.7 - Previous frontier, long-running agents", "claude-opus-4-7"),
@@ -136,6 +137,8 @@ MODEL_OPTIONS: ProviderModeOptions = {
     },
     "google": {
         "quick": [
+            ("Gemini 3.5 Flash-Lite - Fastest, lowest-cost current Gemini", "gemini-3.5-flash-lite"),
+            ("Gemini 3.6 Flash - Best current speed/intelligence balance", "gemini-3.6-flash"),
             ("Gemini 3.5 Flash - Stable frontier Flash model", "gemini-3.5-flash"),
             ("Gemini 3.1 Flash-Lite - Frontier-class low-cost model", "gemini-3.1-flash-lite"),
             ("Gemini 2.5 Flash-Lite - Fastest low-cost Gemini", "gemini-2.5-flash-lite"),
@@ -144,6 +147,7 @@ MODEL_OPTIONS: ProviderModeOptions = {
         ],
         "deep": [
             ("Gemini 3.1 Pro Preview - Advanced agentic reasoning", "gemini-3.1-pro-preview"),
+            ("Gemini 3.6 Flash - Strong price/performance for agentic reasoning", "gemini-3.6-flash"),
             ("Gemini 3.5 Flash - Stable frontier Flash model", "gemini-3.5-flash"),
             ("Gemini 2.5 Pro - Stable advanced reasoning", "gemini-2.5-pro"),
             ("Gemini 2.5 Flash - Balanced, stable", "gemini-2.5-flash"),
@@ -152,12 +156,13 @@ MODEL_OPTIONS: ProviderModeOptions = {
     },
     "xai": {
         "quick": [
+            ("Grok 4.3 - Fast, economical general analysis", "grok-4.3"),
             ("Grok Build 0.1 - Fast coding and agentic workflows", "grok-build-0.1"),
-            ("Grok 4.3 - Current flagship Grok model", "grok-4.3"),
             ("Grok 4.20 (Non-Reasoning) - Speed-optimized", "grok-4.20-0309-non-reasoning"),
         ],
         "deep": [
-            ("Grok 4.3 - Current flagship Grok model", "grok-4.3"),
+            ("Grok 4.5 - Frontier coding, reasoning, and knowledge work", "grok-4.5"),
+            ("Grok 4.3 - Lower-cost general reasoning", "grok-4.3"),
             ("Grok 4.20 (Reasoning) - Previous-gen reasoning", "grok-4.20-0309-reasoning"),
             ("Grok 4.20 Multi-Agent - Multi-agent reasoning", "grok-4.20-multi-agent-0309"),
             ("Grok Build 0.1 - Fast coding and agentic workflows", "grok-build-0.1"),

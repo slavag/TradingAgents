@@ -30,7 +30,7 @@
 - Modify: `tradingagents/agents/utils/decision_integrity.py`
 - Test: `tests/test_decision_integrity.py`
 
-- [ ] **Step 1: Write failing schema tests**
+- [x] **Step 1: Write failing schema tests**
 
 Add tests that construct an actionable draft with this bundle:
 
@@ -53,7 +53,7 @@ Prove that Conditional Buy and Conditional Sell require a plan, unconditional
 actions reject a plan, actionable drafts require the position bundle, and
 Abstain/Unavailable reject it.
 
-- [ ] **Step 2: Verify the schema tests fail for the missing types**
+- [x] **Step 2: Verify the schema tests fail for the missing types**
 
 Run:
 
@@ -64,7 +64,7 @@ python -m pytest tests/test_decision_integrity.py -k "position_bundle or conditi
 Expected: collection/import failure because the enums and conditional model do
 not yet exist.
 
-- [ ] **Step 3: Add the enums, conditional model, and shared validator**
+- [x] **Step 3: Add the enums, conditional model, and shared validator**
 
 Implement:
 
@@ -104,7 +104,7 @@ enforces the actionable bundle and conditional-plan combinations. Keep the
 fields optional at declaration time so providers can return non-actionable
 decisions, but reject invalid combinations after parsing.
 
-- [ ] **Step 4: Carry and render the bundle**
+- [x] **Step 4: Carry and render the bundle**
 
 Extend `_base_fields()` in `decision_integrity.py`. Extend `render_pm_decision()`
 with stable labels:
@@ -120,7 +120,7 @@ with stable labels:
 **Conditional Invalidation**: A sustained break below 210 weakens the setup.
 ```
 
-- [ ] **Step 5: Verify focused tests pass**
+- [x] **Step 5: Verify focused tests pass**
 
 Run:
 
@@ -136,14 +136,14 @@ Expected: all decision-integrity tests pass.
 - Modify: `tradingagents/agents/managers/portfolio_manager.py`
 - Test: `tests/test_portfolio_manager_integrity.py`
 
-- [ ] **Step 1: Write failing Portfolio Manager integration tests**
+- [x] **Step 1: Write failing Portfolio Manager integration tests**
 
 Update the shared actionable draft fixture with the position bundle. Add one
 test that captures the structured prompt and asserts it defines Conditional Buy
 and Conditional Sell symmetrically and tells the manager to determine thesis
 independently rather than counting upstream labels as votes.
 
-- [ ] **Step 2: Verify the prompt test fails**
+- [x] **Step 2: Verify the prompt test fails**
 
 Run:
 
@@ -153,7 +153,7 @@ python -m pytest tests/test_portfolio_manager_integrity.py -q
 
 Expected: the prompt-content assertion fails before the prompt is updated.
 
-- [ ] **Step 3: Add position-aware prompt instructions**
+- [x] **Step 3: Add position-aware prompt instructions**
 
 Add these rules to the consistency protocol:
 
@@ -166,7 +166,7 @@ Add these rules to the consistency protocol:
 - Never invent a price level when the evidence does not supply one.
 ```
 
-- [ ] **Step 4: Verify Portfolio Manager tests pass**
+- [x] **Step 4: Verify Portfolio Manager tests pass**
 
 Run:
 
@@ -184,7 +184,7 @@ Expected: all Portfolio Manager integrity tests pass.
 - Test: `tests/test_target_profile.py`
 - Test: `tests/test_web_service.py`
 
-- [ ] **Step 1: Write failing extraction and serialization tests**
+- [x] **Step 1: Write failing extraction and serialization tests**
 
 Supply Portfolio Manager markdown with all stable labels. Assert
 `estimate_target_profile()` returns:
@@ -205,7 +205,7 @@ Supply Portfolio Manager markdown with all stable labels. Assert
 Assert `serialize_result()` preserves the same fields. Add a legacy case that
 returns `None` for every new field without changing the old decision.
 
-- [ ] **Step 2: Verify the new tests fail**
+- [x] **Step 2: Verify the new tests fail**
 
 Run:
 
@@ -215,18 +215,18 @@ python -m pytest tests/test_target_profile.py tests/test_web_service.py -q
 
 Expected: assertions fail because the new keys are absent.
 
-- [ ] **Step 3: Parse stable labels in the existing target profile path**
+- [x] **Step 3: Parse stable labels in the existing target profile path**
 
 Reuse the local `markdown_field()` helper in `estimate_target_profile()` and add
 the position fields to every return branch. Do not infer missing fields from the
 five-tier decision; legacy absence stays explicit.
 
-- [ ] **Step 4: Serialize the new keys**
+- [x] **Step 4: Serialize the new keys**
 
 Add all eight fields to successful and failed `serialize_result()` dictionaries.
 Failed runs and legacy decisions expose `None` rather than synthesized advice.
 
-- [ ] **Step 5: Verify extraction and API tests pass**
+- [x] **Step 5: Verify extraction and API tests pass**
 
 Run:
 
@@ -240,9 +240,12 @@ Expected: all selected tests pass.
 
 **Files:**
 - Modify: `cli/main.py`
+- Modify: `tradingagents/web/static/app.js`
+- Modify: `tradingagents/web/static/styles.css`
 - Test: `tests/test_consolidated_report_formatting.py`
+- Test: `tests/test_web_static_tape.py`
 
-- [ ] **Step 1: Write failing consolidated-report tests**
+- [x] **Step 1: Write failing consolidated-report tests**
 
 Add Bullish/Conditional Buy and Bearish/Conditional Sell fixtures. Assert:
 
@@ -254,7 +257,7 @@ Add Bullish/Conditional Buy and Bearish/Conditional Sell fixtures. Assert:
   `condition-invalidation` classes; and
 - model-provided `<script>` content is escaped.
 
-- [ ] **Step 2: Verify the report tests fail**
+- [x] **Step 2: Verify the report tests fail**
 
 Run:
 
@@ -264,20 +267,20 @@ python -m pytest tests/test_consolidated_report_formatting.py -q
 
 Expected: new columns, icon labels, and condition classes are absent.
 
-- [ ] **Step 3: Add report helpers and markdown output**
+- [x] **Step 3: Add report helpers and markdown output**
 
 Add focused local helpers inside `build_consolidated_report_html()` for thesis
 kind and accessible inline SVG. Extend markdown summary/detail output with the
 position plan while preserving legacy `-` values.
 
-- [ ] **Step 4: Add the HTML decision compass and CSS**
+- [x] **Step 4: Add the HTML decision compass and CSS**
 
 Render a `.decision-compass` containing `.thesis-card`, `.position-card`, and
 `.condition-list`. Use teal for bullish, coral for bearish, and gold for neutral
 or conditional accents. Every icon includes a text label and `aria-label`; every
 model string passes through `escape()`.
 
-- [ ] **Step 5: Verify report tests pass**
+- [x] **Step 5: Verify report tests pass**
 
 Run:
 
@@ -287,12 +290,19 @@ python -m pytest tests/test_consolidated_report_formatting.py tests/test_web_ser
 
 Expected: all selected tests pass.
 
+- [x] **Step 6: Add the same compass to live web result cards**
+
+Render the serialized thesis, existing-position action, new-position action, and
+conditional rows in `resultCard()`. Reuse accessible inline SVG bull, bear, and
+neutral marks; escape every model-provided value. Add compact dark-theme styles
+and static-contract coverage in `tests/test_web_static_tape.py`.
+
 ### Task 5: Regression Verification
 
 **Files:**
 - Verify only; no planned production edits.
 
-- [ ] **Step 1: Run the focused decision/report suite**
+- [x] **Step 1: Run the focused decision/report suite**
 
 ```bash
 python -m pytest \
@@ -307,7 +317,7 @@ python -m pytest \
 
 Expected: all selected tests pass.
 
-- [ ] **Step 2: Run the full project suite**
+- [x] **Step 2: Run the full project suite**
 
 ```bash
 python -m pytest -q
@@ -315,7 +325,7 @@ python -m pytest -q
 
 Expected: all tests pass, with any optional dependency skips reported.
 
-- [ ] **Step 3: Inspect the final worktree diff**
+- [x] **Step 3: Inspect the final worktree diff**
 
 ```bash
 git diff --check

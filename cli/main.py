@@ -50,12 +50,16 @@ from cli.utils import (
 )
 from tradingagents.agents.schemas import (
     DecisionStatus,
+    ExistingPositionAction,
+    NewPositionAction,
     PortfolioDecisionDraft,
     PortfolioRating,
     TargetValidationStatus,
+    ThesisRating,
 )
 from tradingagents.agents.utils.decision_integrity import (
     build_decision_evidence,
+    extract_verified_reference_price,
     finalize_portfolio_decision,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -892,9 +896,11 @@ def fetch_reference_price(ticker: str, analysis_date: str) -> float | None:
 
 def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, decision: str):
     """Build decision metrics from the PM output, with an evidence-grounded fallback."""
-    current_price = fetch_reference_price(ticker, analysis_date)
     final_trade_decision = extract_content_string(final_state.get("final_trade_decision")) or ""
     evidence_text = build_decision_evidence(final_state)
+    current_price = extract_verified_reference_price(evidence_text)
+    if current_price is None:
+        current_price = fetch_reference_price(ticker, analysis_date)
 
     rating_by_value = {rating.value.casefold(): rating for rating in PortfolioRating}
     rating = rating_by_value.get((decision or "").strip().casefold())
@@ -940,11 +946,26 @@ def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, d
 
     price_target = parse_target(markdown_field("price target"))
     target_horizon = markdown_field("time horizon")
-    confidence_score = parse_confidence(
-        markdown_field(r"(?:decision|model)?\s*confidence(?:\s*\(uncalibrated\))?")
+    confidence_score = parse_confidence(markdown_field("target confidence"))
+    if confidence_score is None:
+        confidence_score = parse_confidence(
+            markdown_field(r"(?:decision|model)?\s*confidence(?:\s*\(uncalibrated\))?")
+        )
+    recommendation_confidence_score = parse_confidence(
+        markdown_field(r"recommendation\s*confidence(?:\s*\(uncalibrated\))?")
     )
     target_summary = markdown_field("target rationale")
     supporting_quote = markdown_field("target supporting quote")
+    position_guidance = {
+        "thesis": markdown_field("thesis"),
+        "existing_position_action": markdown_field("existing position"),
+        "existing_position_summary": markdown_field("existing position guidance"),
+        "new_position_action": markdown_field("new position"),
+        "new_position_summary": markdown_field("new position guidance"),
+        "conditional_confirmation": markdown_field("conditional confirmation"),
+        "conditional_alternative": markdown_field("conditional alternative"),
+        "conditional_invalidation": markdown_field("conditional invalidation"),
+    }
 
     rejection_match = re.search(
         r"(?im)^\s*\*\*target validation\*\*\s*:\s*"
@@ -960,24 +981,28 @@ def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, d
         return {
             "price_target": None,
             "confidence_score": None,
+            "recommendation_confidence_score": recommendation_confidence_score,
             "target_horizon": None,
             "target_summary": None,
             "supporting_quote": None,
             "target_validation_status": TargetValidationStatus.NOT_PROPOSED.value,
             "target_rejection_reason": None,
             "reference_price": current_price,
+            **position_guidance,
         }
 
     if prevalidated_rejection:
         return {
             "price_target": None,
             "confidence_score": None,
+            "recommendation_confidence_score": recommendation_confidence_score,
             "target_horizon": None,
             "target_summary": None,
             "supporting_quote": None,
             "target_validation_status": TargetValidationStatus.REJECTED.value,
             "target_rejection_reason": prevalidated_rejection,
             "reference_price": current_price,
+            **position_guidance,
         }
 
     proposed_fields = (
@@ -1086,6 +1111,19 @@ Fill only metrics supported by this evidence. Return strict JSON only.""",
         rating=rating,
         executive_summary="Target profile extracted from the completed decision.",
         investment_thesis="Target metrics remain subject to deterministic evidence checks.",
+        # This internal draft exists only to reuse target validation. Position
+        # guidance is parsed and returned separately above, so legacy reports
+        # remain explicit rather than receiving synthesized user advice.
+        thesis=ThesisRating.NEUTRAL,
+        existing_position_action=ExistingPositionAction.HOLD,
+        existing_position_summary="Internal target-validation compatibility.",
+        new_position_action=NewPositionAction.AVOID,
+        new_position_summary="Internal target-validation compatibility.",
+        recommendation_confidence_score=(
+            recommendation_confidence_score
+            if recommendation_confidence_score is not None
+            else confidence_score if confidence_score is not None else 0
+        ),
         price_target=price_target,
         confidence_score=confidence_score,
         time_horizon=target_horizon,
@@ -1101,18 +1139,31 @@ Fill only metrics supported by this evidence. Return strict JSON only.""",
     return {
         "price_target": validated.price_target,
         "confidence_score": validated.confidence_score,
+        "recommendation_confidence_score": recommendation_confidence_score,
         "target_horizon": validated.time_horizon,
         "target_summary": validated.target_summary,
         "supporting_quote": validated.supporting_quote,
         "target_validation_status": validated.target_validation_status.value,
         "target_rejection_reason": validated.target_validation_reason,
         "reference_price": current_price,
+        **position_guidance,
     }
 
 
-def save_report_to_disk(final_state, ticker: str, save_path: Path):
+def save_report_to_disk(
+    final_state,
+    ticker: str,
+    save_path: Path,
+    *,
+    run_metadata: dict | None = None,
+):
     """Save the complete analysis report to disk (shared CLI/API writer)."""
-    return write_report_tree(final_state, ticker, save_path)
+    return write_report_tree(
+        final_state,
+        ticker,
+        save_path,
+        run_metadata=run_metadata,
+    )
 
 
 def display_complete_report(final_state):
@@ -1227,6 +1278,31 @@ def target_outlook_text(result: dict) -> str:
     return "No target outlook generated."
 
 
+def target_status_text(result: dict) -> str:
+    """Render target validation separately from overall run completion."""
+    status = str(result.get("target_validation_status") or "").strip()
+    if status.casefold() == TargetValidationStatus.ACCEPTED.value.casefold():
+        return "Validated"
+    if status.casefold() == TargetValidationStatus.REJECTED.value.casefold():
+        reason = result.get("target_rejection_reason")
+        readable = str(reason).replace("_", " ") if reason else "validation failed"
+        return f"Rejected: {readable}"
+    if status.casefold() == TargetValidationStatus.NOT_PROPOSED.value.casefold():
+        return "Not proposed"
+    if result.get("price_target") is not None:
+        return "Validated"
+    return "Unavailable"
+
+
+def displayed_target(result: dict) -> str:
+    """Avoid presenting a rejected target as an unexplained dash."""
+    if result.get("price_target") is not None:
+        return format_price_target(result.get("price_target"))
+    if str(result.get("target_validation_status") or "").casefold() == "rejected":
+        return "No validated target"
+    return "-"
+
+
 def target_evidence_text(result: dict) -> str | None:
     """Return the accepted verbatim target evidence, when available."""
     quote = result.get("supporting_quote")
@@ -1246,11 +1322,12 @@ def build_tui_result_summary(analysis_results: list[dict]) -> Table:
     )
     table.add_column("Ticker", style="cyan", width=6, overflow="fold")
     table.add_column("Decision", width=8, overflow="fold")
-    table.add_column("Target", justify="right", width=6, overflow="fold")
+    table.add_column("Target", justify="right", ratio=2, overflow="fold")
     table.add_column(
-        "Confidence (uncalibrated)",
+        "Recommendation Confidence (uncalibrated)",
         justify="right",
         ratio=3,
+        min_width=16,
         overflow="fold",
     )
     table.add_column("Horizon", ratio=2, overflow="fold")
@@ -1259,8 +1336,7 @@ def build_tui_result_summary(analysis_results: list[dict]) -> Table:
     for result in analysis_results:
         error = result.get("error")
         failed = error is not None
-        target = result.get("price_target")
-        confidence = result.get("confidence_score")
+        confidence = result.get("recommendation_confidence_score")
         outlook_source = (
             error
             if failed
@@ -1283,7 +1359,7 @@ def build_tui_result_summary(analysis_results: list[dict]) -> Table:
                 "Failed" if failed else str(result.get("decision") or "—"),
                 style="red" if failed else None,
             ),
-            Text(format_price_target(target) if target is not None else "—"),
+            Text(displayed_target(result) if not failed else "—"),
             Text(f"{confidence}/100" if confidence is not None else "—"),
             Text(str(result.get("target_horizon") or "—")),
             Text(outlook),
@@ -1474,6 +1550,17 @@ def bullet_markdown_to_html(summary: str) -> str:
     return "<ul>" + "".join(bullets) + "</ul>"
 
 
+LIVE_SNAPSHOT_WARNING = (
+    "Live current-day snapshot: market and source data can change between runs."
+)
+RUN_COMPARISON_LABELS = {
+    "first_recorded_run": "First auditable run",
+    "reproduced": "Decision reproduced from identical evidence",
+    "evidence_changed": "Evidence changed since the prior run",
+    "decision_changed_same_evidence": "Decision changed despite identical evidence",
+}
+
+
 def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=None) -> str:
     """Build a consolidated markdown report for a batch of tickers."""
     lines = [
@@ -1481,29 +1568,40 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
         "",
         f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"Analysis Date: {analysis_date}",
+    ]
+    if any(
+        result.get("snapshot_mode") == "live_current_day"
+        for result in analysis_results
+    ):
+        lines.extend(["", f"> **Data snapshot:** {LIVE_SNAPSHOT_WARNING}"])
+    lines.extend([
         "",
         "## Batch Summary",
         "",
-        "| Ticker | Decision | Price Target | Target Gap | Model confidence (uncalibrated) | Status | Default Results |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
-    ]
+        "| Ticker | Decision | Thesis | Existing Position | New Position | Price Target | Target Status | Target Gap | Recommendation confidence (uncalibrated) | Status | Default Results |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ])
 
     for result in analysis_results:
         status = "Failed" if result.get("error") else "Completed"
         decision = result.get("decision") or "-"
-        price_target = format_price_target(result.get("price_target"))
+        thesis = result.get("thesis") or "-"
+        existing_action = result.get("existing_position_action") or "-"
+        new_action = result.get("new_position_action") or "-"
+        price_target = displayed_target(result)
+        target_status = target_status_text(result)
         target_gap = format_target_gap_percent(
             result.get("reference_price"),
             result.get("price_target"),
         )
         confidence = (
-            f"{result['confidence_score']}/100"
-            if result.get("confidence_score") is not None
+            f"{result['recommendation_confidence_score']}/100"
+            if result.get("recommendation_confidence_score") is not None
             else "-"
         )
         default_results = result.get("results_dir", "-")
         lines.append(
-            f"| {result['ticker']} | {decision} | {price_target} | {target_gap} | {confidence} | {status} | `{default_results}` |"
+            f"| {result['ticker']} | {decision} | {thesis} | {existing_action} | {new_action} | {price_target} | {target_status} | {target_gap} | {confidence} | {status} | `{default_results}` |"
         )
 
     for result in analysis_results:
@@ -1515,12 +1613,19 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
                 f"## {result['ticker']}",
                 "",
                 f"Analysis Date: {result['analysis_date']}",
-                f"Price Target: {format_price_target(result.get('price_target'))}",
+                f"Run ID: {result.get('run_id') or '-'}",
+                f"Evidence fingerprint: {result.get('evidence_fingerprint') or '-'}",
+                f"Run comparison: {RUN_COMPARISON_LABELS.get(result.get('comparison_status'), '-')}",
+                f"Price Target: {displayed_target(result)}",
+                f"Target Status: {target_status_text(result)}",
                 f"Reference Price: {format_price_target(result.get('reference_price'))}",
                 f"Target Gap: {format_target_gap_percent(result.get('reference_price'), result.get('price_target'))}",
-                f"Model confidence (uncalibrated): {result.get('confidence_score', '-')}/100"
+                f"Recommendation confidence (uncalibrated): {result.get('recommendation_confidence_score', '-')}/100"
+                if result.get("recommendation_confidence_score") is not None
+                else "Recommendation confidence (uncalibrated): -",
+                f"Target confidence (uncalibrated): {result.get('confidence_score', '-')}/100"
                 if result.get("confidence_score") is not None
-                else "Model confidence (uncalibrated): -",
+                else "Target confidence (uncalibrated): -",
                 f"Horizon: {result.get('target_horizon') or '-'}",
             ]
         )
@@ -1541,9 +1646,34 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
         final_state = result["final_state"]
         section_summaries = get_consolidated_section_summaries(result, summary_llm=summary_llm)
         supporting_evidence = target_evidence_text(result)
+        position_plan = []
+        if result.get("thesis"):
+            position_plan.append(f"Thesis: **{result['thesis']}**")
+        if result.get("existing_position_action"):
+            existing_summary = result.get("existing_position_summary") or "Guidance unavailable."
+            position_plan.append(
+                f"Existing position: **{result['existing_position_action']}** — {existing_summary}"
+            )
+        if result.get("new_position_action"):
+            new_summary = result.get("new_position_summary") or "Guidance unavailable."
+            position_plan.append(
+                f"New position: **{result['new_position_action']}** — {new_summary}"
+            )
+        for label, key in (
+            ("Confirmation", "conditional_confirmation"),
+            ("Alternative", "conditional_alternative"),
+            ("Invalidation", "conditional_invalidation"),
+        ):
+            if result.get(key):
+                position_plan.append(f"{label}: {result[key]}")
         lines.extend(
             [
                 f"Decision: {result.get('decision') or 'Unknown'}",
+                *(
+                    ["", "### Position Plan", *position_plan]
+                    if position_plan
+                    else []
+                ),
                 "",
                 "### Target Outlook",
                 sanitize_report_language(target_outlook_text(result)),
@@ -1591,8 +1721,21 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
         result["price_target"]
         for result in completed_results
         if result.get("price_target") is not None
+        and (
+            not result.get("target_validation_status")
+            or str(result.get("target_validation_status")).casefold()
+            == TargetValidationStatus.ACCEPTED.value.casefold()
+        )
     ]
     avg_target = round(sum(targets) / len(targets), 2) if targets else None
+    live_snapshot_notice = (
+        f"<div class='snapshot-warning'><strong>Data snapshot</strong><span>{escape(LIVE_SNAPSHOT_WARNING)}</span></div>"
+        if any(
+            result.get("snapshot_mode") == "live_current_day"
+            for result in analysis_results
+        )
+        else ""
+    )
 
     def decision_kind(decision: str | None) -> str:
         text = (decision or "").lower()
@@ -1620,6 +1763,41 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             "<path d='M12 4l8 8-8 8-8-8z'/></svg>"
         )
 
+    def thesis_kind(thesis: str | None) -> str:
+        text = (thesis or "").casefold()
+        if "bullish" in text:
+            return "bullish"
+        if "bearish" in text:
+            return "bearish"
+        return "neutral"
+
+    def thesis_icon(thesis: str | None) -> str:
+        kind = thesis_kind(thesis)
+        label = {
+            "bullish": "Bullish thesis",
+            "bearish": "Bearish thesis",
+            "neutral": "Neutral thesis",
+        }[kind]
+        paths = {
+            "bullish": (
+                "<path d='M18 20C10 20 6 15 5 8c6 5 12 6 18 2l3 7h12l3-7c6 4 12 3 18-2-1 7-5 12-13 12l-2 9c-1 9-7 16-12 16s-11-7-12-16z'/>"
+                "<path d='M23 33h18l-4 9H27z' fill='currentColor' opacity='.55'/><circle cx='25' cy='28' r='2'/><circle cx='39' cy='28' r='2'/>"
+            ),
+            "bearish": (
+                "<circle cx='18' cy='18' r='8'/><circle cx='46' cy='18' r='8'/>"
+                "<path d='M12 31c0-12 8-20 20-20s20 8 20 20-8 22-20 22-20-10-20-22z'/>"
+                "<ellipse cx='32' cy='38' rx='12' ry='9' fill='currentColor' opacity='.55'/><circle cx='25' cy='29' r='2'/><circle cx='39' cy='29' r='2'/><path d='M28 36h8l-4 5z' fill='var(--paper)'/>"
+            ),
+            "neutral": (
+                "<path d='M30 10h4v38h-4zM14 16h36v4H14z'/><path d='M16 20L8 36h16zm32 0-8 16h16z' opacity='.6'/><path d='M8 38h16v4H8zm32 0h16v4H40z'/><path d='M20 50h24v4H20z'/>"
+            ),
+        }
+        return (
+            f"<span class='thesis-mark {kind}' role='img' aria-label='{label}'>"
+            f"<svg viewBox='0 0 64 64' aria-hidden='true'><title>{label}</title>{paths[kind]}</svg>"
+            "</span>"
+        )
+
     def metric_icon(kind: str) -> str:
         icons = {
             "target": "<svg viewBox='0 0 24 24'><path d='M12 3a9 9 0 109 9h-2a7 7 0 11-7-7V3zm0 4a5 5 0 105 5h2A7 7 0 1112 7V5zm8-2v6h-6l2.2-2.2-3.1-3.1 1.4-1.4 3.1 3.1z'/></svg>",
@@ -1642,7 +1820,11 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     for result in analysis_results:
         status = "Failed" if result.get("error") else "Completed"
         decision = escape(result.get("decision") or "-")
-        price_target = escape(format_price_target(result.get("price_target")))
+        thesis = escape(result.get("thesis") or "-")
+        existing_action = escape(result.get("existing_position_action") or "-")
+        new_action = escape(result.get("new_position_action") or "-")
+        price_target = escape(displayed_target(result))
+        target_status = escape(target_status_text(result))
         target_gap = escape(
             format_target_gap_percent(
                 result.get("reference_price"),
@@ -1650,15 +1832,19 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             )
         )
         confidence = (
-            f"{result['confidence_score']}/100"
-            if result.get("confidence_score") is not None
+            f"{result['recommendation_confidence_score']}/100"
+            if result.get("recommendation_confidence_score") is not None
             else "-"
         )
         rows.append(
             "<tr>"
             f"<td>{escape(result['ticker'])}</td>"
             f"<td>{decision}</td>"
+            f"<td>{thesis}</td>"
+            f"<td>{existing_action}</td>"
+            f"<td>{new_action}</td>"
             f"<td>{price_target}</td>"
+            f"<td>{target_status}</td>"
             f"<td>{target_gap}</td>"
             f"<td>{escape(confidence)}</td>"
             f"<td>{escape(status)}</td>"
@@ -1669,7 +1855,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     sections = []
     for result in analysis_results:
         kind = decision_kind(result.get("decision"))
-        confidence_value = result.get("confidence_score")
+        confidence_value = result.get("recommendation_confidence_score")
         confidence_width = max(6, min(100, confidence_value)) if confidence_value is not None else 6
 
         if result.get("error"):
@@ -1702,6 +1888,52 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             result.get("reference_price"),
             result.get("price_target"),
         )
+        target_confidence = result.get("confidence_score")
+        target_detail = target_status_text(result)
+        if target_confidence is not None:
+            target_detail += f" · Target confidence: {target_confidence}/100"
+        thesis = result.get("thesis")
+        position_compass = ""
+        if any(
+            result.get(key)
+            for key in (
+                "thesis",
+                "existing_position_action",
+                "new_position_action",
+            )
+        ):
+            condition_rows = []
+            for css_kind, label, key in (
+                ("confirmation", "Confirmation", "conditional_confirmation"),
+                ("alternative", "Alternative", "conditional_alternative"),
+                ("invalidation", "Invalidation", "conditional_invalidation"),
+            ):
+                value = result.get(key)
+                if value:
+                    condition_rows.append(
+                        f"<div class='condition-row condition-{css_kind}'>"
+                        f"<span>{label}</span><p>{escape(value)}</p></div>"
+                    )
+            conditions = (
+                "<div class='condition-list'>" + "".join(condition_rows) + "</div>"
+                if condition_rows
+                else ""
+            )
+            position_compass = (
+                f"<section class='decision-compass thesis-{thesis_kind(thesis)}'>"
+                "<article class='thesis-card'>"
+                f"{thesis_icon(thesis)}<div><span class='compass-label'>Evidence-led thesis</span>"
+                f"<strong>{escape(thesis or 'Unavailable')}</strong></div></article>"
+                "<article class='position-card existing-position'>"
+                "<span class='compass-label'>Already own it</span>"
+                f"<strong>{escape(result.get('existing_position_action') or '-')}</strong>"
+                f"<p>{escape(result.get('existing_position_summary') or 'Guidance unavailable.')}</p></article>"
+                "<article class='position-card new-position'>"
+                "<span class='compass-label'>Considering a new position</span>"
+                f"<strong>{escape(result.get('new_position_action') or '-')}</strong>"
+                f"<p>{escape(result.get('new_position_summary') or 'Guidance unavailable.')}</p></article>"
+                f"{conditions}</section>"
+            )
 
         sections.append(
             f"<section class='stock stock-{kind}'>"
@@ -1709,12 +1941,13 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             f"<div class='stock-title'><span class='decision-glyph {kind}'>{decision_icon(kind)}</span><div><p class='stock-kicker'>Sequential Stock Brief</p><h2>{escape(result['ticker'])}</h2></div></div>"
             f"<div class='decision-pill {kind}'>{escape(result.get('decision') or 'Unknown')}</div>"
             "</div>"
-            f"<p class='meta-line'>Analysis Date: {escape(result['analysis_date'])} · Horizon: {escape(result.get('target_horizon') or '-')} · Results: <code>{escape(result['results_dir'])}</code></p>"
+            f"<p class='meta-line'>Analysis Date: {escape(result['analysis_date'])} · Run: {escape(result.get('run_id') or '-')} · Comparison: {escape(RUN_COMPARISON_LABELS.get(result.get('comparison_status'), '-'))} · Horizon: {escape(result.get('target_horizon') or '-')} · Results: <code>{escape(result['results_dir'])}</code></p>"
+            f"{position_compass}"
             "<div class='metric-ribbon'>"
-            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('target')}</span><div><span class='metric-label'>Price Target</span><strong>{escape(format_price_target(result.get('price_target')))}</strong></div></article>"
+            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('target')}</span><div><span class='metric-label'>Price Target</span><strong>{escape(displayed_target(result))}</strong><small>{escape(target_detail)}</small></div></article>"
             f"<article class='metric-card'><span class='metric-icon'>{metric_icon('reference')}</span><div><span class='metric-label'>Reference Price</span><strong>{escape(reference_price)}</strong></div></article>"
             f"<article class='metric-card'><span class='metric-icon'>{metric_icon('delta')}</span><div><span class='metric-label'>Target Gap</span><strong>{escape(delta_label)}</strong></div></article>"
-            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('confidence')}</span><div><span class='metric-label'>Model confidence (uncalibrated)</span><strong>{escape(str(confidence_value) + '/100' if confidence_value is not None else '-')}</strong></div></article>"
+            f"<article class='metric-card'><span class='metric-icon'>{metric_icon('confidence')}</span><div><span class='metric-label'>Recommendation confidence (uncalibrated)</span><strong>{escape(str(confidence_value) + '/100' if confidence_value is not None else '-')}</strong></div></article>"
             "</div>"
             "<div class='confidence-strip'>"
             f"<div class='confidence-bar'><span style='width:{confidence_width}%'></span></div>"
@@ -1835,6 +2068,18 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     .summary-table {{
       padding: 24px;
     }}
+    .snapshot-warning {{
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      margin: 0 0 18px;
+      padding: 12px 14px;
+      border-left: 4px solid var(--gold);
+      border-radius: 10px;
+      background: rgba(182, 138, 20, 0.10);
+      color: var(--muted);
+    }}
+    .snapshot-warning strong {{ color: var(--ink); }}
     table {{
       width: 100%;
       border-collapse: collapse;
@@ -1896,6 +2141,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
       background: rgba(17, 34, 43, 0.06);
     }}
     .decision-glyph svg,
+    .thesis-mark svg,
     .metric-icon svg,
     .highlight-icon svg {{
       width: 26px;
@@ -1920,6 +2166,84 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     .decision-pill.sell {{ background: rgba(239, 107, 74, 0.12); color: var(--coral); }}
     .decision-pill.hold {{ background: rgba(182, 138, 20, 0.14); color: var(--gold); }}
     .decision-pill.failed {{ background: rgba(141, 47, 36, 0.12); color: var(--failed); }}
+    .decision-compass {{
+      display: grid;
+      grid-template-columns: 0.85fr 1fr 1fr;
+      gap: 12px;
+      margin: 18px 0;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: linear-gradient(135deg, rgba(17,34,43,0.035), rgba(255,255,255,0.72));
+    }}
+    .thesis-card,
+    .position-card {{
+      min-width: 0;
+      padding: 16px;
+      border-radius: 18px;
+      background: white;
+      box-shadow: inset 0 0 0 1px rgba(17,34,43,0.07);
+    }}
+    .thesis-card {{
+      display: flex;
+      gap: 14px;
+      align-items: center;
+    }}
+    .thesis-mark {{
+      width: 58px;
+      height: 58px;
+      flex: 0 0 58px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 18px;
+    }}
+    .thesis-mark svg {{ width: 38px; height: 38px; fill: currentColor; }}
+    .thesis-mark.bullish {{ color: var(--teal); background: rgba(15,118,110,0.12); }}
+    .thesis-mark.bearish {{ color: var(--coral); background: rgba(239,107,74,0.12); }}
+    .thesis-mark.neutral {{ color: var(--gold); background: rgba(182,138,20,0.13); }}
+    .compass-label {{
+      display: block;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }}
+    .thesis-card strong,
+    .position-card strong {{ display: block; font-size: 21px; line-height: 1.15; }}
+    .position-card p {{ margin: 8px 0 0; color: var(--slate); font-size: 14px; }}
+    .new-position strong {{ color: var(--gold); }}
+    .thesis-bullish .thesis-card strong {{ color: var(--teal); }}
+    .thesis-bearish .thesis-card strong {{ color: var(--coral); }}
+    .thesis-neutral .thesis-card strong {{ color: var(--gold); }}
+    .condition-list {{
+      grid-column: 1 / -1;
+      display: grid;
+      gap: 8px;
+      padding-top: 2px;
+    }}
+    .condition-row {{
+      display: grid;
+      grid-template-columns: 128px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      padding: 11px 14px;
+      border-left: 4px solid var(--gold);
+      border-radius: 12px;
+      background: rgba(182,138,20,0.07);
+    }}
+    .condition-row span {{
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }}
+    .condition-row p {{ margin: 0; color: var(--slate); }}
+    .condition-confirmation {{ border-color: var(--teal); background: rgba(15,118,110,0.07); }}
+    .condition-invalidation {{ border-color: var(--coral); background: rgba(239,107,74,0.07); }}
     .meta-line {{
       margin: 0 0 18px;
       color: var(--muted);
@@ -1960,6 +2284,13 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     }}
     .metric-card strong {{
       font-size: 22px;
+    }}
+    .metric-card small {{
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
     }}
     .confidence-strip {{
       display: grid;
@@ -2065,6 +2396,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     @media (max-width: 900px) {{
       body {{ padding: 18px; }}
       .hero-grid,
+      .decision-compass,
       .metric-ribbon,
       .highlight-stack {{
         grid-template-columns: 1fr;
@@ -2073,6 +2405,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
         align-items: flex-start;
         flex-direction: column;
       }}
+      .condition-row {{ grid-template-columns: 1fr; gap: 4px; }}
     }}
   </style>
 </head>
@@ -2103,15 +2436,20 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     </section>
     <section class="summary-table">
       <h2>Batch Summary</h2>
-      <p style="margin:0 0 18px;color:var(--muted);">Average target across completed runs: {escape(format_price_target(avg_target)) if avg_target is not None else '-'}</p>
+      {live_snapshot_notice}
+      <p style="margin:0 0 18px;color:var(--muted);">Average validated target across {len(targets)} of {len(completed_results)} completed runs: {escape(format_price_target(avg_target)) if avg_target is not None else '-'}</p>
       <table>
         <thead>
           <tr>
             <th>Ticker</th>
             <th>Decision</th>
+            <th>Thesis</th>
+            <th>Existing Position</th>
+            <th>New Position</th>
             <th>Price Target</th>
+            <th>Target Status</th>
             <th>Target Gap</th>
-            <th>Model confidence (uncalibrated)</th>
+            <th>Recommendation confidence (uncalibrated)</th>
             <th>Status</th>
             <th>Default Results</th>
           </tr>

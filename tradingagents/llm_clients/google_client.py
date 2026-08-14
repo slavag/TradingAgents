@@ -6,6 +6,12 @@ from .base_client import BaseLLMClient, normalize_content
 from .validators import validate_model
 
 
+_NO_SAMPLING_PARAMETER_MODELS = {
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+}
+
+
 class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
     """ChatGoogleGenerativeAI with normalized content output.
 
@@ -33,6 +39,8 @@ class GoogleClient(BaseLLMClient):
 
         for key in ("timeout", "max_retries", "temperature", "callbacks", "http_client", "http_async_client"):
             if key in self.kwargs:
+                if key == "temperature" and self.model in _NO_SAMPLING_PARAMETER_MODELS:
+                    continue
                 llm_kwargs[key] = self.kwargs[key]
 
         # Unified api_key maps to provider-specific google_api_key

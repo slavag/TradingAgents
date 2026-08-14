@@ -552,6 +552,65 @@ function decisionClass(decision) {
   return "hold";
 }
 
+function thesisVisual(thesis) {
+  const normalized = String(thesis || "").toLowerCase();
+  const kind = normalized.includes("bullish")
+    ? "bullish"
+    : normalized.includes("bearish")
+      ? "bearish"
+      : "neutral";
+  const label = `${kind[0].toUpperCase()}${kind.slice(1)} thesis`;
+  const paths = {
+    bullish: "<path d='M18 20C10 20 6 15 5 8c6 5 12 6 18 2l3 7h12l3-7c6 4 12 3 18-2-1 7-5 12-13 12l-2 9c-1 9-7 16-12 16s-11-7-12-16z'/><path d='M23 33h18l-4 9H27z' opacity='.5'/>",
+    bearish: "<circle cx='18' cy='18' r='8'/><circle cx='46' cy='18' r='8'/><path d='M12 31c0-12 8-20 20-20s20 8 20 20-8 22-20 22-20-10-20-22z'/><ellipse cx='32' cy='38' rx='12' ry='9' opacity='.5'/>",
+    neutral: "<path d='M30 10h4v38h-4zM14 16h36v4H14z'/><path d='M16 20L8 36h16zm32 0-8 16h16z' opacity='.55'/><path d='M8 38h16v4H8zm32 0h16v4H40zM20 50h24v4H20z'/>",
+  };
+  return `
+    <span class="result-thesis-icon ${kind}" role="img" aria-label="${label}">
+      <svg viewBox="0 0 64 64" aria-hidden="true">${paths[kind]}</svg>
+    </span>
+  `;
+}
+
+function positionPlan(result) {
+  if (!result.thesis && !result.existing_position_action && !result.new_position_action) {
+    return "";
+  }
+
+  const conditionRows = [
+    ["confirmation", "Confirmation", result.conditional_confirmation],
+    ["alternative", "Alternative", result.conditional_alternative],
+    ["invalidation", "Invalidation", result.conditional_invalidation],
+  ].filter(([, , value]) => value).map(([kind, label, value]) => `
+    <div class="result-condition ${kind}">
+      <span>${label}</span>
+      <p>${escapeHtml(value)}</p>
+    </div>
+  `).join("");
+
+  return `
+    <section class="result-position-plan">
+      <div class="result-thesis">
+        ${thesisVisual(result.thesis)}
+        <div><span>Evidence-led thesis</span><strong>${escapeHtml(result.thesis || "—")}</strong></div>
+      </div>
+      <div class="result-position-actions">
+        <article>
+          <span>Already own it</span>
+          <strong>${escapeHtml(result.existing_position_action || "—")}</strong>
+          <p>${escapeHtml(result.existing_position_summary || "Guidance unavailable.")}</p>
+        </article>
+        <article>
+          <span>New position</span>
+          <strong>${escapeHtml(result.new_position_action || "—")}</strong>
+          <p>${escapeHtml(result.new_position_summary || "Guidance unavailable.")}</p>
+        </article>
+      </div>
+      ${conditionRows ? `<div class="result-conditions">${conditionRows}</div>` : ""}
+    </section>
+  `;
+}
+
 function resultCard(result) {
   if (result.status === "failed") {
     return `
@@ -566,11 +625,20 @@ function resultCard(result) {
   }
 
   const highlights = result.highlights || {};
-  const targetValidation = result.target_rejection_reason
-    ? `<p class="result-text"><strong>Target validation:</strong> ${escapeHtml(result.target_rejection_reason.replaceAll("_", " "))}</p>`
+  const targetValidation = result.target_status_label
+    ? `<p class="result-text"><strong>Target status:</strong> ${escapeHtml(result.target_status_label)}</p>`
     : "";
   const targetEvidence = result.supporting_quote
     ? `<p class="result-text"><strong>Target evidence:</strong> ${escapeHtml(result.supporting_quote)}</p>`
+    : "";
+  const comparisonText = {
+    first_recorded_run: "First auditable run for this ticker and date.",
+    reproduced: "Decision reproduced from identical evidence.",
+    evidence_changed: "Evidence changed since the prior run; outcome differences may reflect new inputs.",
+    decision_changed_same_evidence: "Decision changed despite identical evidence; treat the model output as unstable.",
+  }[result.comparison_status] || "";
+  const snapshotNotice = result.snapshot_mode === "live_current_day"
+    ? `<div class="result-snapshot ${escapeHtml(result.comparison_status || "")}"><strong>Live current-day snapshot</strong><span>Market and source data can change between runs.</span>${comparisonText ? `<span>${escapeHtml(comparisonText)}</span>` : ""}<small>Run ${escapeHtml(result.run_id || "—")} · Previous ${escapeHtml(result.previous_run_id || "—")} · Evidence ${escapeHtml(result.evidence_fingerprint || "—")}</small></div>`
     : "";
   return `
     <article class="result-card">
@@ -578,9 +646,11 @@ function resultCard(result) {
         <div class="ticker-mark">${escapeHtml(result.ticker)}</div>
         <div class="decision-pill ${decisionClass(result.decision)}">${escapeHtml(result.decision || "Pending")}</div>
       </div>
+      ${snapshotNotice}
+      ${positionPlan(result)}
       <div class="result-metrics">
         <div class="metric-box"><span>Target</span><strong>${escapeHtml(result.price_target_label || "—")}</strong></div>
-        <div class="metric-box"><span>Confidence</span><strong>${escapeHtml(result.confidence_label || "—")}</strong></div>
+        <div class="metric-box"><span>Recommendation confidence</span><strong>${escapeHtml(result.recommendation_confidence_label || "—")}</strong></div>
       </div>
       <p class="result-text"><strong>Outlook:</strong> ${escapeHtml(result.target_summary || "—")}</p>
       ${targetEvidence}

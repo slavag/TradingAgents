@@ -79,7 +79,14 @@ def test_research_manager_prompt_states_constraint():
 
 @pytest.mark.unit
 def test_portfolio_manager_prompt_states_constraint():
-    from tradingagents.agents.schemas import PortfolioDecisionDraft, PortfolioRating
+    from tradingagents.agents.schemas import (
+        ConditionalActionPlan,
+        ExistingPositionAction,
+        NewPositionAction,
+        PortfolioDecisionDraft,
+        PortfolioRating,
+        ThesisRating,
+    )
 
     captured = {}
     llm = _capturing_llm(
@@ -88,6 +95,16 @@ def test_portfolio_manager_prompt_states_constraint():
             rating=PortfolioRating.HOLD,
             executive_summary="x",
             investment_thesis="y",
+            thesis=ThesisRating.NEUTRAL,
+            existing_position_action=ExistingPositionAction.HOLD,
+            existing_position_summary="hold",
+            new_position_action=NewPositionAction.WAIT,
+            new_position_summary="wait",
+            recommendation_confidence_score=50,
+            conditional_plan=ConditionalActionPlan(
+                confirmation="Reassess when evidence improves.",
+                invalidation="Avoid entry if evidence deteriorates.",
+            ),
         ),
     )
     risk = {

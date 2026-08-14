@@ -23,15 +23,17 @@ from cli.main import (
     build_consolidated_report_html,
     classify_message_type,
     compact_report_text,
+    displayed_target,
     estimate_target_profile,
     extract_content_string,
-    format_price_target,
     save_consolidated_report,
     save_report_to_disk,
+    target_status_text,
 )
 from cli.stats_handler import StatsCallbackHandler
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.reporting import build_run_manifest, compare_run_manifests
 from tradingagents.web.speaking_sources import (
     build_speaking_candidate_universe,
     fetch_external_market_symbols,
@@ -437,11 +439,27 @@ def serialize_result(result: dict[str, Any]) -> dict[str, Any]:
             "price_target": None,
             "price_target_label": "-",
             "confidence_score": None,
+            "recommendation_confidence_score": None,
+            "recommendation_confidence_label": "-",
             "target_horizon": None,
             "target_summary": None,
             "supporting_quote": None,
             "target_validation_status": None,
+            "target_status_label": "Unavailable",
             "target_rejection_reason": None,
+            "run_id": result.get("run_id"),
+            "snapshot_mode": result.get("snapshot_mode"),
+            "evidence_fingerprint": result.get("evidence_fingerprint"),
+            "comparison_status": result.get("comparison_status"),
+            "previous_run_id": result.get("previous_run_id"),
+            "thesis": None,
+            "existing_position_action": None,
+            "existing_position_summary": None,
+            "new_position_action": None,
+            "new_position_summary": None,
+            "conditional_confirmation": None,
+            "conditional_alternative": None,
+            "conditional_invalidation": None,
             "results_dir": result["results_dir"],
             "report_path": None,
             "custom_report_path": result.get("custom_report_path"),
@@ -451,20 +469,41 @@ def serialize_result(result: dict[str, Any]) -> dict[str, Any]:
 
     final_state = result["final_state"]
     confidence = result.get("confidence_score")
+    recommendation_confidence = result.get("recommendation_confidence_score")
     return {
         "ticker": result["ticker"],
         "analysis_date": result["analysis_date"],
         "status": "completed",
         "decision": result.get("decision"),
         "price_target": result.get("price_target"),
-        "price_target_label": format_price_target(result.get("price_target")),
+        "price_target_label": displayed_target(result),
         "confidence_score": confidence,
         "confidence_label": f"{confidence}/100" if confidence is not None else "-",
+        "recommendation_confidence_score": recommendation_confidence,
+        "recommendation_confidence_label": (
+            f"{recommendation_confidence}/100"
+            if recommendation_confidence is not None
+            else "-"
+        ),
         "target_horizon": result.get("target_horizon"),
         "target_summary": result.get("target_summary"),
         "supporting_quote": result.get("supporting_quote"),
         "target_validation_status": result.get("target_validation_status"),
+        "target_status_label": target_status_text(result),
         "target_rejection_reason": result.get("target_rejection_reason"),
+        "run_id": result.get("run_id"),
+        "snapshot_mode": result.get("snapshot_mode"),
+        "evidence_fingerprint": result.get("evidence_fingerprint"),
+        "comparison_status": result.get("comparison_status"),
+        "previous_run_id": result.get("previous_run_id"),
+        "thesis": result.get("thesis"),
+        "existing_position_action": result.get("existing_position_action"),
+        "existing_position_summary": result.get("existing_position_summary"),
+        "new_position_action": result.get("new_position_action"),
+        "new_position_summary": result.get("new_position_summary"),
+        "conditional_confirmation": result.get("conditional_confirmation"),
+        "conditional_alternative": result.get("conditional_alternative"),
+        "conditional_invalidation": result.get("conditional_invalidation"),
         "results_dir": result["results_dir"],
         "report_path": result.get("report_path"),
         "custom_report_path": result.get("custom_report_path"),
@@ -915,6 +954,23 @@ def fetch_ticker_detail(ticker: str) -> dict[str, Any]:
     return data
 
 
+def _latest_run_manifest(run_root: Path, current_run_id: str) -> dict | None:
+    """Load the newest prior manifest without letting a corrupt run abort analysis."""
+    candidates = []
+    if run_root.exists():
+        for path in run_root.glob("*/web_report/run_manifest.json"):
+            if path.parent.parent.name != current_run_id:
+                candidates.append(path)
+    for path in sorted(candidates, key=lambda item: item.stat().st_mtime, reverse=True):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
 def _run_job(job_id: str, payload: dict[str, Any]):
     tickers = normalize_tickers(payload.get("tickers"))
     analysis_date = payload["analysis_date"]
@@ -927,6 +983,15 @@ def _run_job(job_id: str, payload: dict[str, Any]):
     config = build_graph_config(payload)
     export_root = Path(payload["export_path"]).expanduser() if payload.get("export_path") else None
     custom_save_enabled = bool(payload.get("save_reports")) and export_root is not None
+    try:
+        requested_date = dt.date.fromisoformat(analysis_date)
+    except ValueError:
+        requested_date = None
+    snapshot_mode = (
+        "live_current_day"
+        if requested_date == dt.datetime.now().date()
+        else "historical_frozen"
+    )
 
     raw_results: list[dict[str, Any]] = []
     serialized_results: list[dict[str, Any]] = []
@@ -995,12 +1060,60 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     decision_text,
                 )
 
-                default_report_dir = RESULTS_ROOT / ticker / analysis_date / "web_report"
-                default_report_path = save_report_to_disk(final_state, ticker, default_report_dir)
+                run_root = RESULTS_ROOT / ticker / analysis_date / "runs"
+                previous_manifest = _latest_run_manifest(run_root, job_id)
+                run_metadata = build_run_manifest(
+                    final_state,
+                    ticker,
+                    {
+                        "run_id": job_id,
+                        "analysis_date": analysis_date,
+                        "snapshot_mode": snapshot_mode,
+                        "temperature": config.get("temperature"),
+                        "models": {
+                            "quick": {
+                                "provider": config.get("quick_think_provider"),
+                                "model": config.get("quick_think_llm"),
+                            },
+                            "deep": {
+                                "provider": config.get("deep_think_provider"),
+                                "model": config.get("deep_think_llm"),
+                            },
+                            "final_report": {
+                                "provider": config.get("final_report_provider"),
+                                "model": config.get("final_report_llm"),
+                            },
+                        },
+                    },
+                )
+                comparison_status = compare_run_manifests(
+                    run_metadata,
+                    previous_manifest,
+                )
+                run_metadata["comparison_status"] = comparison_status
+                run_metadata["previous_run_id"] = (
+                    previous_manifest.get("run_id") if previous_manifest else None
+                )
+                default_report_dir = (
+                    run_root
+                    / job_id
+                    / "web_report"
+                )
+                default_report_path = save_report_to_disk(
+                    final_state,
+                    ticker,
+                    default_report_dir,
+                    run_metadata=run_metadata,
+                )
                 custom_report_path = None
                 if custom_save_enabled:
                     custom_dir = export_root if len(tickers) == 1 else export_root / ticker
-                    custom_report_path = save_report_to_disk(final_state, ticker, custom_dir)
+                    custom_report_path = save_report_to_disk(
+                        final_state,
+                        ticker,
+                        custom_dir,
+                        run_metadata=run_metadata,
+                    )
 
                 result = {
                     "ticker": ticker,
@@ -1012,6 +1125,11 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     "custom_report_path": str(custom_report_path.resolve())
                     if custom_report_path
                     else None,
+                    "run_id": job_id,
+                    "snapshot_mode": snapshot_mode,
+                    "evidence_fingerprint": run_metadata["evidence_fingerprint"],
+                    "comparison_status": comparison_status,
+                    "previous_run_id": run_metadata["previous_run_id"],
                     **target_profile,
                 }
                 logger.info(
