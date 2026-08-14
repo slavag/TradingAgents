@@ -115,7 +115,47 @@ class TestFetchSubredditIsRssFirst:
                           side_effect=AssertionError("JSON endpoint must not be called")):
             out = reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
         rss.assert_called_once()
-        assert out is sentinel
+        assert out == sentinel
+        assert out is not sentinel  # cached values are isolated from caller mutation
+
+
+@pytest.mark.unit
+class TestSubredditCache:
+    def test_successful_result_is_cached_and_copied(self):
+        posts = [{"title": "cached", "source": "rss"}]
+        with patch.object(reddit, "_fetch_subreddit_rss", return_value=posts) as rss, \
+             patch.object(reddit.time, "monotonic", return_value=100.0):
+            first = reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
+            first[0]["title"] = "mutated"
+            second = reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
+
+        assert rss.call_count == 1
+        assert second[0]["title"] == "cached"
+
+    def test_cache_expires_after_five_minutes(self):
+        now = [100.0]
+        responses = [
+            [{"title": "first", "source": "rss"}],
+            [{"title": "refetched", "source": "rss"}],
+            [{"title": "unexpected-third-fetch", "source": "rss"}],
+        ]
+        with patch.object(reddit, "_fetch_subreddit_rss", side_effect=responses) as rss, \
+             patch.object(reddit.time, "monotonic", side_effect=lambda: now[0]):
+            first = reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
+            cached = reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
+            now[0] = 401.0
+            refetched = reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
+
+        assert rss.call_count == 2
+        assert first[0]["title"] == cached[0]["title"] == "first"
+        assert refetched[0]["title"] == "refetched"
+
+    def test_empty_results_are_not_cached(self):
+        with patch.object(reddit, "_fetch_subreddit_rss", return_value=[]) as rss:
+            reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
+            reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
+
+        assert rss.call_count == 2
 
 
 @pytest.mark.unit
