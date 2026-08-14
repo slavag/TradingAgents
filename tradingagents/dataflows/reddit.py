@@ -60,6 +60,15 @@ _CACHE_LOCK = threading.Lock()
 _rss_cache: dict[tuple[str, str, int], tuple[float, list[dict]]] = {}
 
 
+class _RedditRateLimitExhausted(RuntimeError):
+    """Internal signal used to stop a multi-subreddit sweep after repeated 429s."""
+
+    def __init__(self, sub: str, ticker: str):
+        super().__init__(f"Reddit rate limit exhausted for r/{sub} · {ticker}")
+        self.sub = sub
+        self.ticker = ticker
+
+
 def _reset_process_state() -> None:
     """Reset process-local Reddit state; intended for deterministic tests."""
     global _rate_limited_until
@@ -169,6 +178,8 @@ def _fetch_subreddit_rss(
     limit: int,
     timeout: float,
     _retry: bool = True,
+    *,
+    _raise_on_rate_limit: bool = False,
 ) -> list[dict]:
     """Default path: parse the public Atom search feed for a subreddit.
 
@@ -198,6 +209,8 @@ def _fetch_subreddit_rss(
                     "Reddit RSS fetch failed for r/%s · %s after %d attempts: %s",
                     sub, ticker, attempt + 1, exc,
                 )
+                if _raise_on_rate_limit:
+                    raise _RedditRateLimitExhausted(sub, ticker) from exc
                 return []
 
             logger.warning(
@@ -273,7 +286,13 @@ def _fetch_subreddit(
     if cached is not None:
         return cached
 
-    posts = _fetch_subreddit_rss(ticker, sub, limit, timeout)
+    posts = _fetch_subreddit_rss(
+        ticker,
+        sub,
+        limit,
+        timeout,
+        _raise_on_rate_limit=True,
+    )
     if posts:
         _cache_posts(ticker, sub, limit, posts)
     return _copy_posts(posts)
@@ -303,10 +322,19 @@ def fetch_reddit_posts(
     ticker = crypto_base(ticker) or ticker
     blocks = []
     total_posts = 0
+    rate_limit_exhausted = False
     for i, sub in enumerate(subreddits):
         if i > 0:
             time.sleep(inter_request_delay)
-        posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout)
+        try:
+            posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout)
+        except _RedditRateLimitExhausted:
+            rate_limit_exhausted = True
+            blocks.append(
+                f"r/{sub}: <temporarily unavailable due to Reddit rate limiting; "
+                "remaining subreddits were not requested>"
+            )
+            break
         total_posts += len(posts)
         if not posts:
             blocks.append(f"r/{sub}: <no posts found mentioning {ticker.upper()} in the past 7 days>")
@@ -339,6 +367,11 @@ def fetch_reddit_posts(
         blocks.append("\n".join(lines))
 
     if total_posts == 0:
+        if rate_limit_exhausted:
+            return (
+                f"<Reddit temporarily unavailable due to Reddit rate limiting "
+                f"while searching for {ticker.upper()}; remaining subreddits were not requested>"
+            )
         return (
             f"<no Reddit posts found mentioning {ticker.upper()} across "
             f"{', '.join(f'r/{s}' for s in subreddits)} in the past 7 days>"

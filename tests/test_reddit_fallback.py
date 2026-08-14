@@ -276,6 +276,24 @@ class TestFormatterHandlesRssPosts:
 
 
 @pytest.mark.unit
+class TestRateLimitSweepStopping:
+    def test_retry_exhaustion_stops_remaining_subreddits(self):
+        err = HTTPError("url", 429, "Too Many Requests", {}, None)
+        with patch.object(reddit, "urlopen", side_effect=[err] * 12) as op, \
+             patch.object(reddit.random, "uniform", return_value=1.0), \
+             patch.object(reddit.time, "monotonic", return_value=100.0), \
+             patch.object(reddit.time, "sleep"):
+            out = fetch_reddit_posts(
+                "NVDA",
+                subreddits=("stocks", "investing", "wallstreetbets"),
+                inter_request_delay=0,
+            )
+
+        assert op.call_count == 4
+        assert "temporarily unavailable due to Reddit rate limiting" in out
+
+
+@pytest.mark.unit
 class TestCryptoSearchTerm:
     """A crypto pair (BTC-USD) barely matches Reddit text; search the base (#1113)."""
 
