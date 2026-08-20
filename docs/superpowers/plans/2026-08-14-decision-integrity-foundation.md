@@ -781,7 +781,13 @@ outcome and score artifacts are resolved through a protocol-driven runtime with
 yfinance, CLI batch, and FastAPI entry points. Unmatured horizons and provider
 errors remain retryable instead of becoming zero outcomes.
 
-### Future Project D: Constrained Portfolio Optimizer
+### Project D: Constrained Portfolio Optimizer
+
+**Status:** Completed on 2026-08-20 in separate state, shrinkage-risk,
+constraint-aware allocation, and advisory-adapter commits. The long-only
+allocator enforces position, group, liquidity, cash, turnover, cost,
+uncertainty, and volatility limits with independent final diagnostics and an
+explicit no-trade outcome. No broker execution path was added.
 
 **Planned files:**
 - Create `tradingagents/portfolio/state.py`

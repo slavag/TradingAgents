@@ -30,10 +30,10 @@
 
 **Interfaces:** `Holding`, `PortfolioState`, `InstrumentForecast`, `InstrumentConstraint`, `PortfolioConstraints`, `OptimizationStatus`, `ConstraintDiagnostic`, and `PortfolioOptimizationResult`.
 
-- [ ] Write failing schema tests for valuation, duplicate symbols, negative cash/weights, invalid limits, and immutable output.
-- [ ] Implement frozen Decimal-based state and result models.
-- [ ] Run focused tests and Ruff.
-- [ ] Commit as `feat: define constrained portfolio state`.
+- [x] Write failing schema tests for valuation, duplicate symbols, negative cash/weights, invalid limits, and immutable output.
+- [x] Implement frozen Decimal-based state and result models.
+- [x] Run focused tests and Ruff.
+- [x] Commit as `feat: define constrained portfolio state`.
 
 ### Task 2: Shrinkage Risk Model
 
@@ -43,10 +43,10 @@
 
 **Interfaces:** `RiskModel`, `estimate_shrinkage_covariance(symbols, returns, shrinkage=Decimal("0.25"))`, and `portfolio_volatility(weights, risk_model)`.
 
-- [ ] Write failing tests for deterministic symbol ordering, missing/NaN data, positive-semidefinite shrinkage, and hand-calculated volatility.
-- [ ] Implement sample covariance shrunk toward its diagonal and frozen tuple serialization.
-- [ ] Run risk tests and Ruff.
-- [ ] Commit as `feat: estimate shrinkage portfolio risk`.
+- [x] Write failing tests for deterministic symbol ordering, missing/NaN data, positive-semidefinite shrinkage, and hand-calculated volatility.
+- [x] Implement sample covariance shrunk toward its diagonal and frozen tuple serialization.
+- [x] Run risk tests and Ruff.
+- [x] Commit as `feat: estimate shrinkage portfolio risk`.
 
 ### Task 3: Deterministic Constrained Allocation
 
@@ -57,11 +57,11 @@
 
 **Interfaces:** `optimize_portfolio(state, forecasts, instrument_constraints, portfolio_constraints, risk_model) -> PortfolioOptimizationResult` and `validate_target_weights(result, ...)`.
 
-- [ ] Write failing tests for positive-edge allocation, no-trade, transaction costs, uncertainty, position/sector/country/liquidity caps, turnover, cash, risk scaling, deterministic ties, and final validation.
-- [ ] Implement stable net-edge ranking and constraint-aware incremental allocation.
-- [ ] Add independent final constraint diagnostics and risk contribution output.
-- [ ] Run optimizer and risk tests plus Ruff.
-- [ ] Commit as `feat: optimize portfolios under hard constraints`.
+- [x] Write failing tests for positive-edge allocation, no-trade, transaction costs, uncertainty, position/sector/country/liquidity caps, turnover, cash, risk scaling, deterministic ties, and final validation.
+- [x] Implement stable net-edge ranking and constraint-aware incremental allocation.
+- [x] Add independent final constraint diagnostics and risk contribution output.
+- [x] Run optimizer and risk tests plus Ruff.
+- [x] Commit as `feat: optimize portfolios under hard constraints`.
 
 ### Task 4: Operational Entry Points and Verification
 
@@ -74,8 +74,13 @@
 - Modify: `docs/superpowers/plans/2026-08-14-decision-integrity-foundation.md`
 - Modify: `docs/superpowers/plans/2026-08-20-constrained-portfolio-optimizer.md`
 
-- [ ] Add JSON-input CLI and FastAPI optimizer adapters over the shared optimizer.
-- [ ] Add adapter and serialization tests without order execution.
-- [ ] Run focused and complete suites, Ruff, and diff checks.
-- [ ] Record exact evidence and mark only Project D complete.
-- [ ] Commit entry points and documentation separately.
+- [x] Add JSON-input CLI and FastAPI optimizer adapters over the shared optimizer.
+- [x] Add adapter and serialization tests without order execution.
+- [x] Run focused and complete suites, Ruff, and diff checks.
+- [x] Record exact evidence and mark only Project D complete.
+- [x] Commit entry points and documentation separately.
+
+Verification on 2026-08-20: `66 passed` in the focused Project D and integration
+suite and `862 passed, 2 skipped` in the complete suite. Ruff and
+`git diff --check` completed without errors. The optional skips were the missing
+Bedrock dependency and absent DeepSeek live API key.
