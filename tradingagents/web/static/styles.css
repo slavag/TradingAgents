@@ -679,6 +679,12 @@ button:disabled {
 .event-feed {
   display: grid;
   gap: 10px;
+  min-height: 0;
+  align-content: start;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
 }
 
 .event-feed.empty-state,

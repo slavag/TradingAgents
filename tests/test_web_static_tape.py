@@ -106,3 +106,12 @@ def test_progress_sidebar_scrolls_and_evaluation_controls_adapt_to_container():
     assert ".progress-sidebar {\n  overflow-y: auto;" in styles_css
     assert "repeat(auto-fit, minmax(min(220px, 100%), 1fr))" in styles_css
     assert '.evaluation-controls input:not([type="checkbox"]),' in styles_css
+
+
+def test_messages_and_tools_feed_has_independent_vertical_scroll():
+    styles_css = (WEB_STATIC_ROOT / "styles.css").read_text(encoding="utf-8")
+
+    assert "overflow-y: scroll;" in styles_css
+    assert "overflow-x: hidden;" in styles_css
+    assert "scrollbar-gutter: stable;" in styles_css
+    assert "overscroll-behavior: contain;" in styles_css
