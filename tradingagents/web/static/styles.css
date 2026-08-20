@@ -1373,6 +1373,46 @@ input[type="checkbox"] {
   min-height: 0;
 }
 
+.role-status,
+.capability-status {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.role-status.promoted {
+  color: var(--teal);
+  font-weight: 700;
+}
+
+.evaluation-subpane {
+  margin-top: 1rem;
+}
+
+.evaluation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 0.75rem 0;
+}
+
+.evaluation-grid article {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.65rem;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+
+.evaluation-grid span,
+.evaluation-grid strong {
+  display: block;
+}
+
+.evaluation-grid span {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
 .modal-copy p {
   margin: 0;
   color: var(--muted);

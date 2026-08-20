@@ -85,6 +85,7 @@
                   <select id="quick-thinker" name="quick_thinker" class="model-select"></select>
                 </div>
               </div>
+              <span id="quick-promotion-status" class="role-status" aria-live="polite">Configured default</span>
             </div>
           </section>
 
@@ -112,11 +113,12 @@
                   <select id="deep-thinker" name="deep_thinker" class="model-select"></select>
                 </div>
               </div>
+              <span id="deep-promotion-status" class="role-status" aria-live="polite">Configured default</span>
             </div>
           </section>
 
           <section class="sidebar-section expanded">
-            <button class="sidebar-toggle" type="button" aria-expanded="true">Final Report</button>
+            <button class="sidebar-toggle" type="button" aria-expanded="true">Verifier / Reflection</button>
             <div class="section-body role-card">
               <div class="field">
                 <span>Provider</span>
@@ -139,6 +141,7 @@
                   <select id="final-report-model" name="final_report_model" class="model-select"></select>
                 </div>
               </div>
+              <span id="verifier-promotion-status" class="role-status" aria-live="polite">Configured default</span>
             </div>
           </section>
 
@@ -160,11 +163,12 @@
                 <option value="high">High</option>
               </select>
             </label>
-            <label class="field">
+            <label id="sampling-temperature-wrap" class="field">
               <span>Sampling Temperature</span>
               <input id="sampling-temperature" name="temperature" type="number" min="0" max="2" step="0.1" value="0" />
             </label>
           </div>
+          <p id="model-capability-status" class="capability-status" aria-live="polite"></p>
 
           <fieldset class="analyst-block">
             <legend>Analysts</legend>
@@ -283,6 +287,23 @@
             <strong id="progress-message">Waiting for a run.</strong>
           </article>
         </div>
+
+        <section class="subpane evaluation-subpane">
+          <div class="subpane-head">
+            <div>
+              <h3>Forecast Evaluation</h3>
+              <p class="capability-status">Coverage counts only; no performance guarantee.</p>
+            </div>
+            <button id="run-evaluation" class="ghost-button" type="button">Run Evaluation</button>
+          </div>
+          <div class="evaluation-grid" aria-live="polite">
+            <article><span>Total</span><strong id="evaluation-total">0</strong></article>
+            <article><span>Scored</span><strong id="evaluation-scored">0</strong></article>
+            <article><span>Pending</span><strong id="evaluation-pending">0</strong></article>
+            <article><span>Errors</span><strong id="evaluation-errors">0</strong></article>
+          </div>
+          <p id="evaluation-status" class="capability-status">Not evaluated in this session.</p>
+        </section>
 
         <section class="subpane progress-subpane progress-subpane-full">
           <div class="subpane-head">

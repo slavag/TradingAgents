@@ -129,6 +129,24 @@ class WebModelCatalogTests(unittest.TestCase):
         self.assertIn('document.getElementById("sampling-temperature")', app_js)
         self.assertIn("temperature: Number(elements.samplingTemperature.value)", app_js)
 
+    def test_ui_exposes_promotions_capabilities_and_evaluation_status(self):
+        root = Path(__file__).resolve().parents[1] / "tradingagents" / "web" / "static"
+        html = (root / "index.html").read_text(encoding="utf-8")
+        app_js = (root / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("Verifier / Reflection", html)
+        self.assertNotIn(">Final Report<", html)
+        for role in ("quick", "deep", "verifier"):
+            self.assertIn(f'id="{role}-promotion-status"', html)
+        self.assertIn('id="model-capability-status"', html)
+        self.assertIn('id="run-evaluation"', html)
+        for metric in ("evaluation-total", "evaluation-scored", "evaluation-pending", "evaluation-errors"):
+            self.assertIn(f'id="{metric}"', html)
+        self.assertIn("ROLE_MODEL_OPTIONS", app_js)
+        self.assertIn("ROLE_DEFAULTS", app_js)
+        self.assertIn("MODEL_CAPABILITIES", app_js)
+        self.assertIn('fetch("/api/evaluations/run"', app_js)
+
 
 if __name__ == "__main__":
     unittest.main()

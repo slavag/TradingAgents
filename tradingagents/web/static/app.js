@@ -14,6 +14,9 @@ const MARKET_TAPE_REFRESH_MS = 10 * 60 * 1000;
 const SPEAKING_TAPE_REFRESH_MS = 30 * 60 * 1000;
 
 const MODEL_OPTIONS = window.TRADINGAGENTS_MODEL_OPTIONS || {};
+const ROLE_MODEL_OPTIONS = window.TRADINGAGENTS_ROLE_MODEL_OPTIONS || {};
+const MODEL_CAPABILITIES = window.TRADINGAGENTS_MODEL_CAPABILITIES || {};
+const ROLE_DEFAULTS = window.TRADINGAGENTS_ROLE_DEFAULTS || {};
 
 const elements = {
   form: document.getElementById("analysis-form"),
@@ -31,6 +34,17 @@ const elements = {
   googleThinkingWrap: document.getElementById("google-thinking-wrap"),
   googleThinking: document.getElementById("google-thinking"),
   samplingTemperature: document.getElementById("sampling-temperature"),
+  samplingTemperatureWrap: document.getElementById("sampling-temperature-wrap"),
+  modelCapabilityStatus: document.getElementById("model-capability-status"),
+  quickPromotionStatus: document.getElementById("quick-promotion-status"),
+  deepPromotionStatus: document.getElementById("deep-promotion-status"),
+  verifierPromotionStatus: document.getElementById("verifier-promotion-status"),
+  runEvaluation: document.getElementById("run-evaluation"),
+  evaluationTotal: document.getElementById("evaluation-total"),
+  evaluationScored: document.getElementById("evaluation-scored"),
+  evaluationPending: document.getElementById("evaluation-pending"),
+  evaluationErrors: document.getElementById("evaluation-errors"),
+  evaluationStatus: document.getElementById("evaluation-status"),
   saveReports: document.getElementById("save-reports"),
   exportPathWrap: document.getElementById("export-path-wrap"),
   exportPath: document.getElementById("export-path"),
@@ -106,9 +120,39 @@ function populateModelSelect(selectElement, options, preferredValue = null) {
   selectElement.value = hasPreferred ? previousValue : options[0][1];
 }
 
-function updateModelOptions(provider, selectElement) {
-  const options = MODEL_OPTIONS[provider] || MODEL_OPTIONS.openai || [];
-  populateModelSelect(selectElement, options);
+function updateModelOptions(role, provider, selectElement, preferredValue = null) {
+  const roleOptions = ROLE_MODEL_OPTIONS[role] || {};
+  const options = roleOptions[provider] || roleOptions.openai || MODEL_OPTIONS[provider] || [];
+  populateModelSelect(selectElement, options, preferredValue);
+}
+
+function roleBindings() {
+  return {
+    quick: [elements.quickProvider, elements.quickThinker, elements.quickPromotionStatus],
+    deep: [elements.deepProvider, elements.deepThinker, elements.deepPromotionStatus],
+    verifier: [elements.finalReportProvider, elements.finalReportModel, elements.verifierPromotionStatus],
+  };
+}
+
+function applyRoleDefaults() {
+  Object.entries(roleBindings()).forEach(([role, [providerSelect, modelSelect, status]]) => {
+    const preferred = ROLE_DEFAULTS[role];
+    if (!preferred) return;
+    if ([...providerSelect.options].some((option) => option.value === preferred.provider)) {
+      providerSelect.value = preferred.provider;
+    }
+    updateModelOptions(role, providerSelect.value, modelSelect, preferred.model);
+    const coverage = preferred.paired_coverage ? ` · coverage ${preferred.paired_coverage}` : "";
+    status.textContent = preferred.source === "promoted" ? `Promoted${coverage}` : "Configured default";
+    status.classList.toggle("promoted", preferred.source === "promoted");
+  });
+}
+
+function selectedCapabilities() {
+  return Object.entries(roleBindings()).map(([role, [provider, model]]) => ({
+    role,
+    capabilities: MODEL_CAPABILITIES[provider.value]?.[model.value] || {},
+  }));
 }
 
 function updateProviderFields() {
@@ -117,15 +161,40 @@ function updateProviderFields() {
     elements.deepProvider.value,
     elements.finalReportProvider.value,
   ];
-  const isOpenAI = providers.includes("openai");
-  const isGoogle = providers.includes("google");
+  updateModelOptions("quick", elements.quickProvider.value, elements.quickThinker);
+  updateModelOptions("deep", elements.deepProvider.value, elements.deepThinker);
+  updateModelOptions("verifier", elements.finalReportProvider.value, elements.finalReportModel);
+  const capabilities = selectedCapabilities();
+  const isOpenAI = capabilities.some((item) => item.capabilities.reasoning_effort);
+  const isGoogle = capabilities.some((item) => item.capabilities.thinking_level);
+  const hasTemperature = capabilities.some((item) => item.capabilities.temperature);
 
   elements.openaiEffortWrap.classList.toggle("hidden", !isOpenAI);
   elements.googleThinkingWrap.classList.toggle("hidden", !isGoogle);
+  elements.samplingTemperatureWrap.classList.toggle("hidden", !hasTemperature);
+  const unsupported = capabilities.filter((item) => !item.capabilities.temperature).map((item) => item.role);
+  elements.modelCapabilityStatus.textContent = unsupported.length
+    ? `Temperature is omitted for unsupported roles: ${unsupported.join(", ")}.`
+    : "All selected roles accept sampling temperature.";
+}
 
-  updateModelOptions(elements.quickProvider.value, elements.quickThinker);
-  updateModelOptions(elements.deepProvider.value, elements.deepThinker);
-  updateModelOptions(elements.finalReportProvider.value, elements.finalReportModel);
+async function runForecastEvaluation() {
+  elements.runEvaluation.disabled = true;
+  elements.evaluationStatus.textContent = "Evaluating saved forecasts…";
+  try {
+    const response = await fetch("/api/evaluations/run", { method: "POST" });
+    const summary = await response.json();
+    if (!response.ok) throw new Error(summary.detail || "Evaluation failed.");
+    elements.evaluationTotal.textContent = summary.total;
+    elements.evaluationScored.textContent = summary.scored + summary.already_scored;
+    elements.evaluationPending.textContent = summary.not_mature;
+    elements.evaluationErrors.textContent = summary.retryable_errors + summary.invalid;
+    elements.evaluationStatus.textContent = "Evaluation artifacts updated.";
+  } catch (error) {
+    elements.evaluationStatus.textContent = error.message;
+  } finally {
+    elements.runEvaluation.disabled = false;
+  }
 }
 
 function updateExportToggle() {
@@ -833,6 +902,7 @@ function resetForm() {
   elements.finalReportProvider.value = "openai";
   elements.researchDepth.value = "3";
   elements.saveReports.checked = true;
+  applyRoleDefaults();
   updateProviderFields();
   updateExportToggle();
 }
@@ -854,6 +924,7 @@ function downloadMarkdownReport() {
 
 function boot() {
   setToday();
+  applyRoleDefaults();
   updateProviderFields();
   updateExportToggle();
   fetchMarketTickers();
@@ -885,6 +956,7 @@ function boot() {
   elements.resetForm.addEventListener("click", resetForm);
   elements.openHtmlReport.addEventListener("click", openHtmlReport);
   elements.downloadMarkdownReport.addEventListener("click", downloadMarkdownReport);
+  elements.runEvaluation.addEventListener("click", runForecastEvaluation);
   elements.closeTickerModal.addEventListener("click", closeTickerModal);
   elements.addTickerToAnalysis.addEventListener("click", addActiveTickerToAnalysis);
   elements.tickerModal.addEventListener("click", (event) => {
