@@ -3140,6 +3140,11 @@ _EVALUATION_COST_OPTION = typer.Option(
     min=0.0,
     help="Deterministic round-trip transaction cost in basis points.",
 )
+_PORTFOLIO_INPUT_OPTION = typer.Option(
+    ...,
+    "--input",
+    help="JSON file containing state, forecasts, constraints, and risk_model.",
+)
 
 
 @app.command("evaluate-forecasts")
@@ -3164,6 +3169,21 @@ def evaluate_forecasts_command(
         f"{summary.not_mature} pending · {summary.retryable_errors} retryable errors · "
         f"{summary.invalid} invalid"
     )
+
+
+@app.command("optimize-portfolio")
+def optimize_portfolio_command(input_path: Path = _PORTFOLIO_INPUT_OPTION):
+    """Calculate advisory target weights from an explicit JSON request."""
+    from tradingagents.web.service import optimize_portfolio_payload
+
+    payload = json.loads(input_path.read_text(encoding="utf-8"))
+    result = optimize_portfolio_payload(payload)
+    console.print(f"Portfolio optimization: {result['status']}")
+    for target in result["target_weights"]:
+        console.print(
+            f"{target['symbol']}: {target['current_weight']} → "
+            f"{target['target_weight']} (trade value {target['trade_value']})"
+        )
 
 
 if __name__ == "__main__":

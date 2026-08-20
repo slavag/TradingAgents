@@ -38,6 +38,14 @@ from tradingagents.evaluation.runtime import (
     evaluate_report_trees,
 )
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.portfolio.optimizer import optimize_portfolio
+from tradingagents.portfolio.risk_model import RiskModel
+from tradingagents.portfolio.state import (
+    InstrumentConstraint,
+    InstrumentForecast,
+    PortfolioConstraints,
+    PortfolioState,
+)
 from tradingagents.reporting import build_run_manifest, compare_run_manifests
 from tradingagents.web.speaking_sources import (
     build_speaking_candidate_universe,
@@ -1375,3 +1383,28 @@ def evaluate_saved_forecasts(
         transaction_cost_bps=transaction_cost_bps,
     )
     return summary.model_dump(mode="json")
+
+
+def optimize_portfolio_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate a JSON-compatible optimization request and return target weights."""
+    state = PortfolioState.model_validate(payload.get("state"))
+    forecasts = tuple(
+        InstrumentForecast.model_validate(item)
+        for item in payload.get("forecasts", ())
+    )
+    instrument_constraints = tuple(
+        InstrumentConstraint.model_validate(item)
+        for item in payload.get("instrument_constraints", ())
+    )
+    portfolio_constraints = PortfolioConstraints.model_validate(
+        payload.get("portfolio_constraints")
+    )
+    risk_model = RiskModel.model_validate(payload.get("risk_model"))
+    result = optimize_portfolio(
+        state,
+        forecasts,
+        instrument_constraints,
+        portfolio_constraints,
+        risk_model,
+    )
+    return result.model_dump(mode="json")

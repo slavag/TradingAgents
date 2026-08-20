@@ -24,6 +24,7 @@ from tradingagents.web.service import (
     fetch_speaking_stocks,
     fetch_ticker_detail,
     get_job,
+    optimize_portfolio_payload,
 )
 
 logger = logging.getLogger("tradingagents.web")
@@ -304,6 +305,18 @@ def run_saved_forecast_evaluations():
     except Exception as exc:
         logger.exception("Forecast evaluation failed")
         raise HTTPException(status_code=500, detail="Forecast evaluation failed.") from exc
+
+
+@app.post("/api/portfolio/optimize")
+def optimize_portfolio_request(payload: dict):
+    try:
+        return optimize_portfolio_payload(payload)
+    except Exception as exc:
+        logger.exception("Portfolio optimization failed")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid portfolio optimization request.",
+        ) from exc
 
 
 @app.on_event("startup")

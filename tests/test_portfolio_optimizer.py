@@ -1,10 +1,13 @@
 """Deterministic constrained portfolio state, risk, and allocation."""
 
+import json
 from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
+from typer.testing import CliRunner
 
+from cli.main import app as cli_app
 from tradingagents.portfolio.optimizer import optimize_portfolio, validate_target_weights
 from tradingagents.portfolio.risk_model import (
     RiskModel,
@@ -23,6 +26,7 @@ from tradingagents.portfolio.state import (
     PortfolioState,
     TargetWeight,
 )
+from tradingagents.web.service import optimize_portfolio_payload
 
 
 def test_portfolio_state_computes_total_value_and_current_weights():
@@ -349,3 +353,35 @@ def test_independent_validator_detects_tampered_position_limit():
     )
 
     assert any(item.code == "position_limit:AAA" and not item.passed for item in diagnostics)
+
+
+def optimization_payload():
+    return {
+        "state": optimizer_state().model_dump(mode="json"),
+        "forecasts": [instrument_forecast().model_dump(mode="json")],
+        "instrument_constraints": [instrument_constraint().model_dump(mode="json")],
+        "portfolio_constraints": optimizer_constraints().model_dump(mode="json"),
+        "risk_model": optimizer_risk().model_dump(mode="json"),
+    }
+
+
+def test_web_service_optimizer_adapter_returns_serialized_diagnostics():
+    result = optimize_portfolio_payload(optimization_payload())
+
+    assert result["status"] == "optimized"
+    assert result["target_weights"][0]["symbol"] == "AAA"
+    assert any(item["code"] == "risk_budget" for item in result["diagnostics"])
+
+
+def test_cli_optimizer_reads_json_without_executing_orders(tmp_path):
+    request_path = tmp_path / "portfolio.json"
+    request_path.write_text(json.dumps(optimization_payload()))
+
+    result = CliRunner().invoke(
+        cli_app,
+        ["optimize-portfolio", "--input", str(request_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Portfolio optimization: optimized" in result.stdout
+    assert "AAA" in result.stdout
