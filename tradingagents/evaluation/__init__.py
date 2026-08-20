@@ -5,6 +5,12 @@ from tradingagents.evaluation.calibration import (
     CalibrationSummary,
     summarize_calibration,
 )
+from tradingagents.evaluation.leaderboard import (
+    ConfigurationIdentity,
+    LeaderboardEntry,
+    RoleLeaderboard,
+    build_role_leaderboard,
+)
 from tradingagents.evaluation.outcomes import (
     OutcomeResolutionStatus,
     PriceObservation,
@@ -20,12 +26,16 @@ from tradingagents.evaluation.scoring import (
 __all__ = [
     "CalibrationBin",
     "CalibrationSummary",
+    "ConfigurationIdentity",
     "OutcomeResolutionStatus",
+    "LeaderboardEntry",
     "PriceObservation",
     "ForecastScore",
     "RealizedDirection",
     "ResolvedOutcome",
+    "RoleLeaderboard",
     "resolve_forecast_outcome",
     "score_forecast",
+    "build_role_leaderboard",
     "summarize_calibration",
 ]

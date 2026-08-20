@@ -6,6 +6,10 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from tradingagents.evaluation.leaderboard import (
+    ConfigurationIdentity,
+    build_role_leaderboard,
+)
 from tradingagents.evaluation.outcomes import OutcomeResolutionStatus
 from tradingagents.evaluation.scoring import ForecastScore
 from tradingagents.evaluation.walk_forward import (
@@ -288,3 +292,95 @@ def test_paired_comparison_is_order_independent():
     )
 
     assert first == second
+
+
+def configuration(configuration_id: str, *, role="deep"):
+    return ConfigurationIdentity(
+        configuration_id=configuration_id,
+        role=role,
+        provider="openai",
+        model=f"model-{configuration_id}",
+        prompt_hash="sha256:" + "a" * 64,
+        config_hash="sha256:" + "b" * 64,
+    )
+
+
+def comparison(challenger_id: str, *, passing: bool):
+    incumbent = (
+        metric_sample("r1", "inc", correct=False, excess="0", brier="0.2", drawdown="-0.1"),
+        metric_sample("r2", "inc", correct=False, excess="0", brier="0.2", drawdown="-0.1"),
+    )
+    challenger = (
+        metric_sample("r1", challenger_id, correct=True, excess="0.1", brier="0.1", drawdown="-0.05"),
+        metric_sample(
+            "r2",
+            challenger_id,
+            correct=passing,
+            excess="0.1",
+            brier="0.1" if passing else "0.5",
+            drawdown="-0.05",
+        ),
+    )
+    return compare_paired_configurations(incumbent, challenger, passing_thresholds())
+
+
+def test_leaderboard_retains_incumbent_when_challenger_fails_gate():
+    failed = comparison("failed", passing=False)
+
+    leaderboard = build_role_leaderboard(
+        "deep",
+        (failed,),
+        (configuration("inc"), configuration("failed")),
+        incumbent_configuration_id="inc",
+    )
+
+    assert leaderboard.selected_configuration_id == "inc"
+    assert tuple(entry.configuration.configuration_id for entry in leaderboard.entries) == (
+        "inc",
+    )
+
+
+def test_leaderboard_selects_passing_challenger_with_pinned_identity():
+    passed = comparison("challenger", passing=True)
+
+    leaderboard = build_role_leaderboard(
+        "deep",
+        (passed,),
+        (configuration("inc"), configuration("challenger")),
+        incumbent_configuration_id="inc",
+    )
+
+    assert leaderboard.selected_configuration_id == "challenger"
+    assert leaderboard.entries[0].configuration.model == "model-challenger"
+    assert leaderboard.entries[0].promoted is True
+    assert leaderboard.entries[1].configuration.configuration_id == "inc"
+
+
+def test_leaderboard_breaks_equal_challenger_ties_by_configuration_id():
+    beta = comparison("beta", passing=True)
+    alpha = comparison("alpha", passing=True)
+
+    leaderboard = build_role_leaderboard(
+        "deep",
+        (beta, alpha),
+        (configuration("inc"), configuration("alpha"), configuration("beta")),
+        incumbent_configuration_id="inc",
+    )
+
+    assert tuple(entry.configuration.configuration_id for entry in leaderboard.entries) == (
+        "alpha",
+        "beta",
+        "inc",
+    )
+
+
+def test_leaderboard_rejects_cross_role_configuration():
+    passed = comparison("challenger", passing=True)
+
+    with pytest.raises(ValueError, match="role does not match"):
+        build_role_leaderboard(
+            "deep",
+            (passed,),
+            (configuration("inc"), configuration("challenger", role="quick")),
+            incumbent_configuration_id="inc",
+        )
