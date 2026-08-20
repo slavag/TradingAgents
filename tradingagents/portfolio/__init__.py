@@ -1,5 +1,10 @@
 """Deterministic portfolio state, risk, and constrained allocation."""
 
+from tradingagents.portfolio.risk_model import (
+    RiskModel,
+    estimate_shrinkage_covariance,
+    portfolio_volatility,
+)
 from tradingagents.portfolio.state import (
     ConstraintDiagnostic,
     GroupLimit,
@@ -23,5 +28,8 @@ __all__ = [
     "PortfolioConstraints",
     "PortfolioOptimizationResult",
     "PortfolioState",
+    "RiskModel",
     "TargetWeight",
+    "estimate_shrinkage_covariance",
+    "portfolio_volatility",
 ]

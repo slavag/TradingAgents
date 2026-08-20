@@ -5,6 +5,10 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from tradingagents.portfolio.risk_model import (
+    estimate_shrinkage_covariance,
+    portfolio_volatility,
+)
 from tradingagents.portfolio.state import (
     ConstraintDiagnostic,
     GroupLimit,
@@ -111,3 +115,62 @@ def test_forecast_and_group_limit_normalize_symbols_and_names():
 
     assert forecast.symbol == "AAA"
     assert limit.name == "Tech"
+
+
+def test_risk_model_sorts_symbols_and_reorders_covariance_columns():
+    model = estimate_shrinkage_covariance(
+        ("BBB", "AAA"),
+        (
+            (Decimal("0.02"), Decimal("0.01")),
+            (Decimal("-0.02"), Decimal("-0.01")),
+        ),
+        shrinkage=Decimal("0.5"),
+    )
+
+    assert model.symbols == ("AAA", "BBB")
+    assert model.covariance == (
+        (Decimal("0.0002"), Decimal("0.0002")),
+        (Decimal("0.0002"), Decimal("0.0008")),
+    )
+
+
+def test_risk_model_rejects_missing_or_nonfinite_returns():
+    with pytest.raises(ValueError, match="finite"):
+        estimate_shrinkage_covariance(
+            ("AAA",),
+            ((Decimal("NaN"),), (Decimal("0.01"),)),
+        )
+    with pytest.raises(ValueError, match="at least two"):
+        estimate_shrinkage_covariance(("AAA",), ((Decimal("0.01"),),))
+
+
+def test_shrinkage_covariance_is_positive_semidefinite():
+    model = estimate_shrinkage_covariance(
+        ("AAA", "BBB"),
+        (
+            (Decimal("0.01"), Decimal("-0.01")),
+            (Decimal("-0.02"), Decimal("0.02")),
+            (Decimal("0.015"), Decimal("-0.015")),
+        ),
+        shrinkage=Decimal("0.25"),
+    )
+
+    assert model.minimum_eigenvalue >= Decimal("-1e-12")
+
+
+def test_portfolio_volatility_matches_hand_calculation():
+    model = estimate_shrinkage_covariance(
+        ("AAA", "BBB"),
+        (
+            (Decimal("0.01"), Decimal("0.02")),
+            (Decimal("-0.01"), Decimal("-0.02")),
+        ),
+        shrinkage=Decimal("0.5"),
+    )
+
+    volatility = portfolio_volatility(
+        {"AAA": Decimal("0.5"), "BBB": Decimal("0.5")},
+        model,
+    )
+
+    assert abs(volatility - Decimal("0.00035").sqrt()) < Decimal("1e-20")
