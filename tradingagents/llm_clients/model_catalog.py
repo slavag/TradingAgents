@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import re
+from typing import TypedDict
+
 ModelOption = tuple[str, str]
 ProviderModeOptions = dict[str, dict[str, list[ModelOption]]]
 WebProviderOptions = dict[str, list[ModelOption]]
+RoleWebOptions = dict[str, WebProviderOptions]
+
+
+class ModelUICapabilities(TypedDict):
+    temperature: bool
+    reasoning_effort: bool
+    thinking_level: bool
+    anthropic_effort: bool
 
 OPENAI_MODEL_ALIASES = {
     "gpt-5-mini": "gpt-5.4-mini",
@@ -16,6 +27,13 @@ OPENAI_MODEL_ALIASES = {
 _CUSTOM_ONLY: dict[str, list[ModelOption]] = {
     "quick": [("Custom model ID", "custom")],
     "deep": [("Custom model ID", "custom")],
+}
+
+_VERIFIER_PREFERRED = {
+    "openai": ("gpt-5.6-terra", "gpt-5.4-mini", "gpt-5.6-sol"),
+    "anthropic": ("claude-sonnet-5", "claude-haiku-4-5", "claude-opus-5"),
+    "google": ("gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-pro-preview"),
+    "xai": ("grok-4.3", "grok-4.5"),
 }
 
 
@@ -241,6 +259,63 @@ def get_web_model_options() -> WebProviderOptions:
         payload[provider] = merged
 
     return payload
+
+
+def get_role_model_options() -> RoleWebOptions:
+    """Return provider options independently curated for each runtime role."""
+    roles: RoleWebOptions = {"quick": {}, "deep": {}, "verifier": {}}
+    for provider, mode_options in MODEL_OPTIONS.items():
+        roles["quick"][provider] = list(mode_options["quick"])
+        roles["deep"][provider] = list(mode_options["deep"])
+        merged = []
+        seen = set()
+        for option in (*mode_options["deep"], *mode_options["quick"]):
+            if option[1] not in seen:
+                seen.add(option[1])
+                merged.append(option)
+        preferred = _VERIFIER_PREFERRED.get(provider)
+        if preferred:
+            by_id = {value: (label, value) for label, value in merged}
+            verifier = [by_id[value] for value in preferred if value in by_id]
+            verifier.extend(option for option in merged if option[1] == "custom")
+            roles["verifier"][provider] = verifier
+        else:
+            roles["verifier"][provider] = list(mode_options["deep"])
+    return roles
+
+
+def get_model_capabilities(provider: str, model: str) -> ModelUICapabilities:
+    """Describe which user-facing controls are valid for one provider/model."""
+    provider = provider.strip().lower()
+    model_lower = model.strip().lower()
+    openai_reasoning = provider == "openai" and bool(
+        re.match(r"^(?:gpt-5|o[134](?:-|$))", model_lower)
+    )
+    google_thinking = provider == "google" and model_lower.startswith("gemini-")
+    no_google_temperature = provider == "google" and model_lower in {
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+    }
+    anthropic_effort = provider == "anthropic" and any(
+        family in model_lower for family in ("opus", "sonnet", "fable")
+    )
+    return {
+        "temperature": not openai_reasoning and not no_google_temperature,
+        "reasoning_effort": openai_reasoning,
+        "thinking_level": google_thinking,
+        "anthropic_effort": anthropic_effort,
+    }
+
+
+def get_web_model_capabilities() -> dict[str, dict[str, ModelUICapabilities]]:
+    """Return capabilities for every model visible in any role."""
+    return {
+        provider: {
+            model: get_model_capabilities(provider, model)
+            for _, model in options
+        }
+        for provider, options in get_web_model_options().items()
+    }
 
 
 def get_known_models() -> dict[str, list[str]]:

@@ -1,11 +1,38 @@
 import unittest
 from pathlib import Path
 
-from tradingagents.llm_clients.model_catalog import get_web_model_options
+from tradingagents.llm_clients.model_catalog import (
+    get_model_capabilities,
+    get_role_model_options,
+    get_web_model_options,
+)
 from tradingagents.web.app import AnalysisRequest, _render_index_response
 
 
 class WebModelCatalogTests(unittest.TestCase):
+    def test_role_catalog_has_distinct_quick_deep_and_verifier_options(self):
+        roles = get_role_model_options()
+
+        self.assertEqual(set(roles), {"quick", "deep", "verifier"})
+        self.assertEqual(roles["quick"]["openai"][0][1], "gpt-5.4-mini")
+        self.assertEqual(roles["deep"]["openai"][0][1], "gpt-5.6-sol")
+        self.assertEqual(roles["verifier"]["openai"][0][1], "gpt-5.6-terra")
+        self.assertIn(
+            "gemini-3.6-flash",
+            [value for _, value in roles["verifier"]["google"]],
+        )
+
+    def test_model_capabilities_are_provider_and_model_specific(self):
+        openai_reasoning = get_model_capabilities("openai", "gpt-5.6-sol")
+        openai_chat = get_model_capabilities("openai", "gpt-4.1")
+        gemini = get_model_capabilities("google", "gemini-3.6-flash")
+
+        self.assertTrue(openai_reasoning["reasoning_effort"])
+        self.assertFalse(openai_reasoning["temperature"])
+        self.assertFalse(openai_chat["reasoning_effort"])
+        self.assertTrue(openai_chat["temperature"])
+        self.assertTrue(gemini["thinking_level"])
+        self.assertFalse(gemini["temperature"])
     def test_shared_web_catalog_uses_current_openai_models(self):
         values = [value for _, value in get_web_model_options()["openai"]]
 
