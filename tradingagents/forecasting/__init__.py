@@ -3,6 +3,7 @@
 from tradingagents.forecasting.record_factory import (
     canonical_payload_json,
     create_forecast_record,
+    forecast_record_from_state,
     forecast_record_id,
     normalize_horizon_sessions,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "ReferencePriceSnapshot",
     "canonical_payload_json",
     "create_forecast_record",
+    "forecast_record_from_state",
     "forecast_record_id",
     "normalize_horizon_sessions",
 ]

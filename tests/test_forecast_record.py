@@ -6,9 +6,21 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from tradingagents.agents.schemas import (
+    ConditionalActionPlan,
+    DecisionStatus,
+    ExistingPositionAction,
+    NewPositionAction,
+    PortfolioDecision,
+    PortfolioRating,
+    TargetValidationStatus,
+    ThesisRating,
+    render_pm_decision,
+)
 from tradingagents.forecasting.record_factory import (
     canonical_payload_json,
     create_forecast_record,
+    forecast_record_from_state,
     forecast_record_id,
     normalize_horizon_sessions,
 )
@@ -202,3 +214,111 @@ def test_create_forecast_record_embeds_payload_hash():
 )
 def test_horizon_normalization_accepts_only_unambiguous_values(text, expected):
     assert normalize_horizon_sessions(text) == expected
+
+
+def actionable_decision() -> PortfolioDecision:
+    return PortfolioDecision(
+        status=DecisionStatus.ACTIONABLE,
+        rating=PortfolioRating.BUY,
+        executive_summary="Build after confirmation.",
+        investment_thesis="Evidence supports measured upside.",
+        thesis=ThesisRating.BULLISH,
+        existing_position_action=ExistingPositionAction.HOLD,
+        existing_position_summary="Keep a medium position.",
+        new_position_action=NewPositionAction.CONDITIONAL_BUY,
+        new_position_summary="Wait for the breakout.",
+        conditional_plan=ConditionalActionPlan(
+            confirmation="Buy above 248.",
+            alternative="Accumulate near 222.",
+            invalidation="Break below 210.",
+        ),
+        recommendation_confidence_score=78,
+        price_target=250,
+        time_horizon="3 months",
+        confidence_score=72,
+        target_summary="The cited resistance supports the target.",
+        supporting_quote="Verified close: 236.22. Price target: 250.",
+        target_validation_status=TargetValidationStatus.ACCEPTED,
+    )
+
+
+def test_forecast_record_from_state_maps_typed_decision_and_exact_provenance():
+    decision = actionable_decision()
+    final_state = {
+        "company_of_interest": "be",
+        "asset_type": "stock",
+        "trade_date": "2026-08-20",
+        "market_report": "Verified close: 236.22. Price target: 250.",
+        "sentiment_report": "Sentiment is mixed.",
+        "news_report": "No material news.",
+        "fundamentals_report": "Cash flow is improving.",
+        "investment_plan": "**Recommendation**: Buy",
+        "trader_investment_plan": "**Action**: Buy",
+        "risk_debate_state": {"history": "Risk debate supports a measured entry."},
+        "portfolio_decision": decision.model_dump(mode="json"),
+        "final_trade_decision": render_pm_decision(decision),
+    }
+    metadata = {
+        "models": {
+            "quick": {"provider": "google", "model": "gemini-3.6-flash"},
+            "deep": {"provider": "openai", "model": "gpt-5.6"},
+        },
+        "temperature": 0.0,
+        "quote_currency": "USD",
+        "reference_price": {
+            "value": "236.22",
+            "observed_at": "2026-08-20T18:00:00Z",
+            "adjustment_basis": "split_adjusted",
+            "vendor": "yfinance",
+        },
+        "evidence_fingerprint": "sha256:" + "c" * 64,
+    }
+
+    record = forecast_record_from_state(
+        final_state,
+        "BE",
+        metadata,
+        generated_at=datetime(2026, 8, 20, 18, 30, tzinfo=timezone.utc),
+    )
+
+    assert record.decision_status is ForecastDecisionStatus.ACTIONABLE
+    assert record.rating == "Buy"
+    assert record.central_target == Decimal("250.0")
+    assert record.reference_price is not None
+    assert record.reference_price.value == Decimal("236.22")
+    assert record.expected_return == Decimal("250.0") / Decimal("236.22") - 1
+    assert record.horizon_sessions == 63
+    assert record.invalidation_conditions == ("Break below 210.",)
+    assert record.provenance.source_snapshot_hash == "sha256:" + "c" * 64
+    assert record.provenance.models == (
+        ModelIdentity(role="deep", provider="openai", model="gpt-5.6"),
+        ModelIdentity(role="quick", provider="google", model="gemini-3.6-flash"),
+    )
+    assert record.evidence_ids
+    assert all(value.startswith("sha256:") for value in record.evidence_ids)
+    assert "direction_probabilities" in record.missing_fields
+    assert "reference_price" not in record.missing_fields
+
+
+def test_legacy_decision_state_creates_explicitly_partial_record():
+    final_state = {
+        "company_of_interest": "TLN",
+        "asset_type": "stock",
+        "trade_date": "2026-08-20",
+        "final_trade_decision": "**Rating**: Hold\n\n**Executive Summary**: Wait.",
+    }
+
+    record = forecast_record_from_state(
+        final_state,
+        "TLN",
+        {"models": {}, "temperature": 0.0},
+        generated_at=datetime(2026, 8, 20, 18, 30, tzinfo=timezone.utc),
+    )
+
+    assert record.decision_status is ForecastDecisionStatus.ACTIONABLE
+    assert record.rating == "Hold"
+    assert record.central_target is None
+    assert record.data_quality is DataQuality.INSUFFICIENT
+    assert "typed_portfolio_decision" in record.missing_fields
+    assert "reference_price" in record.missing_fields
+    assert "quote_currency" in record.missing_fields

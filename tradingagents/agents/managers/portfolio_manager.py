@@ -53,6 +53,7 @@ def _manager_result(risk_debate_state: dict, decision: PortfolioDecision) -> dic
             "count": risk_debate_state["count"],
         },
         "final_trade_decision": final_trade_decision,
+        "portfolio_decision": decision.model_dump(mode="json"),
     }
 
 

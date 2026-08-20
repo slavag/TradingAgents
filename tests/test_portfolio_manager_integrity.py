@@ -177,6 +177,16 @@ def test_primary_target_with_verbatim_quote_is_rendered():
     assert "Target Validation" not in result
 
 
+def test_portfolio_manager_result_preserves_typed_decision_snapshot():
+    draft = actionable_draft()
+
+    result = create_portfolio_manager(configured_llm(result=draft))(make_pm_state())
+
+    assert result["portfolio_decision"]["status"] == "Actionable"
+    assert result["portfolio_decision"]["rating"] == "Buy"
+    assert result["portfolio_decision"]["recommendation_confidence_score"] == 72
+
+
 def test_prompt_defines_independent_thesis_and_symmetric_conditional_actions():
     llm = configured_llm(result=actionable_draft())
 
