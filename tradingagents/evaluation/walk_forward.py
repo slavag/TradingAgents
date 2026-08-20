@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -153,3 +154,171 @@ def build_walk_forward_folds(
         fold_start += timedelta(days=step_days)
 
     return tuple(folds)
+
+
+class PromotionThresholds(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    minimum_paired_samples: int
+    minimum_challenger_coverage: Decimal
+    minimum_direction_accuracy_delta: Decimal
+    minimum_mean_excess_return_delta: Decimal
+    maximum_brier_regression: Decimal
+    maximum_drawdown_regression: Decimal
+
+    @model_validator(mode="after")
+    def _validate_thresholds(self):
+        if self.minimum_paired_samples <= 0:
+            raise ValueError("minimum paired samples must be positive")
+        if not Decimal("0") <= self.minimum_challenger_coverage <= Decimal("1"):
+            raise ValueError("minimum challenger coverage must be between zero and one")
+        if self.maximum_brier_regression < 0 or self.maximum_drawdown_regression < 0:
+            raise ValueError("maximum regression thresholds cannot be negative")
+        return self
+
+
+class MetricAggregates(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    direction_accuracy: Decimal
+    mean_excess_return: Decimal
+    mean_brier_score: Decimal
+    mean_maximum_drawdown: Decimal
+
+
+class PromotionDecision(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    promoted: bool
+    rejection_reasons: tuple[str, ...]
+
+
+class PairedComparison(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    role: str
+    incumbent_configuration_id: str
+    challenger_configuration_id: str
+    incumbent_count: int
+    challenger_count: int
+    paired_count: int
+    challenger_coverage: Decimal
+    incumbent_metrics: MetricAggregates | None
+    challenger_metrics: MetricAggregates | None
+    direction_accuracy_delta: Decimal | None
+    mean_excess_return_delta: Decimal | None
+    brier_regression: Decimal | None
+    drawdown_regression: Decimal | None
+    decision: PromotionDecision
+
+
+def _configuration(samples: tuple[EvaluationSample, ...], label: str) -> tuple[str, str]:
+    configurations = {sample.configuration_id for sample in samples}
+    roles = {sample.role for sample in samples}
+    if len(configurations) != 1 or len(roles) != 1:
+        raise ValueError(f"{label} samples must share one role and configuration")
+    return next(iter(roles)), next(iter(configurations))
+
+
+def _paired_aggregates(samples: tuple[EvaluationSample, ...]) -> MetricAggregates | None:
+    if not samples:
+        return None
+    scores = [sample.score for sample in samples]
+    required = (
+        "direction_correct",
+        "excess_return",
+        "brier_score",
+        "maximum_drawdown",
+    )
+    if any(getattr(score, field) is None for score in scores for field in required):
+        return None
+    count = Decimal(len(scores))
+    return MetricAggregates(
+        direction_accuracy=sum(
+            Decimal("1") if score.direction_correct else Decimal("0")
+            for score in scores
+        )
+        / count,
+        mean_excess_return=sum(score.excess_return for score in scores) / count,
+        mean_brier_score=sum(score.brier_score for score in scores) / count,
+        mean_maximum_drawdown=sum(score.maximum_drawdown for score in scores) / count,
+    )
+
+
+def compare_paired_configurations(
+    incumbent: tuple[EvaluationSample, ...],
+    challenger: tuple[EvaluationSample, ...],
+    thresholds: PromotionThresholds,
+) -> PairedComparison:
+    """Compare configurations only on shared record IDs and apply every gate."""
+    incumbent_role, incumbent_config = _configuration(incumbent, "incumbent")
+    challenger_role, challenger_config = _configuration(challenger, "challenger")
+    if incumbent_role != challenger_role:
+        raise ValueError("incumbent and challenger roles must match")
+    incumbent_by_id = {sample.record_id: sample for sample in incumbent}
+    challenger_by_id = {sample.record_id: sample for sample in challenger}
+    if len(incumbent_by_id) != len(incumbent) or len(challenger_by_id) != len(challenger):
+        raise ValueError("configuration samples must have unique record IDs")
+
+    shared_ids = sorted(incumbent_by_id.keys() & challenger_by_id.keys())
+    incumbent_pairs = tuple(incumbent_by_id[record_id] for record_id in shared_ids)
+    challenger_pairs = tuple(challenger_by_id[record_id] for record_id in shared_ids)
+    paired_count = len(shared_ids)
+    coverage = Decimal(paired_count) / Decimal(len(incumbent)) if incumbent else Decimal("0")
+    incumbent_metrics = _paired_aggregates(incumbent_pairs)
+    challenger_metrics = _paired_aggregates(challenger_pairs)
+
+    direction_delta = None
+    excess_delta = None
+    brier_regression = None
+    drawdown_regression = None
+    reasons = []
+    if paired_count < thresholds.minimum_paired_samples:
+        reasons.append("insufficient_paired_samples")
+    if coverage < thresholds.minimum_challenger_coverage:
+        reasons.append("insufficient_challenger_coverage")
+    if incumbent_metrics is None or challenger_metrics is None:
+        reasons.append("required_metric_missing")
+    else:
+        direction_delta = (
+            challenger_metrics.direction_accuracy - incumbent_metrics.direction_accuracy
+        )
+        excess_delta = (
+            challenger_metrics.mean_excess_return - incumbent_metrics.mean_excess_return
+        )
+        brier_regression = (
+            challenger_metrics.mean_brier_score - incumbent_metrics.mean_brier_score
+        )
+        drawdown_regression = (
+            incumbent_metrics.mean_maximum_drawdown
+            - challenger_metrics.mean_maximum_drawdown
+        )
+        if direction_delta < thresholds.minimum_direction_accuracy_delta:
+            reasons.append("direction_accuracy_delta_below_threshold")
+        if excess_delta < thresholds.minimum_mean_excess_return_delta:
+            reasons.append("mean_excess_return_delta_below_threshold")
+        if brier_regression > thresholds.maximum_brier_regression:
+            reasons.append("brier_regression_exceeded")
+        if drawdown_regression > thresholds.maximum_drawdown_regression:
+            reasons.append("drawdown_regression_exceeded")
+
+    sorted_reasons = tuple(sorted(set(reasons)))
+    return PairedComparison(
+        role=incumbent_role,
+        incumbent_configuration_id=incumbent_config,
+        challenger_configuration_id=challenger_config,
+        incumbent_count=len(incumbent),
+        challenger_count=len(challenger),
+        paired_count=paired_count,
+        challenger_coverage=coverage,
+        incumbent_metrics=incumbent_metrics,
+        challenger_metrics=challenger_metrics,
+        direction_accuracy_delta=direction_delta,
+        mean_excess_return_delta=excess_delta,
+        brier_regression=brier_regression,
+        drawdown_regression=drawdown_regression,
+        decision=PromotionDecision(
+            promoted=not sorted_reasons,
+            rejection_reasons=sorted_reasons,
+        ),
+    )

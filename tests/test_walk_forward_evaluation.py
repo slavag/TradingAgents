@@ -10,8 +10,10 @@ from tradingagents.evaluation.outcomes import OutcomeResolutionStatus
 from tradingagents.evaluation.scoring import ForecastScore
 from tradingagents.evaluation.walk_forward import (
     EvaluationSample,
+    PromotionThresholds,
     WalkForwardFold,
     build_walk_forward_folds,
+    compare_paired_configurations,
 )
 
 
@@ -157,3 +159,132 @@ def test_fold_schema_rejects_internal_record_leakage():
             promotion_samples=(leaked.model_copy(update={"cutoff_date": date(2026, 1, 2)}),),
             evaluation_samples=(),
         )
+
+
+def metric_sample(
+    record_id: str,
+    config: str,
+    *,
+    correct: bool | None,
+    excess: str | None,
+    brier: str | None,
+    drawdown: str | None,
+):
+    base_score = score(record_id)
+    updated_score = base_score.model_copy(
+        update={
+            "direction_correct": correct,
+            "excess_return": Decimal(excess) if excess is not None else None,
+            "brier_score": Decimal(brier) if brier is not None else None,
+            "maximum_drawdown": Decimal(drawdown) if drawdown is not None else None,
+        }
+    )
+    return sample(1, record_id=record_id, config=config).model_copy(
+        update={"score": updated_score}
+    )
+
+
+def passing_thresholds(**updates):
+    values = {
+        "minimum_paired_samples": 2,
+        "minimum_challenger_coverage": Decimal("0.66"),
+        "minimum_direction_accuracy_delta": Decimal("0"),
+        "minimum_mean_excess_return_delta": Decimal("0"),
+        "maximum_brier_regression": Decimal("0"),
+        "maximum_drawdown_regression": Decimal("0"),
+    }
+    values.update(updates)
+    return PromotionThresholds(**values)
+
+
+def test_paired_promotion_passes_when_every_gate_improves():
+    incumbent = (
+        metric_sample("r1", "inc", correct=True, excess="0.01", brier="0.20", drawdown="-0.10"),
+        metric_sample("r2", "inc", correct=False, excess="0.00", brier="0.30", drawdown="-0.12"),
+        metric_sample("r3", "inc", correct=False, excess="-0.01", brier="0.40", drawdown="-0.15"),
+    )
+    challenger = (
+        metric_sample("r1", "chal", correct=True, excess="0.02", brier="0.10", drawdown="-0.08"),
+        metric_sample("r2", "chal", correct=True, excess="0.01", brier="0.20", drawdown="-0.10"),
+        metric_sample("r3", "chal", correct=False, excess="0.00", brier="0.30", drawdown="-0.12"),
+    )
+
+    comparison = compare_paired_configurations(incumbent, challenger, passing_thresholds())
+
+    assert comparison.paired_count == 3
+    assert comparison.challenger_coverage == Decimal("1")
+    assert comparison.decision.promoted is True
+    assert comparison.decision.rejection_reasons == ()
+    assert abs(comparison.direction_accuracy_delta - Decimal("1") / 3) < Decimal("1e-26")
+    assert comparison.mean_excess_return_delta == Decimal("0.01")
+
+
+def test_promotion_rejects_insufficient_samples_and_coverage():
+    incumbent = tuple(
+        metric_sample(f"r{index}", "inc", correct=True, excess="0", brier="0.2", drawdown="-0.1")
+        for index in range(1, 4)
+    )
+    challenger = (
+        metric_sample("r1", "chal", correct=True, excess="0.1", brier="0.1", drawdown="-0.05"),
+    )
+
+    comparison = compare_paired_configurations(incumbent, challenger, passing_thresholds())
+
+    assert comparison.decision.promoted is False
+    assert comparison.decision.rejection_reasons == (
+        "insufficient_challenger_coverage",
+        "insufficient_paired_samples",
+    )
+
+
+def test_promotion_rejects_excessive_brier_regression_despite_accuracy_gain():
+    incumbent = (
+        metric_sample("r1", "inc", correct=False, excess="0", brier="0.10", drawdown="-0.1"),
+        metric_sample("r2", "inc", correct=False, excess="0", brier="0.10", drawdown="-0.1"),
+    )
+    challenger = (
+        metric_sample("r1", "chal", correct=True, excess="0", brier="0.30", drawdown="-0.1"),
+        metric_sample("r2", "chal", correct=True, excess="0", brier="0.30", drawdown="-0.1"),
+    )
+
+    comparison = compare_paired_configurations(incumbent, challenger, passing_thresholds())
+
+    assert comparison.direction_accuracy_delta == Decimal("1")
+    assert comparison.brier_regression == Decimal("0.20")
+    assert comparison.decision.rejection_reasons == ("brier_regression_exceeded",)
+
+
+def test_promotion_rejects_missing_required_metrics():
+    incumbent = (
+        metric_sample("r1", "inc", correct=True, excess=None, brier="0.2", drawdown="-0.1"),
+        metric_sample("r2", "inc", correct=True, excess="0", brier="0.2", drawdown="-0.1"),
+    )
+    challenger = (
+        metric_sample("r1", "chal", correct=True, excess="0.1", brier="0.1", drawdown="-0.1"),
+        metric_sample("r2", "chal", correct=True, excess="0.1", brier="0.1", drawdown="-0.1"),
+    )
+
+    comparison = compare_paired_configurations(incumbent, challenger, passing_thresholds())
+
+    assert comparison.decision.promoted is False
+    assert comparison.decision.rejection_reasons == ("required_metric_missing",)
+
+
+def test_paired_comparison_is_order_independent():
+    incumbent = (
+        metric_sample("r1", "inc", correct=True, excess="0", brier="0.2", drawdown="-0.1"),
+        metric_sample("r2", "inc", correct=False, excess="0", brier="0.3", drawdown="-0.2"),
+    )
+    challenger = (
+        metric_sample("r1", "chal", correct=True, excess="0.1", brier="0.1", drawdown="-0.05"),
+        metric_sample("r2", "chal", correct=True, excess="0.1", brier="0.2", drawdown="-0.1"),
+    )
+
+    first = compare_paired_configurations(incumbent, challenger, passing_thresholds())
+    second = compare_paired_configurations(
+        tuple(reversed(incumbent)),
+        tuple(reversed(challenger)),
+        passing_thresholds(),
+    )
+
+    assert first == second
