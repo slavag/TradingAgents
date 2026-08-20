@@ -6,6 +6,12 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from tradingagents.forecasting.record_factory import (
+    canonical_payload_json,
+    create_forecast_record,
+    forecast_record_id,
+    normalize_horizon_sessions,
+)
 from tradingagents.forecasting.schemas import (
     AdjustmentBasis,
     DataQuality,
@@ -139,3 +145,60 @@ def test_schema_rejects_non_actionable_rating():
 def test_schema_rejects_malformed_record_id():
     with pytest.raises(ValidationError, match="String should match pattern"):
         ForecastRecord(record_id="not-a-hash", **forecast_payload().model_dump())
+
+
+def test_canonical_payload_json_is_stable_and_compact():
+    canonical = canonical_payload_json(forecast_payload())
+
+    assert canonical.startswith(
+        '{"as_of":"2026-08-20T18:30:00Z","asset_type":"stock",'
+        '"canonical_symbol":"BE","central_target":"250"'
+    )
+    assert canonical.endswith(
+        '"target_low":null,"target_validation_reason":null,'
+        '"target_validation_status":"Accepted"}'
+    )
+    assert "\n" not in canonical
+    assert ": " not in canonical
+
+
+def test_equal_payloads_have_identical_content_hashes():
+    first = forecast_payload()
+    second = forecast_payload()
+
+    assert forecast_record_id(first) == forecast_record_id(second)
+    assert forecast_record_id(first).startswith("sha256:")
+    assert len(forecast_record_id(first)) == 71
+
+
+def test_evidence_change_produces_a_different_content_hash():
+    first = forecast_payload(evidence_ids=("sha256:" + "a" * 64,))
+    second = forecast_payload(evidence_ids=("sha256:" + "d" * 64,))
+
+    assert forecast_record_id(first) != forecast_record_id(second)
+
+
+def test_create_forecast_record_embeds_payload_hash():
+    payload = forecast_payload()
+
+    record = create_forecast_record(payload)
+
+    assert record.record_id == forecast_record_id(payload)
+    assert record.canonical_symbol == "BE"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("1 day", 1),
+        ("2 weeks", 10),
+        ("3 months", 63),
+        ("1 year", 252),
+        ("63 sessions", 63),
+        ("3-6 months", None),
+        ("approximately 3 months", None),
+        (None, None),
+    ],
+)
+def test_horizon_normalization_accepts_only_unambiguous_values(text, expected):
+    assert normalize_horizon_sessions(text) == expected
