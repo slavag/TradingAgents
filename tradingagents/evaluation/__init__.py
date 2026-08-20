@@ -17,6 +17,7 @@ from tradingagents.evaluation.outcomes import (
     ResolvedOutcome,
     resolve_forecast_outcome,
 )
+from tradingagents.evaluation.registry import EvaluationArtifact, EvaluationRegistry
 from tradingagents.evaluation.scoring import (
     ForecastScore,
     RealizedDirection,
@@ -27,6 +28,8 @@ __all__ = [
     "CalibrationBin",
     "CalibrationSummary",
     "ConfigurationIdentity",
+    "EvaluationArtifact",
+    "EvaluationRegistry",
     "OutcomeResolutionStatus",
     "LeaderboardEntry",
     "PriceObservation",
