@@ -98,3 +98,11 @@ def test_result_cards_render_position_aware_thesis_and_conditions():
     assert ".result-thesis-icon.bearish" in styles_css
     assert ".result-condition.confirmation" in styles_css
     assert ".result-condition.invalidation" in styles_css
+
+
+def test_progress_sidebar_scrolls_and_evaluation_controls_adapt_to_container():
+    styles_css = (WEB_STATIC_ROOT / "styles.css").read_text(encoding="utf-8")
+
+    assert ".progress-sidebar {\n  overflow-y: auto;" in styles_css
+    assert "repeat(auto-fit, minmax(min(220px, 100%), 1fr))" in styles_css
+    assert '.evaluation-controls input:not([type="checkbox"]),' in styles_css

@@ -233,6 +233,22 @@ body::before {
   overflow: hidden;
 }
 
+.progress-sidebar {
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-color: rgba(123, 97, 255, 0.45) rgba(255, 255, 255, 0.06);
+  scrollbar-width: thin;
+}
+
+.progress-sidebar > * {
+  flex: 0 0 auto;
+}
+
+.progress-sidebar .progress-subpane-full {
+  min-height: 220px;
+  flex: 0 0 auto;
+}
+
 .section-head {
   display: flex;
   justify-content: space-between;
@@ -582,6 +598,7 @@ button:disabled {
 }
 
 .control-form::-webkit-scrollbar,
+.progress-sidebar::-webkit-scrollbar,
 .table-wrap::-webkit-scrollbar,
 .results-list::-webkit-scrollbar,
 .event-feed::-webkit-scrollbar,
@@ -1398,9 +1415,17 @@ input[type="checkbox"] {
 
 .evaluation-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 0.55rem;
   margin: 0.75rem 0;
+}
+
+.evaluation-controls .field,
+.evaluation-controls input:not([type="checkbox"]),
+.evaluation-controls select {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .evaluation-pending-toggle {
