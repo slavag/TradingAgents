@@ -348,3 +348,39 @@ def test_legacy_decision_state_creates_explicitly_partial_record():
     assert "typed_portfolio_decision" in record.missing_fields
     assert "reference_price" in record.missing_fields
     assert "quote_currency" in record.missing_fields
+
+
+def test_forecast_record_uses_structured_market_snapshot_from_state():
+    decision = actionable_decision()
+    final_state = {
+        "asset_type": "stock",
+        "trade_date": "2026-08-20",
+        "portfolio_decision": decision.model_dump(mode="json"),
+        "final_trade_decision": render_pm_decision(decision),
+        "verified_market_snapshot": {
+            "symbol": "BE",
+            "requested_date": "2026-08-20",
+            "observed_on": "2026-08-20",
+            "observed_at": None,
+            "close": "236.22",
+            "quote_currency": "USD",
+            "adjustment_basis": "total_return_adjusted",
+            "vendor": "yfinance",
+            "markdown": "Verified daily snapshot.",
+        },
+    }
+
+    record = forecast_record_from_state(
+        final_state,
+        "BE",
+        {"models": {}, "temperature": 0.0},
+        generated_at=datetime(2026, 8, 20, 18, 30, tzinfo=timezone.utc),
+    )
+
+    assert record.reference_price is not None
+    assert record.reference_price.observed_on == date(2026, 8, 20)
+    assert record.reference_price.observed_at is None
+    assert record.reference_price.adjustment_basis is AdjustmentBasis.TOTAL_RETURN_ADJUSTED
+    assert record.quote_currency == "USD"
+    assert record.expected_return == Decimal("250.0") / Decimal("236.22") - 1
+    assert "reference_price" not in record.missing_fields

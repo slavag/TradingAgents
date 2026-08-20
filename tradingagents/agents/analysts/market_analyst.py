@@ -8,6 +8,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_verified_market_snapshot,
     normalize_text_content,
 )
+from tradingagents.dataflows.market_data_validator import verified_market_snapshot
 
 
 def create_market_analyst(llm):
@@ -88,9 +89,16 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
         if len(result.tool_calls) == 0:
             report = normalize_text_content(result.content)
 
-        return {
+        response = {
             "messages": [result],
             "market_report": report,
         }
+        if report:
+            snapshot = verified_market_snapshot(
+                state["company_of_interest"],
+                current_date,
+            )
+            response["verified_market_snapshot"] = snapshot.model_dump(mode="json")
+        return response
 
     return market_analyst_node

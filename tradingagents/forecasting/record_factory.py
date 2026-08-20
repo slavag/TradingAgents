@@ -134,12 +134,28 @@ def _decision_snapshot(final_state: dict[str, Any]) -> tuple[dict[str, Any], boo
     return _legacy_decision_snapshot(str(final_state.get("final_trade_decision") or "")), False
 
 
-def _reference_snapshot(run_metadata: dict[str, Any]) -> ReferencePriceSnapshot | None:
+def _reference_snapshot(
+    run_metadata: dict[str, Any],
+    final_state: dict[str, Any],
+) -> ReferencePriceSnapshot | None:
     raw = run_metadata.get("reference_price")
-    if not isinstance(raw, dict):
+    if isinstance(raw, dict):
+        try:
+            return ReferencePriceSnapshot.model_validate(raw)
+        except ValidationError:
+            pass
+
+    market_snapshot = final_state.get("verified_market_snapshot")
+    if not isinstance(market_snapshot, dict):
         return None
     try:
-        return ReferencePriceSnapshot.model_validate(raw)
+        return ReferencePriceSnapshot.model_validate({
+            "value": market_snapshot.get("close"),
+            "observed_on": market_snapshot.get("observed_on"),
+            "observed_at": market_snapshot.get("observed_at"),
+            "adjustment_basis": market_snapshot.get("adjustment_basis"),
+            "vendor": market_snapshot.get("vendor"),
+        })
     except ValidationError:
         return None
 
@@ -215,7 +231,7 @@ def forecast_record_from_state(
     )
     horizon_text = decision.get("time_horizon")
     horizon_sessions = normalize_horizon_sessions(horizon_text)
-    reference_price = _reference_snapshot(metadata)
+    reference_price = _reference_snapshot(metadata, final_state)
     expected_return = None
     if central_target is not None and reference_price is not None:
         expected_return = central_target / reference_price.value - Decimal("1")
@@ -244,6 +260,9 @@ def forecast_record_from_state(
 
     data_cutoff, has_exact_cutoff = _data_cutoff(final_state, generated_at)
     quote_currency = metadata.get("quote_currency")
+    market_snapshot = final_state.get("verified_market_snapshot")
+    if not quote_currency and isinstance(market_snapshot, dict):
+        quote_currency = market_snapshot.get("quote_currency")
     missing_fields = {
         "expected_excess_return",
         "distribution",

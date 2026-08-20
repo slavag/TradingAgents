@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pandas as pd
 import pytest
 
@@ -88,3 +90,37 @@ class TestTool:
             {"symbol": "COF", "curr_date": "2026-05-20"}
         )
         assert "Verified market data snapshot for COF" in out
+
+
+@pytest.mark.unit
+def test_market_analyst_final_response_carries_structured_snapshot(monkeypatch):
+    import tradingagents.agents.analysts.market_analyst as market
+
+    snapshot = validator.VerifiedMarketSnapshot(
+        symbol="COF",
+        requested_date=pd.Timestamp("2026-05-16").date(),
+        observed_on=pd.Timestamp("2026-05-15").date(),
+        observed_at=None,
+        close=132,
+        quote_currency=None,
+        adjustment_basis="total_return_adjusted",
+        vendor="yfinance",
+        markdown="verified markdown",
+    )
+    monkeypatch.setattr(market, "verified_market_snapshot", lambda *args, **kwargs: snapshot)
+    prompt = MagicMock()
+    prompt.partial.return_value = prompt
+    chain = prompt.__or__.return_value
+    chain.invoke.return_value = MagicMock(tool_calls=[], content="final market report")
+    monkeypatch.setattr(market.ChatPromptTemplate, "from_messages", lambda *args, **kwargs: prompt)
+    llm = MagicMock()
+
+    result = market.create_market_analyst(llm)({
+        "company_of_interest": "COF",
+        "trade_date": "2026-05-16",
+        "instrument_context": "Ticker: COF",
+        "messages": [],
+    })
+
+    assert result["market_report"] == "final market report"
+    assert result["verified_market_snapshot"] == snapshot.model_dump(mode="json")

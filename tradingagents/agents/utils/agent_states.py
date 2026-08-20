@@ -56,6 +56,9 @@ class AgentState(MessagesState):
 
     # research step
     market_report: Annotated[str, "Report from the Market Analyst"]
+    verified_market_snapshot: Annotated[
+        dict, "Structured daily OHLCV provenance used by the Market Analyst"
+    ]
     sentiment_report: Annotated[str, "Report from the Sentiment Analyst"]
     news_report: Annotated[
         str, "Report from the News Researcher of current world affairs"
