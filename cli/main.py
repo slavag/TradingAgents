@@ -3145,6 +3145,16 @@ _PORTFOLIO_INPUT_OPTION = typer.Option(
     "--input",
     help="JSON file containing state, forecasts, constraints, and risk_model.",
 )
+_PROMOTION_INPUT_OPTION = typer.Option(
+    ...,
+    "--input",
+    help="JSON file containing a pinned RoleLeaderboard.",
+)
+_PROMOTION_ROOT_OPTION = typer.Option(
+    Path(DEFAULT_CONFIG["results_dir"]) / "model_promotions",
+    "--promotion-root",
+    help="Append-only promoted leaderboard directory.",
+)
 
 
 @app.command("evaluate-forecasts")
@@ -3184,6 +3194,20 @@ def optimize_portfolio_command(input_path: Path = _PORTFOLIO_INPUT_OPTION):
             f"{target['symbol']}: {target['current_weight']} → "
             f"{target['target_weight']} (trade value {target['trade_value']})"
         )
+
+
+@app.command("import-model-promotion")
+def import_model_promotion_command(
+    input_path: Path = _PROMOTION_INPUT_OPTION,
+    promotion_root: Path = _PROMOTION_ROOT_OPTION,
+):
+    """Import one pinned role leaderboard into the append-only promotion registry."""
+    from tradingagents.evaluation.leaderboard import RoleLeaderboard
+    from tradingagents.evaluation.promotion_registry import ModelPromotionRegistry
+
+    leaderboard = RoleLeaderboard.model_validate_json(input_path.read_text(encoding="utf-8"))
+    path = ModelPromotionRegistry(promotion_root).write_leaderboard(leaderboard)
+    console.print(f"Imported {leaderboard.role} promotion: {path}")
 
 
 if __name__ == "__main__":

@@ -16,7 +16,11 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from tradingagents.llm_clients.model_catalog import get_web_model_options
+from tradingagents.llm_clients.model_catalog import (
+    get_role_model_options,
+    get_web_model_capabilities,
+    get_web_model_options,
+)
 from tradingagents.web.service import (
     create_job,
     evaluate_saved_forecasts,
@@ -24,6 +28,7 @@ from tradingagents.web.service import (
     fetch_speaking_stocks,
     fetch_ticker_detail,
     get_job,
+    get_role_model_status,
     optimize_portfolio_payload,
 )
 
@@ -185,7 +190,7 @@ class AnalysisRequest(BaseModel):
     export_path: str | None = None
 
 
-def _render_index_response() -> HTMLResponse:
+def _render_index_response(promotion_root: Path | None = None) -> HTMLResponse:
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
         html = (
@@ -194,6 +199,18 @@ def _render_index_response() -> HTMLResponse:
             .replace(
                 "__MODEL_OPTIONS_JSON__",
                 json.dumps(get_web_model_options()),
+            )
+            .replace(
+                "__ROLE_MODEL_OPTIONS_JSON__",
+                json.dumps(get_role_model_options()),
+            )
+            .replace(
+                "__MODEL_CAPABILITIES_JSON__",
+                json.dumps(get_web_model_capabilities()),
+            )
+            .replace(
+                "__ROLE_DEFAULTS_JSON__",
+                json.dumps(get_role_model_status(promotion_root=promotion_root)),
             )
         )
         return HTMLResponse(

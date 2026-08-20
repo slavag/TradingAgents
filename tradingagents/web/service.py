@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import importlib.util
 import json
 import logging
@@ -32,6 +33,8 @@ from cli.main import (
 )
 from cli.stats_handler import StatsCallbackHandler
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.evaluation.leaderboard import ConfigurationIdentity
+from tradingagents.evaluation.promotion_registry import ModelPromotionRegistry
 from tradingagents.evaluation.runtime import (
     OutcomePriceProvider,
     YFinanceOutcomePriceProvider,
@@ -1408,3 +1411,72 @@ def optimize_portfolio_payload(payload: dict[str, Any]) -> dict[str, Any]:
         risk_model,
     )
     return result.model_dump(mode="json")
+
+
+def _promotion_hash(payload: Any) -> str:
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def get_role_model_status(
+    *,
+    promotion_root: Path | None = None,
+    config: dict[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Resolve pinned promoted role defaults with explicit configured fallbacks."""
+    config = config or DEFAULT_CONFIG
+    provider_default = config.get("llm_provider") or "openai"
+    role_config = {
+        "quick": (
+            config.get("quick_think_provider") or provider_default,
+            config.get("quick_think_llm"),
+        ),
+        "deep": (
+            config.get("deep_think_provider") or provider_default,
+            config.get("deep_think_llm"),
+        ),
+        "verifier": (
+            config.get("final_report_provider") or provider_default,
+            config.get("final_report_llm"),
+        ),
+    }
+    fallbacks = {
+        role: ConfigurationIdentity(
+            configuration_id=f"configured:{role}:{provider}:{model}",
+            role=role,
+            provider=str(provider),
+            model=str(model),
+            prompt_hash=_promotion_hash({"role": role, "prompt": "configured-unpinned"}),
+            config_hash=_promotion_hash({"role": role, "provider": provider, "model": model}),
+        )
+        for role, (provider, model) in role_config.items()
+    }
+    registry = ModelPromotionRegistry(
+        promotion_root or (RESULTS_ROOT / "model_promotions")
+    )
+    selected = registry.selected_defaults(fallbacks)
+    result = {}
+    for role, identity in selected.items():
+        leaderboard = registry.read_leaderboard(role)
+        entry = (
+            next(
+                (
+                    item
+                    for item in leaderboard.entries
+                    if item.configuration.configuration_id
+                    == leaderboard.selected_configuration_id
+                ),
+                None,
+            )
+            if leaderboard
+            else None
+        )
+        entry_json = entry.model_dump(mode="json") if entry else {}
+        result[role] = {
+            **identity.model_dump(mode="json"),
+            "source": "promoted" if leaderboard else "configured_fallback",
+            "paired_coverage": entry_json.get("paired_coverage"),
+            "direction_accuracy_delta": entry_json.get("direction_accuracy_delta"),
+            "mean_excess_return_delta": entry_json.get("mean_excess_return_delta"),
+        }
+    return result

@@ -3,13 +3,17 @@
 from decimal import Decimal
 
 import pytest
+from typer.testing import CliRunner
 
+from cli.main import app as cli_app
 from tradingagents.evaluation.leaderboard import (
     ConfigurationIdentity,
     LeaderboardEntry,
     RoleLeaderboard,
 )
 from tradingagents.evaluation.promotion_registry import ModelPromotionRegistry
+from tradingagents.web.app import _render_index_response
+from tradingagents.web.service import get_role_model_status
 
 
 def identity(configuration_id="deep-new", role="deep", model="gpt-5.6-terra"):
@@ -93,3 +97,43 @@ def test_selected_defaults_use_promotion_and_explicit_fallbacks(tmp_path):
     assert selected["deep"] == promoted
     assert selected["quick"] == fallbacks["quick"]
     assert selected["verifier"] == fallbacks["verifier"]
+
+
+def test_role_model_status_reports_promoted_and_configured_sources(tmp_path):
+    ModelPromotionRegistry(tmp_path).write_leaderboard(leaderboard())
+
+    status = get_role_model_status(promotion_root=tmp_path)
+
+    assert status["deep"]["source"] == "promoted"
+    assert status["deep"]["model"] == "gpt-5.6-terra"
+    assert status["quick"]["source"] == "configured_fallback"
+    assert status["verifier"]["source"] == "configured_fallback"
+
+
+def test_cli_imports_leaderboard_append_only(tmp_path):
+    source = tmp_path / "leaderboard.json"
+    source.write_text(leaderboard().model_dump_json(indent=2))
+    destination = tmp_path / "promotions"
+
+    result = CliRunner().invoke(
+        cli_app,
+        [
+            "import-model-promotion",
+            "--input",
+            str(source),
+            "--promotion-root",
+            str(destination),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert ModelPromotionRegistry(destination).read_leaderboard("deep") == leaderboard()
+
+
+def test_index_serializes_promoted_decimal_metrics(tmp_path):
+    ModelPromotionRegistry(tmp_path).write_leaderboard(leaderboard())
+
+    html = _render_index_response(promotion_root=tmp_path).body.decode("utf-8")
+
+    assert '"source": "promoted"' in html
+    assert '"paired_coverage": "0.9"' in html

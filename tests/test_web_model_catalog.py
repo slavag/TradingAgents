@@ -88,6 +88,15 @@ class WebModelCatalogTests(unittest.TestCase):
         self.assertIn("grok-4.5", html)
         self.assertIn("grok-build-0.1", html)
 
+    def test_index_injects_role_options_capabilities_and_defaults(self):
+        html = _render_index_response().body.decode("utf-8")
+
+        self.assertIn("window.TRADINGAGENTS_ROLE_MODEL_OPTIONS", html)
+        self.assertIn("window.TRADINGAGENTS_MODEL_CAPABILITIES", html)
+        self.assertIn("window.TRADINGAGENTS_ROLE_DEFAULTS", html)
+        self.assertIn('"verifier"', html)
+        self.assertIn('"source": "configured_fallback"', html)
+
     def test_each_role_exposes_curated_non_us_providers(self):
         html = _render_index_response().body.decode("utf-8")
 
