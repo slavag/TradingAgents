@@ -705,10 +705,12 @@ Bedrock dependency and the absent DeepSeek live API key.
 
 ---
 
-## Option 3: Forecast Evaluation and Portfolio Roadmap
+## Option 3: Forecast Evaluation and Portfolio Roadmap — Complete
 
-This roadmap is implemented as independently reviewable projects whose
-interfaces build on Phase 1. Project A is complete; Projects B-E remain pending.
+This roadmap was completed as independently reviewable projects whose interfaces
+build on Phase 1. Projects A-E and the operational evaluation runtime are
+implemented and verified. Promotion still requires eligible matured forecasts;
+absence of sufficient history remains explicit coverage, not a synthetic score.
 
 ### Project A: Immutable Forecast Record
 
@@ -802,7 +804,14 @@ weights, expected net edge, risk contribution, constraint diagnostics, and a
 no-trade result when edge does not exceed costs and uncertainty. LLM prose cannot
 override hard constraints.
 
-### Future Project E: Role-Specific Model Catalog and UI
+### Project E: Role-Specific Model Catalog and UI
+
+**Status:** Completed on 2026-08-20 in separate role-capability, promotion
+registry, backend-default, and unified-UI commits. Quick, Deep, and
+Verifier/Reflection roles use independent catalogs; pinned leaderboard results
+can be imported append-only and become UI defaults. Capability controls reflect
+provider/model support, and evaluation coverage is visible without performance
+claims.
 
 **Planned files:**
 - Modify `tradingagents/llm_clients/model_catalog.py`

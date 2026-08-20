@@ -366,6 +366,45 @@ The displayed model confidence is an uncalibrated evidence-strength score, not a
 
 ## Reproducibility
 
+### Forecast evaluation and advisory portfolio optimization
+
+Every saved report tree now includes an immutable, content-addressed
+`forecast_record.json`. Once its trading-session horizon has matured, resolve
+and score saved forecasts with:
+
+```bash
+tradingagents evaluate-forecasts
+tradingagents evaluate-forecasts --results-root ~/.tradingagents/logs --transaction-cost-bps 7
+```
+
+Outcome and score artifacts are written append-only under each report tree's
+`evaluation/` directory. Missing horizons, unavailable prices, provider errors,
+and uncalibrated probabilities remain explicit; they are not converted to zero
+returns or failed predictions.
+
+The deterministic long-only optimizer accepts an explicit JSON document with
+portfolio state, forecasts, liquidity/exposure constraints, and a shrinkage risk
+model:
+
+```bash
+tradingagents optimize-portfolio --input portfolio-request.json
+```
+
+It produces advisory target weights, risk contributions, and hard-constraint
+diagnostics. It does not connect to a broker or execute orders.
+
+Pinned walk-forward role leaderboards can be imported without overwriting an
+existing promotion:
+
+```bash
+tradingagents import-model-promotion --input deep-leaderboard.json
+```
+
+The web UI exposes independent Quick, Deep, and Verifier/Reflection roles,
+capability-aware controls, promoted/default status, and forecast-evaluation
+coverage. A promoted default is applied only when an eligible pinned leaderboard
+exists; otherwise the configured fallback remains visible.
+
 TradingAgents is LLM-driven, so two runs of the same ticker and date can differ. This is expected for a research tool built on language models, not a defect. The variation comes from a few distinct sources, and it helps to separate them.
 
 Language model sampling is non-deterministic. Even at a fixed temperature, providers do not guarantee byte-identical output across calls, and reasoning models (the default GPT-5.x family, and any thinking-mode model) vary the most because their internal reasoning is itself sampled.

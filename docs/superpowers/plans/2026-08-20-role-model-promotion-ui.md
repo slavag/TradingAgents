@@ -24,46 +24,52 @@
 
 **Files:** `tradingagents/llm_clients/model_catalog.py`, `tests/test_web_model_catalog.py`.
 
-- [ ] Add failing tests for Quick/Deep/Verifier options and temperature/reasoning/thinking capability metadata.
-- [ ] Implement `get_role_model_options()` and `get_model_capabilities()` with custom-provider fallbacks.
-- [ ] Preserve legacy merged web catalog and known-model validation.
-- [ ] Run catalog tests and Ruff.
-- [ ] Commit as `feat: define role-specific model capabilities`.
+- [x] Add failing tests for Quick/Deep/Verifier options and temperature/reasoning/thinking capability metadata.
+- [x] Implement `get_role_model_options()` and `get_model_capabilities()` with custom-provider fallbacks.
+- [x] Preserve legacy merged web catalog and known-model validation.
+- [x] Run catalog tests and Ruff.
+- [x] Commit as `feat: define role-specific model capabilities`.
 
 ### Task 2: Immutable Promotion Registry
 
 **Files:** `tradingagents/evaluation/promotion_registry.py`, `tradingagents/evaluation/__init__.py`, `tests/test_model_promotion_registry.py`.
 
-- [ ] Write failing append-only write/read, conflict, corrupt, role, and fallback tests.
-- [ ] Implement `ModelPromotionRegistry.write_leaderboard`, `read_leaderboard`, and `selected_defaults`.
-- [ ] Run focused tests and Ruff.
-- [ ] Commit as `feat: persist promoted model defaults`.
+- [x] Write failing append-only write/read, conflict, corrupt, role, and fallback tests.
+- [x] Implement `ModelPromotionRegistry.write_leaderboard`, `read_leaderboard`, and `selected_defaults`.
+- [x] Run focused tests and Ruff.
+- [x] Commit as `feat: persist promoted model defaults`.
 
 ### Task 3: Backend Defaults and Promotion Entry Points
 
 **Files:** `tradingagents/web/app.py`, `tradingagents/web/service.py`, `cli/main.py`, `tests/test_web_model_catalog.py`, `tests/test_model_promotion_registry.py`.
 
-- [ ] Add failing tests for injected promoted defaults, fallback configured defaults, role-model API, and CLI leaderboard import.
-- [ ] Inject role options, capabilities, evaluation summary, and promoted defaults into the index response.
-- [ ] Add read-only status API plus append-only CLI promotion import.
-- [ ] Run backend/catalog/registry tests.
-- [ ] Commit as `feat: apply promoted role model defaults`.
+- [x] Add failing tests for injected promoted defaults, fallback configured defaults, role-model status, and CLI leaderboard import.
+- [x] Inject role options, capabilities, and promoted defaults into the index response.
+- [x] Add append-only CLI promotion import and backend status resolution.
+- [x] Run backend/catalog/registry tests.
+- [x] Commit as `feat: apply promoted role model defaults`.
 
 ### Task 4: Unified Evaluation and Model UI
 
 **Files:** `tradingagents/web/static/index.html`, `app.js`, `styles.css`, `tests/test_web_static_tape.py`, `tests/test_web_model_catalog.py`.
 
-- [ ] Add failing static-contract tests for Verifier/Reflection copy, promoted badges, capability-aware controls, evaluation counts, and Run Evaluation action.
-- [ ] Render role-specific options and promoted defaults without overriding user changes.
-- [ ] Add evaluation status panel calling `/api/evaluations/run` and present coverage/counts without return claims.
-- [ ] Add accessible status labels and responsive styling.
-- [ ] Run web/static tests and commit as `feat: show evaluated model promotions`.
+- [x] Add failing static-contract tests for Verifier/Reflection copy, promoted badges, capability-aware controls, evaluation counts, and Run Evaluation action.
+- [x] Render role-specific options and promoted defaults without overriding user changes.
+- [x] Add evaluation status panel calling `/api/evaluations/run` and present coverage/counts without return claims.
+- [x] Add accessible status labels and responsive styling.
+- [x] Run web/static tests and browser QA; commit as `feat: show evaluated model promotions`.
 
 ### Task 5: Final Roadmap Verification
 
 **Files:** all Option 3 plans and user documentation.
 
-- [ ] Run all forecasting, evaluation, optimizer, catalog, web, CLI, and full-suite tests.
-- [ ] Run Ruff and diff checks.
-- [ ] Mark Project E and the full approved roadmap complete with exact evidence.
-- [ ] Commit documentation separately and push every Project E commit.
+- [x] Run all forecasting, evaluation, optimizer, catalog, web, CLI, and full-suite tests.
+- [x] Run Ruff and diff checks.
+- [x] Mark Project E and the full approved roadmap complete with exact evidence.
+- [x] Commit documentation separately and push every Project E commit.
+
+Verification on 2026-08-20: `119 passed` in the focused full-roadmap suite and
+`873 passed, 2 skipped` in the complete suite. Ruff and `git diff --check`
+completed without errors. Desktop and 390×844 browser QA showed no console
+errors or horizontal overflow. The optional skips were the missing Bedrock
+dependency and absent DeepSeek live API key.
