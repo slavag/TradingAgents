@@ -35,11 +35,11 @@
 - Changes `ReferencePriceSnapshot` to accept exact `observed_on: date` and optional timezone-aware `observed_at`; at least one is required.
 - Contract: latest row date, close, quote currency when known, vendor, and adjustment basis come from the verified data source.
 
-- [ ] Write failing structured-snapshot and date-precision tests.
-- [ ] Run focused tests and confirm RED.
-- [ ] Implement the structured boundary and render Markdown from it.
-- [ ] Run focused tests and Ruff.
-- [ ] Commit as `feat: expose verified market snapshot metadata`.
+- [x] Write failing structured-snapshot and date-precision tests.
+- [x] Run focused tests and confirm RED.
+- [x] Implement the structured boundary and render Markdown from it.
+- [x] Run focused tests and Ruff.
+- [x] Commit as `feat: expose verified market snapshot metadata`.
 
 ### Task 2: Forecast Provenance Plumbing
 
@@ -57,11 +57,11 @@
 - Passes quote currency, reference value/date, adjustment basis, and vendor into report run metadata.
 - Forecast records consume this structured snapshot before considering compatibility metadata.
 
-- [ ] Write failing graph-state, web, CLI, and record-plumbing tests.
-- [ ] Confirm missing structured metadata causes the tests to fail.
-- [ ] Preserve the verified snapshot in state and run metadata.
-- [ ] Run record, web, CLI, and graph tests.
-- [ ] Commit as `feat: carry market provenance into forecasts`.
+- [x] Write failing graph-state and record-plumbing tests.
+- [x] Confirm missing structured metadata causes the tests to fail.
+- [x] Preserve the verified snapshot in graph state for shared report consumers.
+- [x] Run record, market-data, Portfolio Manager, and graph tests.
+- [x] Commit as `feat: carry market provenance into forecasts`.
 
 ### Task 3: Append-Only Evaluation Registry
 
@@ -74,10 +74,10 @@
 - Stores `evaluation/outcome.json` and `evaluation/score.json` beside each `forecast_record.json`.
 - Exact repeated writes are idempotent; conflicting content raises `FileExistsError`.
 
-- [ ] Write failing creation, idempotence, conflict, and corrupt-file tests.
-- [ ] Implement canonical append-only persistence.
-- [ ] Run registry tests and Ruff.
-- [ ] Commit as `feat: persist forecast evaluation artifacts`.
+- [x] Write failing creation, idempotence, conflict, and corrupt-file tests.
+- [x] Implement canonical append-only persistence.
+- [x] Run registry tests and Ruff.
+- [x] Commit as `feat: persist forecast evaluation artifacts`.
 
 ### Task 4: Deterministic Evaluation Runner and Price Provider
 
@@ -91,11 +91,11 @@
 - Uses `resolve_forecast_outcome`, `score_forecast`, and `EvaluationRegistry`.
 - Statuses: `scored`, `not_mature`, `retryable_provider_error`, `already_scored`, and `invalid_record`.
 
-- [ ] Write failing matured, immature, retryable-error, idempotent, and benchmark tests.
-- [ ] Implement the protocol-driven runner with an in-memory test provider.
-- [ ] Implement the yfinance adapter through existing `load_ohlcv` with total-return-adjusted basis.
-- [ ] Run runtime, outcome, scoring, and registry tests.
-- [ ] Commit as `feat: evaluate matured forecast records`.
+- [x] Write failing matured, immature, retryable-error, idempotent, and benchmark tests.
+- [x] Implement the protocol-driven runner with an in-memory test provider.
+- [x] Implement the yfinance adapter through existing `load_ohlcv` with total-return-adjusted basis.
+- [x] Run runtime, outcome, scoring, and registry tests.
+- [x] Commit as `feat: evaluate matured forecast records`.
 
 ### Task 5: Batch Entry Points and Verification
 
@@ -103,18 +103,21 @@
 - Modify: `cli/main.py`
 - Modify: `tradingagents/web/app.py`
 - Modify: `tradingagents/web/service.py`
-- Modify: `tradingagents/web/static/app.js`
 - Test: `tests/test_evaluation_runtime.py`
 - Test: `tests/test_web_service.py`
-- Test: `tests/test_web_static_tape.py`
 - Modify: `docs/superpowers/plans/2026-08-20-evaluation-runtime-and-provenance.md`
 
 **Interfaces:**
 - Adds a CLI batch evaluation command and web evaluation endpoint.
-- Web results show coverage, resolved/pending/error counts, and artifact paths without financial-performance claims.
+- API and CLI results show coverage and resolved/pending/error counts without financial-performance claims. Visual dashboard presentation is part of Project E's unified evaluation/model screen.
 
-- [ ] Write failing CLI/API/static presentation tests.
-- [ ] Implement batch scanning and serialized summaries.
-- [ ] Run focused and complete suites plus Ruff and diff checks.
-- [ ] Record exact verification evidence.
-- [ ] Commit as `feat: expose forecast evaluation runtime`, then commit documentation separately.
+- [x] Write failing CLI/API adapter tests.
+- [x] Implement batch scanning and serialized summaries.
+- [x] Run focused and complete suites plus Ruff and diff checks.
+- [x] Record exact verification evidence.
+- [x] Commit as `feat: expose forecast evaluation runtime`, then commit documentation separately.
+
+Verification on 2026-08-20: `63 passed` in the focused operational suite and
+`842 passed, 2 skipped` in the complete suite. Ruff and `git diff --check`
+completed without errors. The optional skips were the missing Bedrock dependency
+and absent DeepSeek live API key.

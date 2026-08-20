@@ -773,6 +773,14 @@ paired incumbent/challenger comparisons, minimum coverage, and explicit promotio
 thresholds. Model aliases are exploratory; promoted configurations use pinned
 model IDs and prompt/config hashes.
 
+### Operational Evaluation Runtime
+
+**Status:** Completed on 2026-08-20. Verified daily OHLCV provenance now flows
+into forecast records without fabricated intraday timestamps. Append-only
+outcome and score artifacts are resolved through a protocol-driven runtime with
+yfinance, CLI batch, and FastAPI entry points. Unmatured horizons and provider
+errors remain retryable instead of becoming zero outcomes.
+
 ### Future Project D: Constrained Portfolio Optimizer
 
 **Planned files:**
