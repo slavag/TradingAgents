@@ -45,32 +45,32 @@ zeros.
   benchmark return to the same resolved date; retain the evaluated path for
   drawdown scoring.
 
-- [ ] **Step 1: Write failing resolution tests**
+- [x] **Step 1: Write failing resolution tests**
 
 Cover one-session and three-session endpoints, weekend gaps, basis mismatch,
 missing reference/horizon, insufficient sessions, non-monotonic observations,
 and benchmark alignment to the instrument's resolved date.
 
-- [ ] **Step 2: Run resolution tests and confirm RED**
+- [x] **Step 2: Run resolution tests and confirm RED**
 
 Run: `python -m pytest tests/test_forecast_outcomes.py -q`
 
 Expected: collection fails because the evaluation package does not exist.
 
-- [ ] **Step 3: Implement frozen resolution models and resolver**
+- [x] **Step 3: Implement frozen resolution models and resolver**
 
 `ResolvedOutcome` stores record ID, stable status/reason, cutoff, resolved date,
 horizon sessions, reference/end prices, realized return, benchmark return,
 excess return, evaluated path, and adjustment basis. Unresolvable outcomes keep
 all dependent metrics `None`.
 
-- [ ] **Step 4: Run outcome tests and Ruff**
+- [x] **Step 4: Run outcome tests and Ruff**
 
 Run: `python -m pytest tests/test_forecast_outcomes.py -q`
 
 Run: `python -m ruff check tradingagents/evaluation tests/test_forecast_outcomes.py`
 
-- [ ] **Step 5: Commit outcome resolution**
+- [x] **Step 5: Commit outcome resolution**
 
 ```bash
 git add -- tradingagents/evaluation/__init__.py tradingagents/evaluation/outcomes.py tests/test_forecast_outcomes.py
@@ -94,30 +94,30 @@ git commit -m "feat: resolve forecast outcomes by trading sessions"
   return, target MAE/MAPE, target-range coverage, three-class Brier score, and
   path maximum drawdown only when their inputs exist.
 
-- [ ] **Step 1: Write failing scoring tests**
+- [x] **Step 1: Write failing scoring tests**
 
 Cover positive/negative/flat direction, deterministic costs, central-target
 error, interval coverage, Brier score, drawdown, unresolved outcomes, and
 missing-metric reasons.
 
-- [ ] **Step 2: Run scoring tests and confirm RED**
+- [x] **Step 2: Run scoring tests and confirm RED**
 
 Run: `python -m pytest tests/test_forecast_scoring.py -q`
 
 Expected: import failure because the scorer does not exist.
 
-- [ ] **Step 3: Implement scoring without fallback values**
+- [x] **Step 3: Implement scoring without fallback values**
 
 Every unavailable metric remains `None` and appears in `missing_metrics`.
 Transaction costs equal `transaction_cost_bps / 10_000`; net return equals gross
 return minus that cost. Brier score is the mean squared error across down, flat,
 and up probabilities.
 
-- [ ] **Step 4: Run outcome and scoring tests**
+- [x] **Step 4: Run outcome and scoring tests**
 
 Run: `python -m pytest tests/test_forecast_outcomes.py tests/test_forecast_scoring.py -q`
 
-- [ ] **Step 5: Commit scoring separately**
+- [x] **Step 5: Commit scoring separately**
 
 ```bash
 git add -- tradingagents/evaluation/scoring.py tests/test_forecast_scoring.py
@@ -140,28 +140,28 @@ git commit -m "feat: score resolved forecast outcomes"
   frequency, and weighted expected calibration error. Empty eligible input
   returns `None` metrics with explicit exclusion counts.
 
-- [ ] **Step 1: Write failing aggregation tests**
+- [x] **Step 1: Write failing aggregation tests**
 
 Use hand-calculated two-record examples for Brier mean and calibration error,
 plus empty and partially ineligible inputs.
 
-- [ ] **Step 2: Run calibration tests and confirm RED**
+- [x] **Step 2: Run calibration tests and confirm RED**
 
 Run: `python -m pytest tests/test_forecast_scoring.py -k calibration -q`
 
-- [ ] **Step 3: Implement deterministic aggregation**
+- [x] **Step 3: Implement deterministic aggregation**
 
 Assign each forecast's predicted class confidence to one of `bins` equal-width
 intervals, compare confidence with whether the predicted class occurred, and
 weight absolute gaps by bin sample count.
 
-- [ ] **Step 4: Run all Project B tests and Ruff**
+- [x] **Step 4: Run all Project B tests and Ruff**
 
 Run: `python -m pytest tests/test_forecast_outcomes.py tests/test_forecast_scoring.py -q`
 
 Run: `python -m ruff check tradingagents/evaluation tests/test_forecast_outcomes.py tests/test_forecast_scoring.py`
 
-- [ ] **Step 5: Commit calibration separately**
+- [x] **Step 5: Commit calibration separately**
 
 ```bash
 git add -- tradingagents/evaluation/__init__.py tradingagents/evaluation/calibration.py tests/test_forecast_scoring.py
@@ -176,22 +176,27 @@ git commit -m "feat: summarize forecast calibration"
 - Modify: `docs/superpowers/plans/2026-08-14-decision-integrity-foundation.md`
 - Modify: `docs/superpowers/plans/2026-08-20-horizon-aligned-outcome-scoring.md`
 
-- [ ] **Step 1: Run focused evaluation verification**
+- [x] **Step 1: Run focused evaluation verification**
 
 Run: `python -m pytest tests/test_forecast_record.py tests/test_forecast_outcomes.py tests/test_forecast_scoring.py -q`
 
-- [ ] **Step 2: Run the complete suite and Ruff**
+- [x] **Step 2: Run the complete suite and Ruff**
 
 Run: `python -m pytest -q`
 
 Run: `python -m ruff check tradingagents/forecasting tradingagents/evaluation tests/test_forecast_record.py tests/test_forecast_outcomes.py tests/test_forecast_scoring.py`
 
-- [ ] **Step 3: Mark only Project B complete**
+- [x] **Step 3: Mark only Project B complete**
 
 Record exact verification results. Keep walk-forward evaluation, portfolio
 optimization, and role-specific model promotion pending.
 
-- [ ] **Step 4: Commit documentation separately**
+- [x] **Step 4: Commit documentation separately**
+
+Verification on 2026-08-20: `38 passed` in the focused forecast/evaluation
+suite and `808 passed, 2 skipped` in the complete suite. Ruff and
+`git diff --check` completed without errors. The optional skips were the missing
+Bedrock dependency and absent DeepSeek live API key.
 
 ```bash
 git add -- docs/superpowers/plans/2026-08-14-decision-integrity-foundation.md docs/superpowers/plans/2026-08-20-horizon-aligned-outcome-scoring.md

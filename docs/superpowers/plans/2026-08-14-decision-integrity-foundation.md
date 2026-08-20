@@ -735,7 +735,12 @@ and content-addressable.
 compatibility, timezone boundaries, corporate-action basis, immutable snapshots,
 and migration of legacy `PortfolioDecision` reports.
 
-### Future Project B: Horizon-Aligned Outcome Scoring
+### Project B: Horizon-Aligned Outcome Scoring
+
+**Status:** Completed on 2026-08-20 in separate outcome-resolution,
+per-record scoring, and calibration commits. Scores resolve at the stored
+trading-session horizon and adjustment basis; unavailable labels and metrics
+remain explicit rather than becoming zero values.
 
 **Planned files:**
 - Create `tradingagents/evaluation/outcomes.py`
