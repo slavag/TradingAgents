@@ -46,20 +46,20 @@ existing shared report-tree writer.
   tuples; UTC offsets are mandatory; probabilities sum to one; distributions
   satisfy `p10 <= p50 <= p90`; target bounds are both absent or both present.
 
-- [ ] **Step 1: Write failing schema tests**
+- [x] **Step 1: Write failing schema tests**
 
 Add tests that prove mutation is rejected, naive datetimes fail, probability
 triples must sum to one, quantiles must be ordered, target bounds are
 all-or-nothing, and non-actionable records cannot carry a rating.
 
-- [ ] **Step 2: Run the schema tests and confirm RED**
+- [x] **Step 2: Run the schema tests and confirm RED**
 
 Run: `python -m pytest tests/test_forecast_record.py -k "schema or immutable" -q`
 
 Expected: collection fails because `tradingagents.forecasting.schemas` does not
 exist.
 
-- [ ] **Step 3: Implement the frozen schema**
+- [x] **Step 3: Implement the frozen schema**
 
 Use decimal-valued financial fields and explicit validation. The payload must
 contain:
@@ -101,7 +101,7 @@ class ForecastRecordPayload(BaseModel):
 `ForecastRecord` extends the payload with `record_id: str` matching
 `sha256:<64 lowercase hex characters>`.
 
-- [ ] **Step 4: Run schema tests and Ruff**
+- [x] **Step 4: Run schema tests and Ruff**
 
 Run: `python -m pytest tests/test_forecast_record.py -k "schema or immutable" -q`
 
@@ -109,7 +109,7 @@ Run: `python -m ruff check tradingagents/forecasting tests/test_forecast_record.
 
 Expected: all selected tests and static checks pass.
 
-- [ ] **Step 5: Commit the schema boundary**
+- [x] **Step 5: Commit the schema boundary**
 
 ```bash
 git add -- tradingagents/forecasting/__init__.py tradingagents/forecasting/schemas.py tests/test_forecast_record.py
@@ -134,32 +134,32 @@ git commit -m "feat: define immutable forecast records"
   different payloads produce different IDs; exact single-value day/week/month/
   year horizons normalize to 1/5/21/252 trading sessions; ranges remain unknown.
 
-- [ ] **Step 1: Write failing hash and horizon tests**
+- [x] **Step 1: Write failing hash and horizon tests**
 
 Use two independently constructed equal payloads and literal expected canonical
 JSON ordering. Assert equal hashes, a changed evidence ID changes the hash, and
 `3 months` becomes 63 sessions while `3-6 months` remains `None`.
 
-- [ ] **Step 2: Run factory tests and confirm RED**
+- [x] **Step 2: Run factory tests and confirm RED**
 
 Run: `python -m pytest tests/test_forecast_record.py -k "hash or canonical or horizon" -q`
 
 Expected: import failure because the factory functions do not exist.
 
-- [ ] **Step 3: Implement canonical creation**
+- [x] **Step 3: Implement canonical creation**
 
 Serialize `payload.model_dump(mode="json")` through `json.dumps` with
 `sort_keys=True`, `separators=(",", ":")`, and `ensure_ascii=False`; hash the
 UTF-8 bytes. Construct the record only from the validated payload dump plus the
 computed ID.
 
-- [ ] **Step 4: Run factory and schema tests**
+- [x] **Step 4: Run factory and schema tests**
 
 Run: `python -m pytest tests/test_forecast_record.py -q`
 
 Expected: all record tests pass.
 
-- [ ] **Step 5: Commit the factory boundary**
+- [x] **Step 5: Commit the factory boundary**
 
 ```bash
 git add -- tradingagents/forecasting/record_factory.py tests/test_forecast_record.py
@@ -185,7 +185,7 @@ git commit -m "feat: create content-addressed forecast records"
 - Compatibility: legacy states without `portfolio_decision` parse only stable
   final-decision labels; absent fields are listed in `missing_fields`.
 
-- [ ] **Step 1: Write failing typed-snapshot and mapping tests**
+- [x] **Step 1: Write failing typed-snapshot and mapping tests**
 
 Assert Portfolio Manager results include the serialized decision. Build one
 actionable state with an accepted target and verified reference price; assert
@@ -193,19 +193,19 @@ the record contains its status, rating, central target, computed central-case
 return, invalidation condition, evidence fingerprint, and model identity. Add a
 legacy Hold state and assert it produces a record with explicit missingness.
 
-- [ ] **Step 2: Run mapping tests and confirm RED**
+- [x] **Step 2: Run mapping tests and confirm RED**
 
 Run: `python -m pytest tests/test_forecast_record.py tests/test_portfolio_manager_integrity.py -k "snapshot or from_state or legacy" -q`
 
 Expected: assertions fail because graph state has no typed snapshot and the
 state factory does not exist.
 
-- [ ] **Step 3: Preserve the typed decision in graph state**
+- [x] **Step 3: Preserve the typed decision in graph state**
 
 Add `portfolio_decision` to `AgentState`. Include the JSON-mode dump in every
 Portfolio Manager result, including unavailable upstream failures.
 
-- [ ] **Step 4: Implement conservative state mapping**
+- [x] **Step 4: Implement conservative state mapping**
 
 Use the typed snapshot when present. For legacy state, parse only stable labels
 such as `Decision Status`, `Rating`, `Price Target`, and `Target Validation`.
@@ -214,13 +214,13 @@ configuration provenance. Compute expected return only from an accepted central
 target and a verified positive reference price. Never synthesize probabilities,
 quantiles, target ranges, benchmark returns, quote currency, or source timestamps.
 
-- [ ] **Step 5: Run mapping and neighboring decision tests**
+- [x] **Step 5: Run mapping and neighboring decision tests**
 
 Run: `python -m pytest tests/test_forecast_record.py tests/test_portfolio_manager_integrity.py tests/test_decision_integrity.py -q`
 
 Expected: all selected tests pass.
 
-- [ ] **Step 6: Commit decision integration**
+- [x] **Step 6: Commit decision integration**
 
 ```bash
 git add -- tradingagents/agents/utils/agent_states.py tradingagents/agents/managers/portfolio_manager.py tradingagents/forecasting/record_factory.py tests/test_forecast_record.py tests/test_portfolio_manager_integrity.py
@@ -244,30 +244,30 @@ git commit -m "feat: map portfolio decisions to forecast records"
   idempotent; if it has a different ID, writing fails rather than overwriting an
   immutable record.
 
-- [ ] **Step 1: Write failing persistence tests**
+- [x] **Step 1: Write failing persistence tests**
 
 Assert report writing creates a valid record file, repeated identical writing is
 safe, and a changed completed state cannot overwrite the existing record path.
 
-- [ ] **Step 2: Run persistence tests and confirm RED**
+- [x] **Step 2: Run persistence tests and confirm RED**
 
 Run: `python -m pytest tests/test_reporting.py tests/test_forecast_record.py -k "forecast_record or append_only" -q`
 
 Expected: the record file is absent and overwrite protection does not exist.
 
-- [ ] **Step 3: Persist with immutable overwrite protection**
+- [x] **Step 3: Persist with immutable overwrite protection**
 
 Build the record before writing. Compare an existing file's `record_id`; accept
 an exact match and raise `FileExistsError` for a mismatch. Serialize with sorted
 keys, two-space indentation, and one trailing newline.
 
-- [ ] **Step 4: Run reporting and record tests**
+- [x] **Step 4: Run reporting and record tests**
 
 Run: `python -m pytest tests/test_reporting.py tests/test_forecast_record.py -q`
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Commit persistence separately**
+- [x] **Step 5: Commit persistence separately**
 
 ```bash
 git add -- tradingagents/reporting.py tests/test_reporting.py tests/test_forecast_record.py
@@ -282,17 +282,17 @@ git commit -m "feat: persist immutable forecast records"
 - Modify: `docs/superpowers/plans/2026-08-14-decision-integrity-foundation.md`
 - Modify: `docs/superpowers/plans/2026-08-20-immutable-forecast-record.md`
 
-- [ ] **Step 1: Run focused Project A verification**
+- [x] **Step 1: Run focused Project A verification**
 
 Run: `python -m pytest tests/test_forecast_record.py tests/test_reporting.py tests/test_portfolio_manager_integrity.py tests/test_decision_integrity.py -q`
 
-- [ ] **Step 2: Run the complete suite and Ruff**
+- [x] **Step 2: Run the complete suite and Ruff**
 
 Run: `python -m pytest -q`
 
 Run: `python -m ruff check tradingagents/forecasting tradingagents/reporting.py tradingagents/agents/utils/agent_states.py tradingagents/agents/managers/portfolio_manager.py tests/test_forecast_record.py tests/test_reporting.py tests/test_portfolio_manager_integrity.py`
 
-- [ ] **Step 3: Inspect repository scope**
+- [x] **Step 3: Inspect repository scope**
 
 Run: `git diff --check`
 
@@ -301,13 +301,18 @@ Run: `git status --short`
 Expected: no whitespace errors and only Project A documentation remains after
 the production commits.
 
-- [ ] **Step 4: Mark Project A complete without changing Projects B-E**
+- [x] **Step 4: Mark Project A complete without changing Projects B-E**
 
 Check the completed Project A and plan steps. Keep outcome scoring,
 walk-forward evaluation, portfolio optimization, and role-based model promotion
 explicitly pending.
 
-- [ ] **Step 5: Commit verification documentation**
+- [x] **Step 5: Commit verification documentation**
+
+Verification on 2026-08-20: `73 passed` in the focused Project A suite and
+`792 passed, 2 skipped` in the complete suite. Ruff and `git diff --check`
+completed without errors. The optional skips were the missing Bedrock dependency
+and absent DeepSeek live API key.
 
 ```bash
 git add -- docs/superpowers/plans/2026-08-14-decision-integrity-foundation.md docs/superpowers/plans/2026-08-20-immutable-forecast-record.md

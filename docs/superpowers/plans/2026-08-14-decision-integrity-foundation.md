@@ -705,13 +705,17 @@ Bedrock dependency and the absent DeepSeek live API key.
 
 ---
 
-## Future Option 3: Immutable `ForecastRecord` Roadmap
+## Option 3: Forecast Evaluation and Portfolio Roadmap
 
-This roadmap is intentionally excluded from the current branch's production
-changes. It preserves the approved long-term option as independently reviewable
-projects whose interfaces build on Phase 1.
+This roadmap is implemented as independently reviewable projects whose
+interfaces build on Phase 1. Project A is complete; Projects B-E remain pending.
 
-### Future Project A: Immutable Forecast Record
+### Project A: Immutable Forecast Record
+
+**Status:** Completed on 2026-08-20 in separate schema, factory, integration,
+and persistence commits. Every shared report tree now includes an append-only,
+content-addressed `forecast_record.json`; unavailable precision is represented
+through explicit missingness rather than inferred values.
 
 **Planned files:**
 - Create `tradingagents/forecasting/schemas.py`
