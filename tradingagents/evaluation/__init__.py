@@ -17,6 +17,7 @@ from tradingagents.evaluation.outcomes import (
     ResolvedOutcome,
     resolve_forecast_outcome,
 )
+from tradingagents.evaluation.promotion_registry import ModelPromotionRegistry
 from tradingagents.evaluation.registry import EvaluationArtifact, EvaluationRegistry
 from tradingagents.evaluation.runtime import (
     EvaluationBatchSummary,
@@ -44,6 +45,7 @@ __all__ = [
     "EvaluationRegistry",
     "EvaluationRunResult",
     "EvaluationRunStatus",
+    "ModelPromotionRegistry",
     "OutcomeResolutionStatus",
     "LeaderboardEntry",
     "PriceObservation",
