@@ -296,6 +296,27 @@
             </div>
             <button id="run-evaluation" class="ghost-button" type="button">Run Evaluation</button>
           </div>
+          <div class="evaluation-controls">
+            <label class="field">
+              <span>Scope</span>
+              <select id="evaluation-scope">
+                <option value="all">All saved forecasts</option>
+                <option value="selected">Selected tickers</option>
+                <option value="current_batch">Current completed batch</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>From date</span>
+              <input id="evaluation-date-from" type="date" />
+            </label>
+            <label class="field">
+              <span>To date</span>
+              <input id="evaluation-date-to" type="date" />
+            </label>
+            <label class="toggle-line evaluation-pending-toggle">
+              <input id="evaluation-pending-only" type="checkbox" /> Pending forecasts only
+            </label>
+          </div>
           <div class="evaluation-grid" aria-live="polite">
             <article><span>Total</span><strong id="evaluation-total">0</strong></article>
             <article><span>Scored</span><strong id="evaluation-scored">0</strong></article>

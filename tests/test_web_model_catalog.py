@@ -147,6 +147,21 @@ class WebModelCatalogTests(unittest.TestCase):
         self.assertIn("MODEL_CAPABILITIES", app_js)
         self.assertIn('fetch("/api/evaluations/run"', app_js)
 
+    def test_evaluation_ui_exposes_all_scope_controls(self):
+        root = Path(__file__).resolve().parents[1] / "tradingagents" / "web" / "static"
+        html = (root / "index.html").read_text(encoding="utf-8")
+        app_js = (root / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="evaluation-scope"', html)
+        for value in ("all", "selected", "current_batch"):
+            self.assertIn(f'<option value="{value}"', html)
+        self.assertIn('id="evaluation-date-from"', html)
+        self.assertIn('id="evaluation-date-to"', html)
+        self.assertIn('id="evaluation-pending-only"', html)
+        self.assertIn("buildEvaluationRequest", app_js)
+        self.assertIn("state.currentResults", app_js)
+        self.assertIn("report_paths", app_js)
+
 
 if __name__ == "__main__":
     unittest.main()

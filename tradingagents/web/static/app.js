@@ -8,6 +8,7 @@ const state = {
   marketItems: [],
   speakingItems: [],
   activeTickerItem: null,
+  currentResults: [],
 };
 
 const MARKET_TAPE_REFRESH_MS = 10 * 60 * 1000;
@@ -45,6 +46,10 @@ const elements = {
   evaluationPending: document.getElementById("evaluation-pending"),
   evaluationErrors: document.getElementById("evaluation-errors"),
   evaluationStatus: document.getElementById("evaluation-status"),
+  evaluationScope: document.getElementById("evaluation-scope"),
+  evaluationDateFrom: document.getElementById("evaluation-date-from"),
+  evaluationDateTo: document.getElementById("evaluation-date-to"),
+  evaluationPendingOnly: document.getElementById("evaluation-pending-only"),
   saveReports: document.getElementById("save-reports"),
   exportPathWrap: document.getElementById("export-path-wrap"),
   exportPath: document.getElementById("export-path"),
@@ -182,7 +187,12 @@ async function runForecastEvaluation() {
   elements.runEvaluation.disabled = true;
   elements.evaluationStatus.textContent = "Evaluating saved forecasts…";
   try {
-    const response = await fetch("/api/evaluations/run", { method: "POST" });
+    const request = buildEvaluationRequest();
+    const response = await fetch("/api/evaluations/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
     const summary = await response.json();
     if (!response.ok) throw new Error(summary.detail || "Evaluation failed.");
     elements.evaluationTotal.textContent = summary.total;
@@ -195,6 +205,35 @@ async function runForecastEvaluation() {
   } finally {
     elements.runEvaluation.disabled = false;
   }
+}
+
+function buildEvaluationRequest() {
+  const scope = elements.evaluationScope.value;
+  const request = {
+    tickers: [],
+    date_from: elements.evaluationDateFrom.value || null,
+    date_to: elements.evaluationDateTo.value || null,
+    pending_only: elements.evaluationPendingOnly.checked,
+    report_paths: [],
+  };
+  if (scope === "selected") {
+    request.tickers = elements.tickers.value
+      .split(/[\s,;]+/)
+      .map((value) => value.trim().toUpperCase())
+      .filter(Boolean);
+    if (!request.tickers.length) {
+      throw new Error("Enter at least one ticker in Launch Analysis for selected-ticker evaluation.");
+    }
+  }
+  if (scope === "current_batch") {
+    request.report_paths = state.currentResults
+      .map((result) => result.results_dir)
+      .filter(Boolean);
+    if (!request.report_paths.length) {
+      throw new Error("No completed batch report paths are available in this session.");
+    }
+  }
+  return request;
 }
 
 function updateExportToggle() {
@@ -807,6 +846,9 @@ function updateJobStatus(job) {
   elements.currentTicker.textContent = job.current_ticker || "—";
   elements.completedCount.textContent = `${job.completed || 0} / ${job.total || 0}`;
   elements.progressMessage.textContent = job.progress_message || "Waiting for a run.";
+  if (Array.isArray(job.results) && job.results.length) {
+    state.currentResults = job.results;
+  }
   renderProgressRows(job);
   renderEvents(job);
   elements.currentReport.textContent = job.current_report || "Waiting for report output.";
