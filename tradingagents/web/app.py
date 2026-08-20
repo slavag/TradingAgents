@@ -190,6 +190,14 @@ class AnalysisRequest(BaseModel):
     export_path: str | None = None
 
 
+class EvaluationRunRequest(BaseModel):
+    tickers: list[str] = Field(default_factory=list)
+    date_from: str | None = None
+    date_to: str | None = None
+    pending_only: bool = False
+    report_paths: list[str] = Field(default_factory=list)
+
+
 def _render_index_response(promotion_root: Path | None = None) -> HTMLResponse:
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
@@ -316,9 +324,16 @@ def job_status(job_id: str):
 
 
 @app.post("/api/evaluations/run")
-def run_saved_forecast_evaluations():
+def run_saved_forecast_evaluations(request: EvaluationRunRequest | None = None):
     try:
-        return evaluate_saved_forecasts()
+        request = request or EvaluationRunRequest()
+        return evaluate_saved_forecasts(
+            tickers=tuple(request.tickers),
+            date_from=request.date_from,
+            date_to=request.date_to,
+            pending_only=request.pending_only,
+            report_roots=tuple(Path(path) for path in request.report_paths),
+        )
     except Exception as exc:
         logger.exception("Forecast evaluation failed")
         raise HTTPException(status_code=500, detail="Forecast evaluation failed.") from exc

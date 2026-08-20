@@ -36,6 +36,7 @@ from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.evaluation.leaderboard import ConfigurationIdentity
 from tradingagents.evaluation.promotion_registry import ModelPromotionRegistry
 from tradingagents.evaluation.runtime import (
+    EvaluationScope,
     OutcomePriceProvider,
     YFinanceOutcomePriceProvider,
     evaluate_report_trees,
@@ -1378,12 +1379,24 @@ def evaluate_saved_forecasts(
     results_root: Path = RESULTS_ROOT,
     provider: OutcomePriceProvider | None = None,
     transaction_cost_bps: float = 0,
+    tickers: tuple[str, ...] = (),
+    date_from: str | None = None,
+    date_to: str | None = None,
+    pending_only: bool = False,
+    report_roots: tuple[Path, ...] = (),
 ) -> dict[str, Any]:
     """Evaluate all matured saved forecasts through the shared runtime."""
     summary = evaluate_report_trees(
         results_root,
         provider or YFinanceOutcomePriceProvider(),
         transaction_cost_bps=transaction_cost_bps,
+        scope=EvaluationScope(
+            tickers=tickers,
+            date_from=date_from,
+            date_to=date_to,
+            pending_only=pending_only,
+            report_roots=report_roots,
+        ),
     )
     return summary.model_dump(mode="json")
 

@@ -12,13 +12,18 @@ from tests.test_forecast_scoring import resolved
 from tradingagents.evaluation.registry import EvaluationRegistry
 from tradingagents.evaluation.runtime import (
     EvaluationRunStatus,
+    EvaluationScope,
     PriceHistoryBundle,
     evaluate_forecast,
     evaluate_report_tree,
     evaluate_report_trees,
 )
 from tradingagents.evaluation.scoring import score_forecast
-from tradingagents.forecasting.schemas import AdjustmentBasis
+from tradingagents.forecasting.record_factory import create_forecast_record
+from tradingagents.forecasting.schemas import (
+    AdjustmentBasis,
+    ForecastRecordPayload,
+)
 from tradingagents.web.service import evaluate_saved_forecasts
 
 
@@ -204,6 +209,85 @@ def test_batch_evaluation_scans_report_trees_and_summarizes_statuses(tmp_path):
     )
 
 
+def scoped_record(symbol: str, cutoff: str, *, horizon_sessions=2):
+    original = record(horizon_sessions=horizon_sessions)
+    payload = original.model_dump(exclude={"record_id"})
+    payload.update({"canonical_symbol": symbol, "data_cutoff": cutoff})
+    return create_forecast_record(ForecastRecordPayload.model_validate(payload))
+
+
+def write_forecast(root, ticker, run_name, forecast):
+    report = root / ticker / run_name
+    report.mkdir(parents=True)
+    report.joinpath("forecast_record.json").write_text(forecast.model_dump_json(indent=2))
+    return report
+
+
+def test_batch_scope_filters_tickers_and_inclusive_dates(tmp_path):
+    write_forecast(tmp_path, "AAA", "one", scoped_record("AAA", "2026-08-10"))
+    write_forecast(tmp_path, "AAA", "two", scoped_record("AAA", "2026-08-20"))
+    write_forecast(tmp_path, "BBB", "one", scoped_record("BBB", "2026-08-15"))
+
+    summary = evaluate_report_trees(
+        tmp_path,
+        StaticProvider(price_bundle()),
+        scope=EvaluationScope(
+            tickers=("aaa",),
+            date_from="2026-08-15",
+            date_to="2026-08-20",
+        ),
+    )
+
+    assert summary.total == 1
+    assert summary.results[0].record_id == scoped_record("AAA", "2026-08-20").record_id
+
+
+def test_batch_scope_pending_only_skips_existing_score(tmp_path):
+    scored_dir = write_forecast(tmp_path, "AAA", "scored", scoped_record("AAA", "2026-08-10"))
+    pending_forecast = scoped_record("BBB", "2026-08-10", horizon_sessions=10)
+    write_forecast(
+        tmp_path,
+        "BBB",
+        "pending",
+        pending_forecast,
+    )
+    evaluate_report_tree(scored_dir, StaticProvider(price_bundle()))
+
+    summary = evaluate_report_trees(
+        tmp_path,
+        StaticProvider(price_bundle()),
+        scope=EvaluationScope(pending_only=True),
+    )
+
+    assert summary.total == 1
+    assert summary.not_mature == 1
+    assert summary.results[0].record_id == pending_forecast.record_id
+
+
+def test_batch_scope_current_report_roots_select_exact_batch(tmp_path):
+    chosen = write_forecast(tmp_path, "AAA", "chosen", scoped_record("AAA", "2026-08-10"))
+    write_forecast(tmp_path, "BBB", "other", scoped_record("BBB", "2026-08-10"))
+
+    summary = evaluate_report_trees(
+        tmp_path,
+        StaticProvider(price_bundle()),
+        scope=EvaluationScope(report_roots=(chosen,)),
+    )
+
+    assert summary.total == 1
+    assert summary.results[0].record_id == scoped_record("AAA", "2026-08-10").record_id
+
+
+def test_batch_scope_rejects_report_root_outside_results_root(tmp_path):
+    outside = tmp_path.parent / "outside-report"
+    with pytest.raises(ValueError, match="must stay within results root"):
+        evaluate_report_trees(
+            tmp_path,
+            StaticProvider(price_bundle()),
+            scope=EvaluationScope(report_roots=(outside,)),
+        )
+
+
 def test_web_service_evaluation_summary_serializes_empty_root(tmp_path):
     summary = evaluate_saved_forecasts(
         results_root=tmp_path,
@@ -219,6 +303,34 @@ def test_web_service_evaluation_summary_serializes_empty_root(tmp_path):
         "invalid": 0,
         "results": [],
     }
+
+
+def test_web_service_applies_ticker_date_and_pending_scope(tmp_path):
+    scored = write_forecast(tmp_path, "AAA", "one", scoped_record("AAA", "2026-08-10"))
+    write_forecast(tmp_path, "AAA", "two", scoped_record("AAA", "2026-08-20", horizon_sessions=10))
+    write_forecast(tmp_path, "BBB", "one", scoped_record("BBB", "2026-08-20"))
+    evaluate_report_tree(scored, StaticProvider(price_bundle()))
+
+    summary = evaluate_saved_forecasts(
+        results_root=tmp_path,
+        provider=StaticProvider(price_bundle()),
+        tickers=("AAA",),
+        date_from="2026-08-15",
+        date_to="2026-08-20",
+        pending_only=True,
+    )
+
+    assert summary["total"] == 1
+    assert summary["not_mature"] == 1
+
+
+def test_web_service_current_batch_paths_are_confined_to_results_root(tmp_path):
+    with pytest.raises(ValueError, match="must stay within results root"):
+        evaluate_saved_forecasts(
+            results_root=tmp_path,
+            provider=StaticProvider(price_bundle()),
+            report_roots=(tmp_path.parent / "outside",),
+        )
 
 
 def test_cli_evaluate_forecasts_reports_empty_root(tmp_path):

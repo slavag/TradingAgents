@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Protocol
 
 import pandas as pd
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from tradingagents.dataflows.stockstats_utils import load_ohlcv
 from tradingagents.evaluation.outcomes import (
@@ -63,6 +63,29 @@ class EvaluationBatchSummary(BaseModel):
     already_scored: int
     invalid: int
     results: tuple[EvaluationRunResult, ...]
+
+
+class EvaluationScope(BaseModel):
+    """Optional intersection filters for saved forecast evaluation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    tickers: tuple[str, ...] = ()
+    date_from: date | None = None
+    date_to: date | None = None
+    pending_only: bool = False
+    report_roots: tuple[Path, ...] = ()
+
+    @field_validator("tickers")
+    @classmethod
+    def _canonical_tickers(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(sorted({value.strip().upper() for value in values if value.strip()}))
+
+    @model_validator(mode="after")
+    def _date_order(self):
+        if self.date_from and self.date_to and self.date_from > self.date_to:
+            raise ValueError("evaluation date_from cannot exceed date_to")
+        return self
 
 
 def evaluate_forecast(
@@ -176,15 +199,54 @@ def evaluate_report_trees(
     provider: OutcomePriceProvider,
     *,
     transaction_cost_bps: Decimal | int = 0,
+    scope: EvaluationScope | None = None,
 ) -> EvaluationBatchSummary:
     """Evaluate every saved forecast record below a root in stable path order."""
+    root = Path(root).resolve()
+    scope = scope or EvaluationScope()
+    if scope.report_roots:
+        candidates = set()
+        for requested_root in scope.report_roots:
+            requested = Path(requested_root).resolve()
+            try:
+                requested.relative_to(root)
+            except ValueError as exc:
+                raise ValueError("evaluation report roots must stay within results root") from exc
+            direct = requested / "forecast_record.json"
+            if direct.exists():
+                candidates.add(direct)
+            else:
+                candidates.update(requested.rglob("forecast_record.json"))
+        paths = tuple(sorted(candidates))
+    else:
+        paths = tuple(sorted(root.rglob("forecast_record.json")))
+
+    selected_paths = []
+    for path in paths:
+        try:
+            forecast = ForecastRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        except Exception:
+            if scope.tickers or scope.date_from or scope.date_to or scope.pending_only:
+                continue
+            selected_paths.append(path)
+            continue
+        if scope.tickers and forecast.canonical_symbol not in scope.tickers:
+            continue
+        if scope.date_from and forecast.data_cutoff < scope.date_from:
+            continue
+        if scope.date_to and forecast.data_cutoff > scope.date_to:
+            continue
+        if scope.pending_only and (path.parent / "evaluation" / "score.json").exists():
+            continue
+        selected_paths.append(path)
+
     results = tuple(
         evaluate_report_tree(
             path.parent,
             provider,
             transaction_cost_bps=transaction_cost_bps,
         )
-        for path in sorted(Path(root).rglob("forecast_record.json"))
+        for path in selected_paths
     )
     return EvaluationBatchSummary(
         total=len(results),
