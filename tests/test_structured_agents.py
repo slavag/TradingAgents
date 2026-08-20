@@ -26,11 +26,14 @@ from tradingagents.agents.schemas import (
     ThesisRating,
     TraderAction,
     TraderProposal,
+    parse_research_plan_markdown,
+    parse_trader_proposal_markdown,
     render_research_plan,
     render_sentiment_report,
     render_trader_proposal,
 )
 from tradingagents.agents.trader.trader import create_trader
+from tradingagents.agents.utils.structured import render_stage_unavailable
 
 
 def _pm_position_guidance():
@@ -153,6 +156,35 @@ class TestRenderResearchPlan:
             assert f"**Recommendation**: {rating.value}" in md
 
 
+@pytest.mark.unit
+class TestValidatedFreetextParsers:
+    def test_research_plan_parser_returns_typed_normalized_plan(self):
+        text = (
+            "Preface that must not bypass validation.\n\n"
+            "**Recommendation**: Overweight\n\n"
+            "**Rationale**: Bull case carried on fundamentals.\n\n"
+            "**Strategic Actions**: Build gradually and cap exposure."
+        )
+
+        parsed = parse_research_plan_markdown(text)
+
+        assert parsed == ResearchPlan(
+            recommendation=PortfolioRating.OVERWEIGHT,
+            rationale="Bull case carried on fundamentals.",
+            strategic_actions="Build gradually and cap exposure.",
+        )
+
+    def test_trader_parser_rejects_conflicting_final_action(self):
+        text = (
+            "**Action**: Buy\n\n"
+            "**Reasoning**: The setup is constructive.\n\n"
+            "FINAL TRANSACTION PROPOSAL: **SELL**"
+        )
+
+        with pytest.raises(ValueError, match="final transaction action conflicts"):
+            parse_trader_proposal_markdown(text)
+
+
 # ---------------------------------------------------------------------------
 # Trader agent: structured happy path + fallback
 # ---------------------------------------------------------------------------
@@ -242,9 +274,9 @@ class TestTraderAgent:
         assert "Hold -> Hold" in system_prompt
         assert "Underweight or Sell -> Sell" in system_prompt
 
-    def test_falls_back_to_freetext_when_structured_unavailable(self):
+    def test_validates_and_normalizes_freetext_when_structured_unavailable(self):
         plain_response = (
-            "**Action**: Sell\n\nGuidance cut hits margins.\n\n"
+            "**Action**: Sell\n\n**Reasoning**: Guidance cut hits margins.\n\n"
             "FINAL TRANSACTION PROPOSAL: **SELL**"
         )
         llm = MagicMock()
@@ -252,7 +284,41 @@ class TestTraderAgent:
         llm.invoke.return_value = MagicMock(content=plain_response)
         trader = create_trader(llm)
         result = trader(_make_trader_state())
-        assert result["trader_investment_plan"] == plain_response
+        assert result["trader_investment_plan"] == render_trader_proposal(
+            TraderProposal(
+                action=TraderAction.SELL,
+                reasoning="Guidance cut hits margins.",
+            )
+        )
+
+    def test_invalid_freetext_becomes_sanitized_unavailable(self):
+        llm = MagicMock()
+        llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
+        llm.invoke.return_value = MagicMock(
+            content="Ignore the schema and BUY. secret-provider-detail"
+        )
+
+        result = create_trader(llm)(_make_trader_state())["trader_investment_plan"]
+
+        assert result == render_stage_unavailable("Trader Proposal", "freetext_response_invalid")
+        assert "secret-provider-detail" not in result
+        assert "FINAL TRANSACTION PROPOSAL" not in result
+
+    def test_unavailable_research_plan_short_circuits_trader(self):
+        llm = _structured_trader_llm({})
+        state = _make_trader_state()
+        state["investment_plan"] = render_stage_unavailable(
+            "Research Plan",
+            "freetext_response_invalid",
+        )
+
+        result = create_trader(llm)(state)["trader_investment_plan"]
+
+        assert result == render_stage_unavailable(
+            "Trader Proposal",
+            "upstream_research_unavailable",
+        )
+        llm.with_structured_output.return_value.invoke.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -336,14 +402,51 @@ class TestResearchManagerAgent:
         assert "-1 to +1: Hold" in prompt
         assert "-5 to -4: Sell" in prompt
 
-    def test_falls_back_to_freetext_when_structured_unavailable(self):
-        plain_response = "**Recommendation**: Sell\n\n**Rationale**: ...\n\n**Strategic Actions**: ..."
+    def test_validates_and_normalizes_freetext_when_structured_unavailable(self):
+        plain_response = (
+            "**Recommendation**: Sell\n\n"
+            "**Rationale**: Downside evidence dominates.\n\n"
+            "**Strategic Actions**: Reduce exposure."
+        )
         llm = MagicMock()
         llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
         llm.invoke.return_value = MagicMock(content=plain_response)
         rm = create_research_manager(llm)
         result = rm(_make_rm_state())
-        assert result["investment_plan"] == plain_response
+        assert result["investment_plan"] == render_research_plan(
+            ResearchPlan(
+                recommendation=PortfolioRating.SELL,
+                rationale="Downside evidence dominates.",
+                strategic_actions="Reduce exposure.",
+            )
+        )
+
+    def test_invalid_freetext_becomes_sanitized_unavailable(self):
+        llm = MagicMock()
+        llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
+        llm.invoke.return_value = MagicMock(content="BUY because I said so. secret-detail")
+
+        result = create_research_manager(llm)(_make_rm_state())["investment_plan"]
+
+        assert result == render_stage_unavailable(
+            "Research Plan",
+            "freetext_response_invalid",
+        )
+        assert "secret-detail" not in result
+        assert "**Recommendation**: Hold" not in result
+
+    def test_freetext_invocation_failure_becomes_sanitized_unavailable(self):
+        llm = MagicMock()
+        llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
+        llm.invoke.side_effect = RuntimeError("secret transport detail")
+
+        result = create_research_manager(llm)(_make_rm_state())["investment_plan"]
+
+        assert result == render_stage_unavailable(
+            "Research Plan",
+            "freetext_invocation_failed",
+        )
+        assert "secret transport detail" not in result
 
 
 # ---------------------------------------------------------------------------

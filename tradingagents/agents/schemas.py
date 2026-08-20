@@ -18,6 +18,7 @@ so that:
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Literal
 
@@ -241,6 +242,44 @@ def render_research_plan(plan: ResearchPlan) -> str:
     ])
 
 
+def _markdown_field(text: str, label: str, next_labels: tuple[str, ...]) -> str:
+    boundaries = "|".join(re.escape(item) for item in next_labels)
+    next_section = (
+        rf"^\s*\*\*(?:{boundaries})\*\*\s*:"
+        if boundaries
+        else r"\Z"
+    )
+    match = re.search(
+        rf"(?ims)^\s*\*\*{re.escape(label)}\*\*\s*:\s*(.*?)"
+        rf"(?={next_section}|^\s*FINAL TRANSACTION PROPOSAL:|\Z)",
+        text,
+    )
+    if not match or not match.group(1).strip():
+        raise ValueError(f"missing markdown field: {label}")
+    return match.group(1).strip()
+
+
+def _enum_value(enum_type, value: str):
+    normalized = value.strip().casefold()
+    for member in enum_type:
+        if member.value.casefold() == normalized:
+            return member
+    raise ValueError(f"invalid {enum_type.__name__}: {value}")
+
+
+def parse_research_plan_markdown(text: str) -> ResearchPlan:
+    """Validate compatibility prose and return a typed Research Plan."""
+    labels = ("Recommendation", "Rationale", "Strategic Actions")
+    return ResearchPlan(
+        recommendation=_enum_value(
+            PortfolioRating,
+            _markdown_field(text, "Recommendation", labels[1:]),
+        ),
+        rationale=_markdown_field(text, "Rationale", labels[2:]),
+        strategic_actions=_markdown_field(text, "Strategic Actions", ()),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Trader
 # ---------------------------------------------------------------------------
@@ -306,6 +345,35 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
         f"FINAL TRANSACTION PROPOSAL: **{proposal.action.value.upper()}**",
     ])
     return "\n".join(parts)
+
+
+def parse_trader_proposal_markdown(text: str) -> TraderProposal:
+    """Validate compatibility prose and return a typed Trader Proposal."""
+    labels = ("Action", "Reasoning", "Entry Price", "Stop Loss", "Position Sizing")
+    action = _enum_value(
+        TraderAction,
+        _markdown_field(text, "Action", labels[1:]),
+    )
+    final_match = re.search(
+        r"(?im)^\s*FINAL TRANSACTION PROPOSAL:\s*\*\*(BUY|HOLD|SELL)\*\*\s*$",
+        text,
+    )
+    if final_match and final_match.group(1).casefold() != action.value.casefold():
+        raise ValueError("final transaction action conflicts with Action")
+
+    def optional_field(label: str, following: tuple[str, ...]) -> str | None:
+        try:
+            return _markdown_field(text, label, following)
+        except ValueError:
+            return None
+
+    return TraderProposal(
+        action=action,
+        reasoning=_markdown_field(text, "Reasoning", labels[2:]),
+        entry_price=optional_field("Entry Price", labels[3:]),
+        stop_loss=optional_field("Stop Loss", labels[4:]),
+        position_sizing=optional_field("Position Sizing", ()),
+    )
 
 
 # ---------------------------------------------------------------------------

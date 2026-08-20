@@ -6,7 +6,11 @@ import functools
 
 from langchain_core.messages import AIMessage
 
-from tradingagents.agents.schemas import TraderProposal, render_trader_proposal
+from tradingagents.agents.schemas import (
+    TraderProposal,
+    parse_trader_proposal_markdown,
+    render_trader_proposal,
+)
 from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
@@ -14,7 +18,9 @@ from tradingagents.agents.utils.agent_utils import (
 from tradingagents.agents.utils.structured import (
     NO_EXTERNAL_TOOLS,
     bind_structured,
-    invoke_structured_or_freetext,
+    invoke_structured_or_validated_freetext,
+    render_stage_unavailable,
+    stage_is_unavailable,
 )
 
 
@@ -25,6 +31,17 @@ def create_trader(llm):
         company_name = state["company_of_interest"]
         instrument_context = get_instrument_context_from_state(state)
         investment_plan = state["investment_plan"]
+
+        if stage_is_unavailable(investment_plan, "Research Plan"):
+            trader_plan = render_stage_unavailable(
+                "Trader Proposal",
+                "upstream_research_unavailable",
+            )
+            return {
+                "messages": [AIMessage(content=trader_plan)],
+                "trader_investment_plan": trader_plan,
+                "sender": name,
+            }
 
         messages = [
             {
@@ -52,11 +69,13 @@ def create_trader(llm):
             },
         ]
 
-        trader_plan = invoke_structured_or_freetext(
+        trader_plan = invoke_structured_or_validated_freetext(
             structured_llm,
             llm,
             messages,
             render_trader_proposal,
+            parse_trader_proposal_markdown,
+            "Trader Proposal",
             "Trader",
         )
 

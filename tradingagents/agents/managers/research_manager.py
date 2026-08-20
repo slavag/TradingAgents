@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from tradingagents.agents.schemas import ResearchPlan, render_research_plan
+from tradingagents.agents.schemas import (
+    ResearchPlan,
+    parse_research_plan_markdown,
+    render_research_plan,
+)
 from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
@@ -10,7 +14,7 @@ from tradingagents.agents.utils.agent_utils import (
 from tradingagents.agents.utils.structured import (
     NO_EXTERNAL_TOOLS,
     bind_structured,
-    invoke_structured_or_freetext,
+    invoke_structured_or_validated_freetext,
 )
 
 
@@ -62,11 +66,13 @@ Do not let writing style, debate rhetoric, or an assumed existing position chang
 
 {NO_EXTERNAL_TOOLS}""" + get_language_instruction()
 
-        investment_plan = invoke_structured_or_freetext(
+        investment_plan = invoke_structured_or_validated_freetext(
             structured_llm,
             llm,
             prompt,
             render_research_plan,
+            parse_research_plan_markdown,
+            "Research Plan",
             "Research Manager",
         )
 

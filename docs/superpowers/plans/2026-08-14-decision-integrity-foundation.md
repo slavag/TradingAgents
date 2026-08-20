@@ -668,6 +668,43 @@ If README does not require a change, stage and commit only the plan checklist up
 
 ---
 
+### Completed Follow-up: Validated Intermediate Decision Fallbacks
+
+**Goal:** Preserve compatibility with providers that cannot produce structured
+Research Manager or Trader output without allowing unchecked prose to become a
+portfolio recommendation.
+
+**Files:**
+- Modify: `tradingagents/agents/schemas.py`
+- Modify: `tradingagents/agents/utils/structured.py`
+- Modify: `tradingagents/agents/managers/research_manager.py`
+- Modify: `tradingagents/agents/trader/trader.py`
+- Modify: `tradingagents/agents/managers/portfolio_manager.py`
+- Test: `tests/test_structured_agents.py`
+- Test: `tests/test_portfolio_manager_integrity.py`
+
+**Contract:** Research Manager and Trader try native structured output first.
+When that path is unsupported or fails, one free-text retry must parse into the
+same Pydantic schema and be re-rendered into canonical markdown. Missing,
+malformed, or contradictory text becomes a sanitized stage-specific
+`Unavailable` result. An unavailable Research Plan short-circuits Trader, and
+an unavailable Trader Proposal short-circuits the final Portfolio Manager so no
+intermediate failure can be presented as Hold.
+
+- [x] **Step 1: Add failing parser and agent fallback tests**
+- [x] **Step 2: Implement deterministic Research Plan and Trader Proposal parsers**
+- [x] **Step 3: Normalize valid compatibility responses through typed renderers**
+- [x] **Step 4: Sanitize invalid or failed compatibility responses**
+- [x] **Step 5: Propagate unavailable stages through Trader and Portfolio Manager**
+- [x] **Step 6: Run focused structured-agent and memory verification**
+- [x] **Step 7: Run Ruff, diff validation, and the complete project suite**
+
+Verification on 2026-08-20: `766 passed, 2 skipped`; Ruff and
+`git diff --check` completed without errors. The optional skips were the missing
+Bedrock dependency and the absent DeepSeek live API key.
+
+---
+
 ## Future Option 3: Immutable `ForecastRecord` Roadmap
 
 This roadmap is intentionally excluded from the current branch's production

@@ -109,6 +109,59 @@ def invoke_structured_or_freetext(
     return response.content
 
 
+def render_stage_unavailable(stage: str, code: str) -> str:
+    """Render a sanitized non-actionable intermediate-stage result."""
+    return "\n\n".join([
+        f"**{stage} Status**: Unavailable",
+        f"**Failure Reason**: {code}",
+    ])
+
+
+def stage_is_unavailable(text: str, stage: str) -> bool:
+    """Return whether an intermediate stage explicitly failed closed."""
+    if not isinstance(text, str):
+        return False
+    marker = f"**{stage} Status**: Unavailable"
+    return any(line.strip() == marker for line in text.splitlines())
+
+
+def invoke_structured_or_validated_freetext(
+    structured_llm: Any | None,
+    plain_llm: Any,
+    prompt: Any,
+    render: Callable[[T], str],
+    parse_freetext: Callable[[str], T],
+    stage: str,
+    agent_name: str,
+) -> str:
+    """Use structured output first, then validate and normalize one text retry."""
+    if structured_llm is not None:
+        try:
+            result = structured_llm.invoke(prompt)
+            if result is None:
+                raise ValueError("structured output returned no parsed result")
+            return render(result)
+        except Exception as exc:
+            logger.warning(
+                "%s: structured-output invocation failed (%s); retrying once as validated text",
+                agent_name,
+                exc,
+            )
+
+    try:
+        response = plain_llm.invoke(prompt)
+    except Exception as exc:
+        logger.warning("%s: free-text invocation failed: %s", agent_name, exc)
+        return render_stage_unavailable(stage, "freetext_invocation_failed")
+
+    try:
+        parsed = parse_freetext(response.content)
+        return render(parsed)
+    except Exception as exc:
+        logger.warning("%s: free-text response failed validation: %s", agent_name, exc)
+        return render_stage_unavailable(stage, "freetext_response_invalid")
+
+
 def invoke_structured_required(
     structured_llm: Any | None,
     prompt: Any,

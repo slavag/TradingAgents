@@ -14,6 +14,7 @@ from tradingagents.agents.schemas import (
     PortfolioRating,
     ThesisRating,
 )
+from tradingagents.agents.utils.structured import render_stage_unavailable
 
 
 def make_pm_state(market_report: str = "Verified close: 100. Resistance: 120."):
@@ -120,6 +121,22 @@ def test_structured_failure_returns_sanitized_unavailable(llm, expected_code):
     assert "secret provider detail" not in result
     assert "**Rating**" not in result
     llm.invoke.assert_not_called()
+
+
+def test_unavailable_trader_proposal_failcloses_final_decision_without_model_call():
+    llm = configured_llm(result=actionable_draft())
+    state = make_pm_state()
+    state["trader_investment_plan"] = render_stage_unavailable(
+        "Trader Proposal",
+        "freetext_response_invalid",
+    )
+
+    result = create_portfolio_manager(llm)(state)["final_trade_decision"]
+
+    assert "**Decision Status**: Unavailable" in result
+    assert "upstream_trader_unavailable" in result
+    assert "**Rating**" not in result
+    llm.with_structured_output.return_value.invoke.assert_not_called()
 
 
 def test_primary_target_without_verbatim_quote_is_removed_but_rating_survives():

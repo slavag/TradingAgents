@@ -29,7 +29,31 @@ from tradingagents.agents.utils.structured import (
     StructuredOutputFailure,
     bind_structured,
     invoke_structured_required,
+    stage_is_unavailable,
 )
+
+
+def _manager_result(risk_debate_state: dict, decision: PortfolioDecision) -> dict:
+    final_trade_decision = render_pm_decision(decision)
+    return {
+        "risk_debate_state": {
+            "judge_decision": final_trade_decision,
+            "history": risk_debate_state["history"],
+            "aggressive_history": risk_debate_state["aggressive_history"],
+            "conservative_history": risk_debate_state["conservative_history"],
+            "neutral_history": risk_debate_state["neutral_history"],
+            "latest_speaker": "Judge",
+            "current_aggressive_response": risk_debate_state[
+                "current_aggressive_response"
+            ],
+            "current_conservative_response": risk_debate_state[
+                "current_conservative_response"
+            ],
+            "current_neutral_response": risk_debate_state["current_neutral_response"],
+            "count": risk_debate_state["count"],
+        },
+        "final_trade_decision": final_trade_decision,
+    }
 
 
 def create_portfolio_manager(llm):
@@ -47,6 +71,12 @@ def create_portfolio_manager(llm):
         risk_debate_state = state["risk_debate_state"]
         research_plan = state["investment_plan"]
         trader_plan = state["trader_investment_plan"]
+
+        if stage_is_unavailable(trader_plan, "Trader Proposal"):
+            return _manager_result(
+                risk_debate_state,
+                PortfolioDecision.unavailable("upstream_trader_unavailable"),
+            )
 
         past_context = state.get("past_context", "")
         lessons_line = (
@@ -119,24 +149,6 @@ Be decisive and ground every conclusion in specific evidence from the analysts.
             decision = PortfolioDecision.unavailable(exc.code)
         except (ValidationError, TypeError, ValueError):
             decision = PortfolioDecision.unavailable("structured_response_invalid")
-        final_trade_decision = render_pm_decision(decision)
-
-        new_risk_debate_state = {
-            "judge_decision": final_trade_decision,
-            "history": risk_debate_state["history"],
-            "aggressive_history": risk_debate_state["aggressive_history"],
-            "conservative_history": risk_debate_state["conservative_history"],
-            "neutral_history": risk_debate_state["neutral_history"],
-            "latest_speaker": "Judge",
-            "current_aggressive_response": risk_debate_state["current_aggressive_response"],
-            "current_conservative_response": risk_debate_state["current_conservative_response"],
-            "current_neutral_response": risk_debate_state["current_neutral_response"],
-            "count": risk_debate_state["count"],
-        }
-
-        return {
-            "risk_debate_state": new_risk_debate_state,
-            "final_trade_decision": final_trade_decision,
-        }
+        return _manager_result(risk_debate_state, decision)
 
     return portfolio_manager_node
