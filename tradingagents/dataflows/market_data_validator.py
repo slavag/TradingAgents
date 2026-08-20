@@ -11,8 +11,11 @@ claim. Deterministic, no LLM involved.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import date, datetime
+from decimal import Decimal
 
 import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field
 from stockstats import wrap
 
 from tradingagents.dataflows.stockstats_utils import load_ohlcv
@@ -23,6 +26,22 @@ DEFAULT_SNAPSHOT_INDICATORS: tuple[str, ...] = (
     "rsi", "boll", "boll_ub", "boll_lb",
     "macd", "macds", "macdh", "atr",
 )
+
+
+class VerifiedMarketSnapshot(BaseModel):
+    """Structured provenance for the verified daily OHLCV snapshot."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    symbol: str
+    requested_date: date
+    observed_on: date
+    observed_at: datetime | None = None
+    close: Decimal = Field(gt=0)
+    quote_currency: str | None = None
+    adjustment_basis: str
+    vendor: str
+    markdown: str
 
 
 def _verified_rows(symbol: str, curr_date: str) -> pd.DataFrame:
@@ -59,13 +78,13 @@ def _fmt(value) -> str:
     return str(value)
 
 
-def build_verified_market_snapshot(
+def verified_market_snapshot(
     symbol: str,
     curr_date: str,
     look_back_days: int = 30,
     indicators: Iterable[str] | None = None,
-) -> str:
-    """Render a ground-truth snapshot: latest OHLCV row, indicators, recent closes."""
+) -> VerifiedMarketSnapshot:
+    """Build structured daily provenance plus its ground-truth Markdown."""
     # `df` keeps the original capitalized OHLCV columns (Open/High/Low/Close/
     # Volume); stockstats `wrap()` lowercases columns and adds indicator
     # columns, so read raw prices from `df` and indicators from `stock_df`.
@@ -120,4 +139,29 @@ def build_verified_market_snapshot(
         "percentage moves unless directly supported by tool output with concrete "
         "dates and prices.",
     ]
-    return "\n".join(lines)
+    return VerifiedMarketSnapshot(
+        symbol=symbol.strip().upper(),
+        requested_date=date.fromisoformat(curr_date),
+        observed_on=pd.Timestamp(latest["Date"]).date(),
+        observed_at=None,
+        close=Decimal(str(latest["Close"])),
+        quote_currency=None,
+        adjustment_basis="total_return_adjusted",
+        vendor="yfinance",
+        markdown="\n".join(lines),
+    )
+
+
+def build_verified_market_snapshot(
+    symbol: str,
+    curr_date: str,
+    look_back_days: int = 30,
+    indicators: Iterable[str] | None = None,
+) -> str:
+    """Render the verified snapshot's backwards-compatible Markdown form."""
+    return verified_market_snapshot(
+        symbol,
+        curr_date,
+        look_back_days=look_back_days,
+        indicators=indicators,
+    ).markdown

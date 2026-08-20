@@ -23,6 +23,20 @@ def _sample_ohlcv() -> pd.DataFrame:
 
 @pytest.mark.unit
 class TestVerifiedSnapshot:
+    def test_structured_snapshot_preserves_daily_observation_precision(self, monkeypatch):
+        monkeypatch.setattr(validator, "load_ohlcv", lambda s, d: _sample_ohlcv())
+
+        snapshot = validator.verified_market_snapshot("cof", "2026-05-16")
+
+        assert snapshot.symbol == "COF"
+        assert snapshot.requested_date.isoformat() == "2026-05-16"
+        assert snapshot.observed_on.isoformat() == "2026-05-15"
+        assert snapshot.observed_at is None
+        assert snapshot.close == 132
+        assert snapshot.vendor == "yfinance"
+        assert snapshot.adjustment_basis == "total_return_adjusted"
+        assert "Latest trading row used: 2026-05-15" in snapshot.markdown
+
     def test_excludes_future_rows(self, monkeypatch):
         data = pd.concat([
             _sample_ohlcv(),

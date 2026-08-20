@@ -37,14 +37,15 @@ class DataQuality(str, Enum):
 
 class ReferencePriceSnapshot(_FrozenModel):
     value: Decimal = Field(gt=0)
-    observed_at: datetime
+    observed_on: date | None = None
+    observed_at: datetime | None = None
     adjustment_basis: AdjustmentBasis
     vendor: str = Field(min_length=1)
 
     @field_validator("observed_at")
     @classmethod
-    def _observed_at_is_aware(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
+    def _observed_at_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
             raise ValueError("observed_at must be timezone-aware")
         return value
 
@@ -54,6 +55,12 @@ class ReferencePriceSnapshot(_FrozenModel):
         if not value.is_finite():
             raise ValueError("reference price must be finite")
         return value
+
+    @model_validator(mode="after")
+    def _has_observation_boundary(self):
+        if self.observed_on is None and self.observed_at is None:
+            raise ValueError("reference price requires an observation date or timestamp")
+        return self
 
 
 class DirectionProbabilities(_FrozenModel):
@@ -173,11 +180,17 @@ class ForecastRecordPayload(_FrozenModel):
     def _validate_record_contract(self):
         if self.data_cutoff > self.as_of.date():
             raise ValueError("data cutoff cannot postdate as_of")
-        if (
-            self.reference_price is not None
-            and self.reference_price.observed_at > self.as_of
-        ):
-            raise ValueError("reference price cannot postdate as_of")
+        if self.reference_price is not None:
+            if (
+                self.reference_price.observed_at is not None
+                and self.reference_price.observed_at > self.as_of
+            ):
+                raise ValueError("reference price cannot postdate as_of")
+            if (
+                self.reference_price.observed_on is not None
+                and self.reference_price.observed_on > self.as_of.date()
+            ):
+                raise ValueError("reference price cannot postdate as_of")
 
         has_low = self.target_low is not None
         has_high = self.target_high is not None

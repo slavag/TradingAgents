@@ -118,6 +118,32 @@ def test_schema_rejects_reference_price_observed_after_as_of():
         forecast_payload(reference_price=reference)
 
 
+def test_schema_accepts_daily_reference_date_without_fabricated_timestamp():
+    reference = ReferencePriceSnapshot(
+        value=Decimal("236.22"),
+        observed_on=date(2026, 8, 20),
+        observed_at=None,
+        adjustment_basis=AdjustmentBasis.TOTAL_RETURN_ADJUSTED,
+        vendor="yfinance",
+    )
+
+    payload = forecast_payload(reference_price=reference)
+
+    assert payload.reference_price.observed_on == date(2026, 8, 20)
+    assert payload.reference_price.observed_at is None
+
+
+def test_schema_rejects_reference_without_date_or_timestamp():
+    with pytest.raises(ValidationError, match="observation date or timestamp"):
+        ReferencePriceSnapshot(
+            value=Decimal("236.22"),
+            observed_on=None,
+            observed_at=None,
+            adjustment_basis=AdjustmentBasis.TOTAL_RETURN_ADJUSTED,
+            vendor="yfinance",
+        )
+
+
 def test_schema_rejects_probabilities_that_do_not_sum_to_one():
     with pytest.raises(ValidationError, match="sum to one"):
         DirectionProbabilities(
