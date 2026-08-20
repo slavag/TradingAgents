@@ -12,6 +12,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tradingagents.forecasting.record_factory import forecast_record_from_state
+
 _EVIDENCE_KEYS = (
     "market_report",
     "sentiment_report",
@@ -92,6 +94,38 @@ def compare_run_manifests(current: dict, previous: dict | None) -> str:
     return "reproduced"
 
 
+def _generated_at_from_manifest(manifest: dict | None) -> datetime | None:
+    if not manifest:
+        return None
+    raw = manifest.get("generated_at")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _write_immutable_forecast_record(path: Path, record) -> None:
+    payload = record.model_dump(mode="json")
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise FileExistsError(
+                f"refusing to overwrite invalid immutable forecast record: {path}"
+            ) from exc
+        if existing == payload:
+            return
+        raise FileExistsError(
+            f"refusing to overwrite immutable forecast record with different content: {path}"
+        )
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def write_report_tree(
     final_state: dict,
     ticker: str,
@@ -103,8 +137,22 @@ def write_report_tree(
     save_path = Path(save_path)
     save_path.mkdir(parents=True, exist_ok=True)
     sections = []
+    manifest = (
+        build_run_manifest(final_state, ticker, run_metadata)
+        if run_metadata is not None
+        else None
+    )
+    forecast_record = forecast_record_from_state(
+        final_state,
+        ticker,
+        manifest or {},
+        generated_at=_generated_at_from_manifest(manifest),
+    )
+    _write_immutable_forecast_record(
+        save_path / "forecast_record.json",
+        forecast_record,
+    )
     if run_metadata is not None:
-        manifest = build_run_manifest(final_state, ticker, run_metadata)
         (save_path / "run_manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",

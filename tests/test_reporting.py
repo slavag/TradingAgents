@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tradingagents.forecasting.schemas import ForecastRecord
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.reporting import (
     build_run_manifest,
@@ -46,6 +47,7 @@ def test_write_report_tree_records_a_stable_auditable_run_manifest(tmp_path):
         "snapshot_mode": "live_current_day",
         "models": {"quick": "gpt-5.4-mini", "deep": "gpt-5.5"},
         "temperature": 0.0,
+        "generated_at": "2026-08-20T18:30:00+00:00",
     }
 
     write_report_tree(_state(), "AAPL", tmp_path / "one", run_metadata=metadata)
@@ -61,6 +63,70 @@ def test_write_report_tree_records_a_stable_auditable_run_manifest(tmp_path):
     assert first["decision_fingerprint"].startswith("sha256:")
     assert first["evidence_fingerprint"] == second["evidence_fingerprint"]
     assert first["decision_fingerprint"] == second["decision_fingerprint"]
+
+
+@pytest.mark.unit
+def test_write_report_tree_persists_valid_forecast_record(tmp_path):
+    state = _state() | {
+        "asset_type": "stock",
+        "trade_date": "2026-08-20",
+        "final_trade_decision": "**Rating**: Hold",
+    }
+    metadata = {
+        "generated_at": "2026-08-20T18:30:00+00:00",
+        "models": {},
+        "temperature": 0.0,
+    }
+
+    write_report_tree(state, "AAPL", tmp_path, run_metadata=metadata)
+
+    payload = json.loads((tmp_path / "forecast_record.json").read_text())
+    record = ForecastRecord.model_validate(payload)
+    assert record.canonical_symbol == "AAPL"
+    assert record.record_id.startswith("sha256:")
+
+
+@pytest.mark.unit
+def test_forecast_record_persistence_is_idempotent_for_same_record(tmp_path):
+    state = _state() | {
+        "asset_type": "stock",
+        "trade_date": "2026-08-20",
+        "final_trade_decision": "**Rating**: Hold",
+    }
+    metadata = {
+        "generated_at": "2026-08-20T18:30:00+00:00",
+        "models": {},
+        "temperature": 0.0,
+    }
+
+    write_report_tree(state, "AAPL", tmp_path, run_metadata=metadata)
+    first = (tmp_path / "forecast_record.json").read_text()
+    write_report_tree(state, "AAPL", tmp_path, run_metadata=metadata)
+
+    assert (tmp_path / "forecast_record.json").read_text() == first
+
+
+@pytest.mark.unit
+def test_forecast_record_persistence_rejects_overwrite_with_different_record(tmp_path):
+    state = _state() | {
+        "asset_type": "stock",
+        "trade_date": "2026-08-20",
+        "final_trade_decision": "**Rating**: Hold",
+    }
+    metadata = {
+        "generated_at": "2026-08-20T18:30:00+00:00",
+        "models": {},
+        "temperature": 0.0,
+    }
+    write_report_tree(state, "AAPL", tmp_path, run_metadata=metadata)
+
+    with pytest.raises(FileExistsError, match="immutable forecast record"):
+        write_report_tree(
+            state | {"final_trade_decision": "**Rating**: Sell"},
+            "AAPL",
+            tmp_path,
+            run_metadata=metadata,
+        )
 
 
 @pytest.mark.unit
