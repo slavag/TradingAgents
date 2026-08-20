@@ -44,29 +44,29 @@ identities use provider/model/prompt/config hashes.
   rejects duplicate record/config pairs and returns only complete chronological
   windows.
 
-- [ ] **Step 1: Write failing fold tests**
+- [x] **Step 1: Write failing fold tests**
 
 Cover exact boundaries, incomplete trailing windows, overlapping-window
 rejection, duplicate samples, deterministic ordering, and the invariant that no
 record ID appears in more than one window of a fold.
 
-- [ ] **Step 2: Run fold tests and confirm RED**
+- [x] **Step 2: Run fold tests and confirm RED**
 
 Run: `python -m pytest tests/test_walk_forward_evaluation.py -k fold -q`
 
-- [ ] **Step 3: Implement frozen samples and folds**
+- [x] **Step 3: Implement frozen samples and folds**
 
 Use date comparisons rather than row offsets. Store window start/end dates and
 sorted tuples of sample identifiers. Validate `train_days`, `promotion_days`,
 `evaluation_days`, and `step_days` as positive integers.
 
-- [ ] **Step 4: Run fold tests and Ruff**
+- [x] **Step 4: Run fold tests and Ruff**
 
 Run: `python -m pytest tests/test_walk_forward_evaluation.py -k fold -q`
 
 Run: `python -m ruff check tradingagents/evaluation/walk_forward.py tests/test_walk_forward_evaluation.py`
 
-- [ ] **Step 5: Commit folds separately**
+- [x] **Step 5: Commit folds separately**
 
 ```bash
 git add -- tradingagents/evaluation/walk_forward.py tests/test_walk_forward_evaluation.py
@@ -89,27 +89,27 @@ git commit -m "feat: build point-in-time evaluation folds"
   passes. Supported gates are direction accuracy, mean excess return, mean
   Brier score, and maximum allowed drawdown regression.
 
-- [ ] **Step 1: Write failing paired-comparison tests**
+- [x] **Step 1: Write failing paired-comparison tests**
 
 Cover a passing challenger, insufficient shared samples, insufficient coverage,
 improved accuracy with unacceptable Brier regression, missing metrics, and
 order-independent results.
 
-- [ ] **Step 2: Run comparison tests and confirm RED**
+- [x] **Step 2: Run comparison tests and confirm RED**
 
 Run: `python -m pytest tests/test_walk_forward_evaluation.py -k "paired or promotion" -q`
 
-- [ ] **Step 3: Implement explicit gates and rejection reasons**
+- [x] **Step 3: Implement explicit gates and rejection reasons**
 
 Store paired counts, coverage, incumbent/challenger aggregates, metric deltas,
 `promoted: bool`, and sorted stable rejection reasons. A missing required metric
 rejects promotion rather than becoming zero.
 
-- [ ] **Step 4: Run all walk-forward tests**
+- [x] **Step 4: Run all walk-forward tests**
 
 Run: `python -m pytest tests/test_walk_forward_evaluation.py -q`
 
-- [ ] **Step 5: Commit promotion gates separately**
+- [x] **Step 5: Commit promotion gates separately**
 
 ```bash
 git add -- tradingagents/evaluation/walk_forward.py tests/test_walk_forward_evaluation.py
@@ -127,33 +127,34 @@ git commit -m "feat: gate model promotion on paired results"
 
 **Interfaces:**
 - Produces: `ConfigurationIdentity`, `LeaderboardEntry`, `RoleLeaderboard`, and
-  `build_role_leaderboard(role, comparisons, incumbent_configuration_id)`.
+  `build_role_leaderboard(role, comparisons, configurations,
+  incumbent_configuration_id)`.
 - Contract: rank only pinned configurations that passed coverage; retain the
   incumbent unless a challenger has a passing promotion decision; break exact
   ties lexicographically by configuration ID.
 
-- [ ] **Step 1: Write failing leaderboard tests**
+- [x] **Step 1: Write failing leaderboard tests**
 
 Cover retained incumbent, promoted challenger, failed challenger exclusion,
 multiple passing challengers, stable ties, and separate role isolation.
 
-- [ ] **Step 2: Run leaderboard tests and confirm RED**
+- [x] **Step 2: Run leaderboard tests and confirm RED**
 
 Run: `python -m pytest tests/test_walk_forward_evaluation.py -k leaderboard -q`
 
-- [ ] **Step 3: Implement immutable leaderboard output**
+- [x] **Step 3: Implement immutable leaderboard output**
 
 Entries expose rank, configuration identity, paired coverage, metric deltas,
 promotion status, and rejection reasons. The selected configuration is the
 incumbent or the first passing ranked challenger.
 
-- [ ] **Step 4: Run Project C tests and Ruff**
+- [x] **Step 4: Run Project C tests and Ruff**
 
 Run: `python -m pytest tests/test_walk_forward_evaluation.py -q`
 
 Run: `python -m ruff check tradingagents/evaluation tests/test_walk_forward_evaluation.py`
 
-- [ ] **Step 5: Commit leaderboard separately**
+- [x] **Step 5: Commit leaderboard separately**
 
 ```bash
 git add -- tradingagents/evaluation/__init__.py tradingagents/evaluation/leaderboard.py tests/test_walk_forward_evaluation.py
@@ -168,22 +169,27 @@ git commit -m "feat: rank role-specific model configurations"
 - Modify: `docs/superpowers/plans/2026-08-14-decision-integrity-foundation.md`
 - Modify: `docs/superpowers/plans/2026-08-20-walk-forward-model-evaluation.md`
 
-- [ ] **Step 1: Run focused Project C verification**
+- [x] **Step 1: Run focused Project C verification**
 
 Run: `python -m pytest tests/test_forecast_outcomes.py tests/test_forecast_scoring.py tests/test_walk_forward_evaluation.py -q`
 
-- [ ] **Step 2: Run the complete suite and Ruff**
+- [x] **Step 2: Run the complete suite and Ruff**
 
 Run: `python -m pytest -q`
 
 Run: `python -m ruff check tradingagents/evaluation tests/test_forecast_outcomes.py tests/test_forecast_scoring.py tests/test_walk_forward_evaluation.py`
 
-- [ ] **Step 3: Mark only Project C complete**
+- [x] **Step 3: Mark only Project C complete**
 
 Record exact verification results. Keep portfolio optimization and
 leaderboard-driven UI/model defaults pending.
 
-- [ ] **Step 4: Commit documentation separately**
+- [x] **Step 4: Commit documentation separately**
+
+Verification on 2026-08-20: `31 passed` in the focused Project C suite and
+`823 passed, 2 skipped` in the complete suite. Ruff and `git diff --check`
+completed without errors. The optional skips were the missing Bedrock dependency
+and absent DeepSeek live API key.
 
 ```bash
 git add -- docs/superpowers/plans/2026-08-14-decision-integrity-foundation.md docs/superpowers/plans/2026-08-20-walk-forward-model-evaluation.md

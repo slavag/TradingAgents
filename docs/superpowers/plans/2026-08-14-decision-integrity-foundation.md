@@ -755,7 +755,12 @@ return, target MAE/MAPE, interval coverage, Brier score, calibration error, cost
 turnover, drawdown, and missing-label reason. LLM reflection may explain a score
 but cannot determine it.
 
-### Future Project C: Walk-Forward Model and Role Evaluation
+### Project C: Walk-Forward Model and Role Evaluation
+
+**Status:** Completed on 2026-08-20 in separate fold-construction,
+paired-promotion, and role-leaderboard commits. Promotion uses shared record IDs,
+explicit coverage/sample thresholds, pinned configuration identities, and
+deterministic rejection reasons.
 
 **Planned files:**
 - Create `tradingagents/evaluation/walk_forward.py`
