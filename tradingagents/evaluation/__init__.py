@@ -18,6 +18,15 @@ from tradingagents.evaluation.outcomes import (
     resolve_forecast_outcome,
 )
 from tradingagents.evaluation.registry import EvaluationArtifact, EvaluationRegistry
+from tradingagents.evaluation.runtime import (
+    EvaluationRunResult,
+    EvaluationRunStatus,
+    OutcomePriceProvider,
+    PriceHistoryBundle,
+    YFinanceOutcomePriceProvider,
+    evaluate_forecast,
+    evaluate_report_tree,
+)
 from tradingagents.evaluation.scoring import (
     ForecastScore,
     RealizedDirection,
@@ -30,15 +39,22 @@ __all__ = [
     "ConfigurationIdentity",
     "EvaluationArtifact",
     "EvaluationRegistry",
+    "EvaluationRunResult",
+    "EvaluationRunStatus",
     "OutcomeResolutionStatus",
     "LeaderboardEntry",
     "PriceObservation",
+    "PriceHistoryBundle",
     "ForecastScore",
     "RealizedDirection",
     "ResolvedOutcome",
     "RoleLeaderboard",
+    "OutcomePriceProvider",
+    "YFinanceOutcomePriceProvider",
     "resolve_forecast_outcome",
     "score_forecast",
+    "evaluate_forecast",
+    "evaluate_report_tree",
     "build_role_leaderboard",
     "summarize_calibration",
 ]
