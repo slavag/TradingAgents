@@ -4,7 +4,9 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from cli.main import app as cli_app
 from tests.test_forecast_outcomes import observations, record
 from tests.test_forecast_scoring import resolved
 from tradingagents.evaluation.registry import EvaluationRegistry
@@ -13,9 +15,11 @@ from tradingagents.evaluation.runtime import (
     PriceHistoryBundle,
     evaluate_forecast,
     evaluate_report_tree,
+    evaluate_report_trees,
 )
 from tradingagents.evaluation.scoring import score_forecast
 from tradingagents.forecasting.schemas import AdjustmentBasis
+from tradingagents.web.service import evaluate_saved_forecasts
 
 
 def test_registry_writes_and_reads_typed_outcome_and_score(tmp_path):
@@ -173,3 +177,55 @@ def test_evaluate_forecast_carries_benchmark_return(tmp_path):
     outcome = EvaluationRegistry(tmp_path).read_outcome()
     assert outcome.benchmark_return == Decimal("0.05")
     assert outcome.excess_return == Decimal("0")
+
+
+def test_batch_evaluation_scans_report_trees_and_summarizes_statuses(tmp_path):
+    mature_dir = tmp_path / "A" / "run-1"
+    pending_dir = tmp_path / "B" / "run-2"
+    mature_dir.mkdir(parents=True)
+    pending_dir.mkdir(parents=True)
+    mature_dir.joinpath("forecast_record.json").write_text(
+        record().model_dump_json(indent=2)
+    )
+    pending_dir.joinpath("forecast_record.json").write_text(
+        record(horizon_sessions=10).model_dump_json(indent=2)
+    )
+
+    summary = evaluate_report_trees(tmp_path, StaticProvider(price_bundle()))
+
+    assert summary.total == 2
+    assert summary.scored == 1
+    assert summary.not_mature == 1
+    assert summary.retryable_errors == 0
+    assert summary.invalid == 0
+    assert tuple(result.status for result in summary.results) == (
+        EvaluationRunStatus.SCORED,
+        EvaluationRunStatus.NOT_MATURE,
+    )
+
+
+def test_web_service_evaluation_summary_serializes_empty_root(tmp_path):
+    summary = evaluate_saved_forecasts(
+        results_root=tmp_path,
+        provider=StaticProvider(price_bundle()),
+    )
+
+    assert summary == {
+        "total": 0,
+        "scored": 0,
+        "not_mature": 0,
+        "retryable_errors": 0,
+        "already_scored": 0,
+        "invalid": 0,
+        "results": [],
+    }
+
+
+def test_cli_evaluate_forecasts_reports_empty_root(tmp_path):
+    result = CliRunner().invoke(
+        cli_app,
+        ["evaluate-forecasts", "--results-root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Forecast evaluation: 0 total" in result.stdout

@@ -32,6 +32,11 @@ from cli.main import (
 )
 from cli.stats_handler import StatsCallbackHandler
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.evaluation.runtime import (
+    OutcomePriceProvider,
+    YFinanceOutcomePriceProvider,
+    evaluate_report_trees,
+)
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.reporting import build_run_manifest, compare_run_manifests
 from tradingagents.web.speaking_sources import (
@@ -1355,3 +1360,18 @@ def get_job(job_id: str) -> dict[str, Any] | None:
         if job_id not in _JOBS:
             return None
     return _job_snapshot(job_id)
+
+
+def evaluate_saved_forecasts(
+    *,
+    results_root: Path = RESULTS_ROOT,
+    provider: OutcomePriceProvider | None = None,
+    transaction_cost_bps: float = 0,
+) -> dict[str, Any]:
+    """Evaluate all matured saved forecasts through the shared runtime."""
+    summary = evaluate_report_trees(
+        results_root,
+        provider or YFinanceOutcomePriceProvider(),
+        transaction_cost_bps=transaction_cost_bps,
+    )
+    return summary.model_dump(mode="json")

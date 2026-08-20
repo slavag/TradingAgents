@@ -3129,5 +3129,42 @@ def serve_web(
     )
 
 
+_EVALUATION_RESULTS_ROOT_OPTION = typer.Option(
+    Path(DEFAULT_CONFIG["results_dir"]),
+    "--results-root",
+    help="Root directory containing saved forecast_record.json files.",
+)
+_EVALUATION_COST_OPTION = typer.Option(
+    0.0,
+    "--transaction-cost-bps",
+    min=0.0,
+    help="Deterministic round-trip transaction cost in basis points.",
+)
+
+
+@app.command("evaluate-forecasts")
+def evaluate_forecasts_command(
+    results_root: Path = _EVALUATION_RESULTS_ROOT_OPTION,
+    transaction_cost_bps: float = _EVALUATION_COST_OPTION,
+):
+    """Resolve and score every matured saved forecast below a results root."""
+    from tradingagents.evaluation.runtime import (
+        YFinanceOutcomePriceProvider,
+        evaluate_report_trees,
+    )
+
+    summary = evaluate_report_trees(
+        results_root,
+        YFinanceOutcomePriceProvider(),
+        transaction_cost_bps=transaction_cost_bps,
+    )
+    console.print(
+        "Forecast evaluation: "
+        f"{summary.total} total · {summary.scored} scored · "
+        f"{summary.not_mature} pending · {summary.retryable_errors} retryable errors · "
+        f"{summary.invalid} invalid"
+    )
+
+
 if __name__ == "__main__":
     app()

@@ -19,6 +19,7 @@ from tradingagents.evaluation.outcomes import (
 )
 from tradingagents.evaluation.registry import EvaluationArtifact, EvaluationRegistry
 from tradingagents.evaluation.runtime import (
+    EvaluationBatchSummary,
     EvaluationRunResult,
     EvaluationRunStatus,
     OutcomePriceProvider,
@@ -26,6 +27,7 @@ from tradingagents.evaluation.runtime import (
     YFinanceOutcomePriceProvider,
     evaluate_forecast,
     evaluate_report_tree,
+    evaluate_report_trees,
 )
 from tradingagents.evaluation.scoring import (
     ForecastScore,
@@ -38,6 +40,7 @@ __all__ = [
     "CalibrationSummary",
     "ConfigurationIdentity",
     "EvaluationArtifact",
+    "EvaluationBatchSummary",
     "EvaluationRegistry",
     "EvaluationRunResult",
     "EvaluationRunStatus",
@@ -55,6 +58,7 @@ __all__ = [
     "score_forecast",
     "evaluate_forecast",
     "evaluate_report_tree",
+    "evaluate_report_trees",
     "build_role_leaderboard",
     "summarize_calibration",
 ]

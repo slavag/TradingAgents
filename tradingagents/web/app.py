@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from tradingagents.llm_clients.model_catalog import get_web_model_options
 from tradingagents.web.service import (
     create_job,
+    evaluate_saved_forecasts,
     fetch_market_tickers,
     fetch_speaking_stocks,
     fetch_ticker_detail,
@@ -294,6 +295,15 @@ def job_status(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     return job
+
+
+@app.post("/api/evaluations/run")
+def run_saved_forecast_evaluations():
+    try:
+        return evaluate_saved_forecasts()
+    except Exception as exc:
+        logger.exception("Forecast evaluation failed")
+        raise HTTPException(status_code=500, detail="Forecast evaluation failed.") from exc
 
 
 @app.on_event("startup")

@@ -53,6 +53,18 @@ class EvaluationRunResult(BaseModel):
     score_artifact: EvaluationArtifact | None = None
 
 
+class EvaluationBatchSummary(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    total: int
+    scored: int
+    not_mature: int
+    retryable_errors: int
+    already_scored: int
+    invalid: int
+    results: tuple[EvaluationRunResult, ...]
+
+
 def evaluate_forecast(
     forecast: ForecastRecord,
     report_tree: Path,
@@ -157,3 +169,38 @@ class YFinanceOutcomePriceProvider:
             adjustment_basis=AdjustmentBasis.TOTAL_RETURN_ADJUSTED,
             observations=observations,
         )
+
+
+def evaluate_report_trees(
+    root: Path,
+    provider: OutcomePriceProvider,
+    *,
+    transaction_cost_bps: Decimal | int = 0,
+) -> EvaluationBatchSummary:
+    """Evaluate every saved forecast record below a root in stable path order."""
+    results = tuple(
+        evaluate_report_tree(
+            path.parent,
+            provider,
+            transaction_cost_bps=transaction_cost_bps,
+        )
+        for path in sorted(Path(root).rglob("forecast_record.json"))
+    )
+    return EvaluationBatchSummary(
+        total=len(results),
+        scored=sum(result.status is EvaluationRunStatus.SCORED for result in results),
+        not_mature=sum(
+            result.status is EvaluationRunStatus.NOT_MATURE for result in results
+        ),
+        retryable_errors=sum(
+            result.status is EvaluationRunStatus.RETRYABLE_PROVIDER_ERROR
+            for result in results
+        ),
+        already_scored=sum(
+            result.status is EvaluationRunStatus.ALREADY_SCORED for result in results
+        ),
+        invalid=sum(
+            result.status is EvaluationRunStatus.INVALID_RECORD for result in results
+        ),
+        results=results,
+    )
