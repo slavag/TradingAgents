@@ -382,6 +382,13 @@ Outcome and score artifacts are written append-only under each report tree's
 and uncalibrated probabilities remain explicit; they are not converted to zero
 returns or failed predictions.
 
+The web evaluation panel can scope a run to all saved forecasts, tickers entered
+in the analysis form, or report paths from the current completed batch. Optional
+inclusive From/To dates and Pending forecasts only filters are applied as an
+intersection. Current-batch paths are accepted only when they remain under the
+configured results root. Reports created before `forecast_record.json` existed
+are not included until they are regenerated or migrated.
+
 The deterministic long-only optimizer accepts an explicit JSON document with
 portfolio state, forecasts, liquidity/exposure constraints, and a shrinkage risk
 model:
