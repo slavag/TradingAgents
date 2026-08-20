@@ -4,6 +4,7 @@ from datetime import date
 from decimal import Decimal
 
 from tests.test_forecast_outcomes import observations, record
+from tradingagents.evaluation.calibration import CalibrationBin, summarize_calibration
 from tradingagents.evaluation.outcomes import (
     OutcomeResolutionStatus,
     PriceObservation,
@@ -109,3 +110,77 @@ def test_unresolved_outcome_keeps_metrics_missing_instead_of_zero():
     assert score.direction_correct is None
     assert "gross_return" in score.missing_metrics
     assert "direction_correct" in score.missing_metrics
+
+
+def test_calibration_summary_matches_hand_calculated_brier_and_ece():
+    first_record = changed_record(
+        rating="Buy",
+        direction_probabilities=DirectionProbabilities(
+            down=Decimal("0.1"),
+            flat=Decimal("0.1"),
+            up=Decimal("0.8"),
+        ),
+    )
+    second_record = changed_record(
+        rating="Sell",
+        direction_probabilities=DirectionProbabilities(
+            down=Decimal("0.2"),
+            flat=Decimal("0.2"),
+            up=Decimal("0.6"),
+        ),
+    )
+    falling = (
+        PriceObservation(session=date(2026, 8, 24), close=Decimal("99")),
+        PriceObservation(session=date(2026, 8, 25), close=Decimal("95")),
+    )
+    scores = (
+        score_forecast(first_record, resolved(first_record)),
+        score_forecast(second_record, resolved(second_record, falling)),
+    )
+
+    summary = summarize_calibration(scores, bins=2)
+
+    assert summary.eligible_count == 2
+    assert summary.excluded_count == 0
+    assert summary.mean_brier_score == (
+        Decimal("0.02") + Decimal("1.04") / Decimal("3")
+    ) / 2
+    assert summary.expected_calibration_error == Decimal("0.2")
+    assert summary.bins == (
+        CalibrationBin(
+            lower_bound=Decimal("0.5"),
+            upper_bound=Decimal("1"),
+            count=2,
+            mean_confidence=Decimal("0.7"),
+            observed_accuracy=Decimal("0.5"),
+        ),
+    )
+
+
+def test_calibration_summary_excludes_ineligible_scores():
+    eligible_record = changed_record(
+        rating="Buy",
+        direction_probabilities=DirectionProbabilities(
+            down=Decimal("0.1"),
+            flat=Decimal("0.2"),
+            up=Decimal("0.7"),
+        ),
+    )
+    ineligible = score_forecast(record(), resolved())
+    eligible = score_forecast(eligible_record, resolved(eligible_record))
+
+    summary = summarize_calibration((eligible, ineligible), bins=5)
+
+    assert summary.total_count == 2
+    assert summary.eligible_count == 1
+    assert summary.excluded_count == 1
+
+
+def test_calibration_summary_empty_input_has_no_numeric_metrics():
+    summary = summarize_calibration((), bins=10)
+
+    assert summary.total_count == 0
+    assert summary.eligible_count == 0
+    assert summary.mean_brier_score is None
+    assert summary.expected_calibration_error is None
+    assert summary.bins == ()
