@@ -7,7 +7,12 @@ from rich.console import Console
 
 from cli.models import AnalystType, AssetType
 from tradingagents.llm_clients.api_key_env import get_api_key_env
-from tradingagents.llm_clients.model_catalog import get_model_options
+from tradingagents.llm_clients.model_catalog import (
+    get_catalog_metadata,
+    get_model_options,
+    get_role_model_options,
+)
+from tradingagents.llm_clients.model_discovery import DISCOVERY_ADAPTERS, discover_models
 
 console = Console()
 
@@ -196,34 +201,12 @@ def select_research_depth() -> int:
     return choice
 
 
-# Mainstream OpenRouter chat-LLM provider namespaces. We surface the newest
-# models from these rather than the universal-newest, which is dominated by
-# niche/experimental releases. These are the general-purpose chat providers;
-# more enterprise/specialised namespaces (nvidia, cohere, amazon, ...) tend to
-# ship research/safety variants as their newest, so they're left out of the
-# shortlist. Provider names are stable (unlike model IDs), so this rarely needs
-# touching; anything not here is still reachable via Custom ID.
+# General-purpose OpenRouter namespaces appear first after curated choices,
+# but other account-visible text models remain selectable below them.
 _OPENROUTER_MAINSTREAM = {
     "openai", "anthropic", "google", "deepseek", "qwen", "mistralai",
     "meta-llama", "x-ai", "z-ai", "minimax", "moonshotai",
 }
-
-
-def _fetch_openrouter_models() -> list[tuple[str, str]]:
-    """Fetch available models from the OpenRouter API."""
-    import requests
-    try:
-        resp = requests.get("https://openrouter.ai/api/v1/models", timeout=10)
-        resp.raise_for_status()
-        models = resp.json().get("data", [])
-        # Newest first so the top-N shown really is the latest available — the
-        # API currently returns this order, but sort explicitly so the prompt's
-        # "latest available" label holds regardless of response ordering.
-        models.sort(key=lambda m: m.get("created") or 0, reverse=True)
-        return [(m.get("name") or m["id"], m["id"]) for m in models]
-    except Exception as e:
-        console.print(f"\n[yellow]Could not fetch OpenRouter models: {e}[/yellow]")
-        return []
 
 
 def _require_text(message: str, hint: str) -> str:
@@ -244,44 +227,8 @@ def _require_text(message: str, hint: str) -> str:
 
 
 def select_openrouter_model(mode: str) -> str:
-    """Select an OpenRouter model from the newest available, or enter a custom ID.
-
-    ``mode`` ("quick"/"deep") labels the prompt so the two consecutive
-    OpenRouter selections are distinguishable, like the other providers (#1000).
-    """
-    models = _fetch_openrouter_models()  # newest first
-    # Prefer the newest from mainstream providers so the shortlist isn't crowded
-    # out by niche/experimental releases; fall back to all if none match.
-    mainstream = [
-        (name, mid) for name, mid in models
-        if not mid.startswith("~")  # skip variant/alias duplicate routes
-        and mid.split("/", 1)[0] in _OPENROUTER_MAINSTREAM
-    ]
-    top = (mainstream or models)[:5]
-
-    choices = [questionary.Choice(name, value=mid) for name, mid in top]
-    choices.append(questionary.Choice("Custom model ID", value="custom"))
-
-    choice = questionary.select(
-        f"Select Your [{mode.title()}-Thinking] OpenRouter Model (latest available):",
-        choices=choices,
-        instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
-        style=questionary.Style([
-            ("selected", "fg:magenta noinherit"),
-            ("highlighted", "fg:magenta noinherit"),
-            ("pointer", "fg:magenta noinherit"),
-        ]),
-    ).ask()
-
-    if choice is None:
-        console.print("\n[red]No model selected. Exiting...[/red]")
-        exit(1)
-    if choice == "custom":
-        return _require_text(
-            "Enter OpenRouter model ID (e.g. google/gemma-4-26b-a4b-it):",
-            "Please enter a model ID.",
-        )
-    return choice
+    """Select an OpenRouter model without fetching until refresh is chosen."""
+    return _select_model("openrouter", mode)
 
 
 def _prompt_custom_model_id() -> str:
@@ -289,41 +236,73 @@ def _prompt_custom_model_id() -> str:
     return _require_text("Enter model ID:", "Please enter a model ID.")
 
 
+def merge_curated_and_available(
+    provider: str, mode: str, models: tuple[str, ...]
+) -> list[questionary.Choice]:
+    """Keep curated ordering, then show every new account-visible model."""
+    curated = (
+        get_role_model_options()["verifier"][provider]
+        if mode == "verifier" else get_model_options(provider, mode)
+    )
+    seen = {model_id for _, model_id in curated}
+    metadata = get_catalog_metadata().get(provider, {})
+    merged = []
+    for label, model_id in curated:
+        lifecycle = metadata.get(model_id, {}).get("lifecycle")
+        suffix = f" [{('preview' if lifecycle == 'preview' else 'recommended')}]" if lifecycle else ""
+        merged.append(questionary.Choice(label + suffix, value=model_id))
+    available = []
+    for model_id in models:
+        if model_id not in seen:
+            available.append(model_id)
+            seen.add(model_id)
+    if provider == "openrouter":
+        available.sort(key=lambda model_id: model_id.split("/", 1)[0] not in _OPENROUTER_MAINSTREAM)
+    merged.extend(
+        questionary.Choice(f"{model_id} (available; unverified)", value=model_id)
+        for model_id in available
+    )
+    return merged
+
+
 def _select_model(provider: str, mode: str) -> str:
     """Select a model for the given provider and mode (quick/deep)."""
-    if provider.lower() == "openrouter":
-        return select_openrouter_model(mode)
-
-    if provider.lower() == "azure":
+    provider = provider.lower()
+    if provider == "azure":
         return _require_text(
             f"Enter Azure deployment name ({mode}-thinking):",
             "Please enter a deployment name.",
         )
-
-    choice = questionary.select(
-        f"Select Your [{mode.title()}-Thinking LLM Engine]:",
-        choices=[
-            questionary.Choice(display, value=value)
-            for display, value in get_model_options(provider, mode)
-        ],
-        instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
-        style=questionary.Style(
-            [
+    choices = merge_curated_and_available(provider, mode, ())
+    supports_listing = provider in DISCOVERY_ADAPTERS
+    role_label = "Verifier / Final Report" if mode == "verifier" else f"{mode.title()}-Thinking"
+    label = f"Select Your [{role_label}] {provider} Model:"
+    while True:
+        menu = list(choices)
+        if supports_listing:
+            menu.append(questionary.Choice("Refresh available models", value="refresh_models"))
+        choice = questionary.select(
+            label,
+            choices=menu,
+            instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
+            style=questionary.Style([
                 ("selected", "fg:magenta noinherit"),
                 ("highlighted", "fg:magenta noinherit"),
                 ("pointer", "fg:magenta noinherit"),
-            ]
-        ),
-    ).ask()
-
-    if choice is None:
-        console.print(f"\n[red]No {mode} thinking llm engine selected. Exiting...[/red]")
-        exit(1)
-
-    if choice == "custom":
-        return _prompt_custom_model_id()
-
-    return choice
+            ]),
+        ).ask()
+        if choice is None:
+            console.print(f"\n[red]No {mode} thinking llm engine selected. Exiting...[/red]")
+            exit(1)
+        if choice == "refresh_models":
+            result = discover_models(provider, force=True)
+            choices = merge_curated_and_available(provider, mode, result.models)
+            if result.status in {"fresh", "cached"}:
+                console.print(f"[green]Model list checked {result.fetched_at}.[/green]")
+            else:
+                console.print("[yellow]Model listing unavailable; curated and custom choices remain.[/yellow]")
+            continue
+        return _prompt_custom_model_id() if choice == "custom" else choice
 
 
 def select_shallow_thinking_agent(provider) -> str:
@@ -334,6 +313,11 @@ def select_shallow_thinking_agent(provider) -> str:
 def select_deep_thinking_agent(provider) -> str:
     """Select deep thinking llm engine using an interactive selection."""
     return _select_model(provider, "deep")
+
+
+def select_verifier_model(provider: str) -> str:
+    """Select the final-report/reflection model from its own role ranking."""
+    return _select_model(provider, "verifier")
 
 def _llm_provider_table() -> list[tuple[str, str, str | None]]:
     """(display_name, provider_key, base_url) for every supported provider.
@@ -351,6 +335,7 @@ def _llm_provider_table() -> list[tuple[str, str, str | None]]:
         ("Anthropic", "anthropic", "https://api.anthropic.com/"),
         ("xAI", "xai", "https://api.x.ai/v1"),
         ("DeepSeek", "deepseek", "https://api.deepseek.com"),
+        ("Meta Model API", "meta", "https://api.meta.ai/v1"),
         ("Qwen", "qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
         ("GLM", "glm", "https://open.bigmodel.cn/api/paas/v4/"),
         ("MiniMax", "minimax", "https://api.minimax.io/v1"),

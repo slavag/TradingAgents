@@ -1,5 +1,4 @@
 import json
-import os
 from datetime import datetime
 from io import StringIO
 
@@ -27,7 +26,9 @@ class AlphaVantageNotConfiguredError(VendorNotConfiguredError):
 
 def get_api_key() -> str:
     """Retrieve the API key for Alpha Vantage from environment variables."""
-    api_key = os.getenv("ALPHA_VANTAGE_API_KEY")
+    from tradingagents.settings import get_data_source_setting
+
+    api_key = get_data_source_setting("ALPHA_VANTAGE_API_KEY")
     if not api_key:
         raise AlphaVantageNotConfiguredError(
             "ALPHA_VANTAGE_API_KEY environment variable is not set."
@@ -59,6 +60,10 @@ class AlphaVantageRateLimitError(VendorRateLimitError):
     """Raised when the Alpha Vantage API rate limit is exceeded."""
     pass
 
+
+class AlphaVantageRequestError(RuntimeError):
+    """A credential-safe Alpha Vantage request failure."""
+
 def _make_api_request(function_name: str, params: dict) -> dict | str:
     """Helper function to make API requests and handle responses.
 
@@ -83,10 +88,24 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
         # Remove entitlement if it's None or empty
         api_params.pop("entitlement", None)
 
-    response = requests.get(API_BASE_URL, params=api_params, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
+    try:
+        response = requests.get(API_BASE_URL, params=api_params, timeout=REQUEST_TIMEOUT)
+    except requests.RequestException:
+        raise AlphaVantageRequestError(
+            "Alpha Vantage network request failed; retry later."
+        ) from None
+    status_code = getattr(response, "status_code", 200)
+    if status_code == 429:
+        raise AlphaVantageRateLimitError("Alpha Vantage rate limit reached; retry later.")
+    if status_code in {401, 403}:
+        raise AlphaVantageNotConfiguredError("Alpha Vantage rejected the configured API key.")
+    if status_code >= 400:
+        raise AlphaVantageRequestError(
+            f"Alpha Vantage request failed with HTTP {status_code}."
+        )
 
-    response_text = response.text
+    api_key = api_params["apikey"]
+    response_text = response.text.replace(api_key, "[REDACTED]")
 
     # Error responses are JSON; data responses are usually CSV (or data-keyed
     # JSON). A non-JSON body is normal data.
@@ -103,11 +122,11 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
     if notice:
         low = notice.lower()
         if any(m in low for m in ("rate limit", "requests per day", "call frequency", "premium")):
-            raise AlphaVantageRateLimitError(f"Alpha Vantage rate limit exceeded: {notice}")
+            raise AlphaVantageRateLimitError("Alpha Vantage rate limit exceeded.")
         if "api key" in low or "apikey" in low:
             # Reuse the existing "not configured" error so a bad key surfaces as
             # a real, actionable failure rather than a mislabeled rate limit (#991).
-            raise AlphaVantageNotConfiguredError(f"Alpha Vantage API key invalid or missing: {notice}")
+            raise AlphaVantageNotConfiguredError("Alpha Vantage API key is invalid or missing.")
 
     return response_text
 

@@ -45,6 +45,17 @@ class ModelValidationTests(unittest.TestCase):
         self.assertIn("not-a-real-openai-model", str(caught[0].message))
         self.assertIn("openai", str(caught[0].message))
 
+    def test_unknown_meta_model_emits_warning_for_strict_provider(self):
+        client = DummyLLMClient("meta", "muse-spark-not-real")
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            client.get_llm()
+
+        self.assertEqual(len(caught), 1)
+        self.assertIn("muse-spark-not-real", str(caught[0].message))
+        self.assertIn("meta", str(caught[0].message))
+
     def test_legacy_models_remain_validator_approved(self):
         legacy_cases = [
             ("anthropic", "claude-opus-4-7"),

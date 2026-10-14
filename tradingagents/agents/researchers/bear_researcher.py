@@ -1,11 +1,13 @@
 from tradingagents.agents.utils.agent_utils import (
-    get_instrument_context_from_state,
+    get_agent_context_from_state,
     get_language_instruction,
     normalize_text_content,
 )
+from tradingagents.llm_clients.prompt_cache import PromptCachePolicy, invoke_with_prompt_cache
 
 
-def create_bear_researcher(llm):
+def create_bear_researcher(llm, cache_policy: PromptCachePolicy | None = None):
+    cache_policy = cache_policy or PromptCachePolicy("", "")
     def bear_node(state) -> dict:
         investment_debate_state = state["investment_debate_state"]
         history = investment_debate_state.get("history", "")
@@ -16,7 +18,7 @@ def create_bear_researcher(llm):
         sentiment_report = state["sentiment_report"]
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
-        instrument_context = get_instrument_context_from_state(state)
+        instrument_context = get_agent_context_from_state(state, "bear_researcher")
         asset_type = state.get("asset_type", "stock")
         target_label = "stock" if asset_type == "stock" else "asset"
         fundamentals_label = (
@@ -25,7 +27,7 @@ def create_bear_researcher(llm):
             else "Asset fundamentals report (may be unavailable for crypto)"
         )
 
-        prompt = f"""You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
+        stable_prefix = f"""You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
 
 Key points to focus on:
 
@@ -42,12 +44,15 @@ Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
 {fundamentals_label}: {fundamentals_report}
-Conversation history of the debate: {history}
+Conversation history of the debate: """
+        dynamic_suffix = f"""{history}
 Last bull argument: {current_response}
 Use this information to deliver a compelling bear argument, refute the bull's claims, and engage in a dynamic debate that demonstrates the risks and weaknesses of investing in the {target_label}.
 """ + get_language_instruction()
 
-        response = llm.invoke(prompt)
+        response = invoke_with_prompt_cache(
+            llm, stable_prefix, dynamic_suffix, cache_policy,
+        )
 
         argument = f"Bear Analyst: {normalize_text_content(response.content)}"
 

@@ -43,6 +43,7 @@ __all__ = [
     "build_instrument_context",
     "resolve_instrument_identity",
     "get_instrument_context_from_state",
+    "get_agent_context_from_state",
     "get_language_instruction",
     "create_msg_delete",
 ]
@@ -221,6 +222,22 @@ def get_instrument_context_from_state(state: Mapping[str, Any]) -> str:
     )
 
 
+def get_agent_context_from_state(
+    state: Mapping[str, Any], role: str, *, include_reports: bool = False
+) -> str:
+    """Build the common identity and evidence context supplied to an agent."""
+    from tradingagents.agents.utils.evidence import (
+        render_original_reports,
+        render_shared_evidence,
+    )
+
+    context = get_instrument_context_from_state(state)
+    context += render_shared_evidence(state, role)
+    if include_reports:
+        context += render_original_reports(state)
+    return context
+
+
 def create_msg_delete():
     def delete_messages(state):
         """Clear messages and add a context-anchored placeholder.
@@ -243,7 +260,14 @@ def create_msg_delete():
                 f"{instrument_context} The analysis date is {trade_date}."
             )
         )
-        return {"messages": removal_operations + [placeholder]}
+        from tradingagents.agents.utils.evidence import merge_evidence, tool_message_evidence
+
+        source_records = tool_message_evidence(state)
+        update = {"messages": removal_operations + [placeholder]}
+        if source_records:
+            update["shared_evidence"] = merge_evidence(
+                state.get("shared_evidence", []), source_records, str(trade_date)
+            )
+        return update
 
     return delete_messages
-

@@ -112,8 +112,9 @@ def normalize_symbol(raw: str) -> str:
       4. Otherwise the upper-cased symbol is returned unchanged (plain
          equities, ETFs, Yahoo-native symbols like ``GC=F`` or ``^GSPC``).
 
-    A trailing ``+`` (broker CFD marker, e.g. ``XAUUSD+``) is stripped before
-    matching. The function is purely syntactic — it performs no network
+    Trailing ``+`` (broker CFD marker) and sentence-final ``.`` punctuation
+    are stripped before matching; internal class/exchange dots remain intact.
+    The function is purely syntactic — it performs no network
     calls — so it is safe to apply on every request.
     """
     if not isinstance(raw, str) or not raw.strip():
@@ -121,7 +122,7 @@ def normalize_symbol(raw: str) -> str:
 
     s = raw.strip().upper()
     # Broker CFD/qualifier suffixes Yahoo never uses.
-    s = s.rstrip("+")
+    s = s.rstrip("+.")
 
     crypto = _normalize_crypto(s)
     if s in _ALIASES:

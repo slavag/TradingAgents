@@ -19,6 +19,7 @@ def test_every_select_llm_provider_choice_has_an_entry():
     # are reached via the secondary region prompt, so they must also be present.
     expected = {
         "openai", "google", "anthropic", "xai", "deepseek",
+        "meta",
         "qwen", "qwen-cn",
         "glm", "glm-cn",
         "minimax", "minimax-cn",
@@ -36,6 +37,7 @@ def test_every_select_llm_provider_choice_has_an_entry():
         ("azure",      "AZURE_OPENAI_API_KEY"),
         ("xai",        "XAI_API_KEY"),
         ("deepseek",   "DEEPSEEK_API_KEY"),
+        ("meta",       "MODEL_API_KEY"),
         ("qwen",       "DASHSCOPE_API_KEY"),
         ("qwen-cn",    "DASHSCOPE_CN_API_KEY"),
         ("glm",        "ZHIPU_API_KEY"),

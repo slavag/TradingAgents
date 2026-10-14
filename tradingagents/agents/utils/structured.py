@@ -70,7 +70,7 @@ def bind_structured(
         logger.warning(
             "%s: provider does not support with_structured_output (%s); %s",
             agent_name,
-            exc,
+            type(exc).__name__,
             next_step,
         )
         return None
@@ -174,10 +174,15 @@ def invoke_structured_required(
     try:
         result = structured_llm.invoke(prompt)
     except ValidationError as exc:
-        logger.warning("%s: structured response failed schema validation: %s", agent_name, exc)
+        logger.warning(
+            "%s: structured response failed schema validation (%s)",
+            agent_name, type(exc).__name__,
+        )
         raise StructuredOutputFailure("structured_response_invalid") from exc
     except Exception as exc:
-        logger.warning("%s: structured invocation failed: %s", agent_name, exc)
+        logger.warning(
+            "%s: structured invocation failed (%s)", agent_name, type(exc).__name__,
+        )
         raise StructuredOutputFailure("structured_invocation_failed") from exc
 
     if result is None:

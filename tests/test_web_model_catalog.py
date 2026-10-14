@@ -14,16 +14,16 @@ class WebModelCatalogTests(unittest.TestCase):
         roles = get_role_model_options()
 
         self.assertEqual(set(roles), {"quick", "deep", "verifier"})
-        self.assertEqual(roles["quick"]["openai"][0][1], "gpt-5.4-mini")
-        self.assertEqual(roles["deep"]["openai"][0][1], "gpt-5.6-sol")
-        self.assertEqual(roles["verifier"]["openai"][0][1], "gpt-5.6-terra")
+        self.assertEqual(roles["quick"]["openai"][0][1], "gpt-6-luna")
+        self.assertEqual(roles["deep"]["openai"][0][1], "gpt-6.1-sol")
+        self.assertEqual(roles["verifier"]["openai"][0][1], "gpt-6.1-sol")
         self.assertIn(
             "gemini-3.6-flash",
             [value for _, value in roles["verifier"]["google"]],
         )
 
     def test_model_capabilities_are_provider_and_model_specific(self):
-        openai_reasoning = get_model_capabilities("openai", "gpt-5.6-sol")
+        openai_reasoning = get_model_capabilities("openai", "gpt-6.1-sol")
         openai_chat = get_model_capabilities("openai", "gpt-4.1")
         gemini = get_model_capabilities("google", "gemini-3.6-flash")
 
@@ -36,57 +36,64 @@ class WebModelCatalogTests(unittest.TestCase):
     def test_shared_web_catalog_uses_current_openai_models(self):
         values = [value for _, value in get_web_model_options()["openai"]]
 
-        self.assertIn("gpt-5.6-sol", values)
-        self.assertIn("gpt-5.6-terra", values)
-        self.assertIn("gpt-5.6-luna", values)
-        self.assertIn("gpt-5.5", values)
-        self.assertIn("gpt-5.4-mini", values)
-        self.assertIn("gpt-5.4-nano", values)
+        self.assertIn("gpt-6.1-sol", values)
+        self.assertIn("gpt-6-astra", values)
+        self.assertIn("gpt-6-luna", values)
+        self.assertNotIn("gpt-5.4-mini", values)
 
     def test_shared_web_catalog_uses_current_anthropic_models(self):
         values = [value for _, value in get_web_model_options()["anthropic"]]
 
-        self.assertIn("claude-opus-5", values)
-        self.assertIn("claude-fable-5", values)
-        self.assertIn("claude-opus-4-8", values)
-        self.assertIn("claude-sonnet-5", values)
-        self.assertIn("claude-haiku-4-5", values)
-        self.assertIn("claude-opus-4-7", values)
+        self.assertIn("claude-opus-5-5", values)
+        self.assertIn("claude-fable-5-1", values)
+        self.assertIn("claude-sonnet-5-5", values)
+        self.assertIn("claude-haiku-5-5", values)
+        self.assertNotIn("claude-opus-4-7", values)
         self.assertNotIn("claude-sonnet-4-6", values)
 
     def test_shared_web_catalog_uses_current_google_models(self):
         values = [value for _, value in get_web_model_options()["google"]]
 
+        self.assertIn("gemini-3.8-flash", values)
         self.assertIn("gemini-3.6-flash", values)
         self.assertIn("gemini-3.5-flash-lite", values)
-        self.assertIn("gemini-3.5-flash", values)
-        self.assertIn("gemini-3.1-flash-lite", values)
         self.assertIn("gemini-3.1-pro-preview", values)
         self.assertNotIn("gemini-3.1-flash-lite-preview", values)
 
     def test_shared_web_catalog_uses_current_xai_models(self):
         values = [value for _, value in get_web_model_options()["xai"]]
 
+        self.assertIn("grok-4.7", values)
         self.assertIn("grok-4.5", values)
         self.assertIn("grok-4.3", values)
-        self.assertIn("grok-build-0.1", values)
         self.assertNotIn("grok-4-1-fast-reasoning", values)
+
+    def test_meta_roles_expose_hosted_muse_models_with_standard_tier_first(self):
+        roles = get_role_model_options()
+        expected_models = {"muse-spark-1.3", "muse-wonder-1.0", "custom"}
+
+        for role in ("quick", "deep", "verifier"):
+            options = roles[role]["meta"]
+            values = [value for _, value in options]
+            self.assertEqual(values[0], "muse-spark-1.3")
+            self.assertTrue(set(values).issubset(expected_models))
+            self.assertFalse(any("glimmer" in value.lower() for value in values))
+
+        self.assertFalse(any(value.endswith("-contributor") for _, value in roles["quick"]["meta"]))
 
     def test_index_injects_shared_model_catalog(self):
         html = _render_index_response().body.decode("utf-8")
 
         self.assertIn("window.TRADINGAGENTS_MODEL_OPTIONS", html)
-        self.assertIn("gpt-5.6-sol", html)
-        self.assertIn("gpt-5.6-terra", html)
-        self.assertIn("gpt-5.6-luna", html)
-        self.assertIn("gpt-5.5", html)
-        self.assertIn("claude-opus-5", html)
-        self.assertIn("claude-fable-5", html)
+        self.assertIn("gpt-6.1-sol", html)
+        self.assertIn("gpt-6-astra", html)
+        self.assertIn("gpt-6-luna", html)
+        self.assertIn("claude-opus-5-5", html)
+        self.assertIn("claude-fable-5-1", html)
+        self.assertIn("gemini-3.8-flash", html)
         self.assertIn("gemini-3.6-flash", html)
         self.assertIn("gemini-3.5-flash-lite", html)
-        self.assertIn("gemini-3.5-flash", html)
-        self.assertIn("grok-4.5", html)
-        self.assertIn("grok-build-0.1", html)
+        self.assertIn("grok-4.7", html)
 
     def test_index_injects_role_options_capabilities_and_defaults(self):
         html = _render_index_response().body.decode("utf-8")
@@ -100,7 +107,7 @@ class WebModelCatalogTests(unittest.TestCase):
     def test_each_role_exposes_curated_non_us_providers(self):
         html = _render_index_response().body.decode("utf-8")
 
-        for provider in ("deepseek", "qwen", "glm", "minimax"):
+        for provider in ("deepseek", "qwen", "glm", "minimax", "meta"):
             self.assertEqual(
                 html.count(f'<option value="{provider}">'),
                 3,

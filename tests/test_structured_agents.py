@@ -242,7 +242,7 @@ class TestTraderAgent:
             reasoning="AI capex cycle intact; institutional flows constructive.",
             entry_price=189.5,
             stop_loss=178.0,
-            position_sizing="6% of portfolio",
+            position_sizing="Size so an adverse move stays within the user's risk budget.",
         )
         llm = _structured_trader_llm(captured, proposal)
         trader = create_trader(llm)
@@ -274,6 +274,60 @@ class TestTraderAgent:
         assert "Hold -> Hold" in system_prompt
         assert "Underweight or Sell -> Sell" in system_prompt
 
+    def test_underweight_sell_preserves_trim_and_avoid_intents(self):
+        captured = {}
+        state = _make_trader_state()
+        state["investment_plan"] = (
+            "**Recommendation**: Underweight\n\n"
+            "**Rationale**: Risk outweighs upside.\n\n"
+            "**Strategic Actions**: Trim existing exposure and avoid new entry."
+        )
+        proposal = TraderProposal(action=TraderAction.SELL, reasoning="Reduce exposure.")
+
+        rendered = create_trader(_structured_trader_llm(captured, proposal))(state)[
+            "trader_investment_plan"
+        ]
+
+        assert "**Research Rating**: Underweight" in rendered
+        assert "**Existing Position Intent**: Trim" in rendered
+        assert "**New Position Intent**: Avoid" in rendered
+        assert "FINAL TRANSACTION PROPOSAL: **SELL**" in rendered
+        parsed = parse_trader_proposal_markdown(rendered)
+        assert parsed.existing_position_intent is ExistingPositionAction.TRIM
+        assert parsed.new_position_intent is NewPositionAction.AVOID
+
+    def test_trader_rejects_direction_opposite_to_research_rating(self):
+        state = _make_trader_state()
+        state["investment_plan"] = (
+            "**Recommendation**: Underweight\n\n"
+            "**Rationale**: Risk outweighs upside.\n\n"
+            "**Strategic Actions**: Trim existing exposure."
+        )
+        proposal = TraderProposal(action=TraderAction.BUY, reasoning="Buy now.")
+
+        rendered = create_trader(_structured_trader_llm({}, proposal))(state)[
+            "trader_investment_plan"
+        ]
+
+        assert rendered == render_stage_unavailable(
+            "Trader Proposal", "rating_action_conflict"
+        )
+
+    def test_trader_rejects_numeric_nav_size_without_portfolio_context(self):
+        proposal = TraderProposal(
+            action=TraderAction.BUY,
+            reasoning="Build a position.",
+            position_sizing="Allocate 5% of portfolio NAV.",
+        )
+
+        rendered = create_trader(_structured_trader_llm({}, proposal))(
+            _make_trader_state()
+        )["trader_investment_plan"]
+
+        assert rendered == render_stage_unavailable(
+            "Trader Proposal", "unsupported_portfolio_sizing"
+        )
+
     def test_validates_and_normalizes_freetext_when_structured_unavailable(self):
         plain_response = (
             "**Action**: Sell\n\n**Reasoning**: Guidance cut hits margins.\n\n"
@@ -283,11 +337,20 @@ class TestTraderAgent:
         llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
         llm.invoke.return_value = MagicMock(content=plain_response)
         trader = create_trader(llm)
-        result = trader(_make_trader_state())
+        state = _make_trader_state()
+        state["investment_plan"] = (
+            "**Recommendation**: Sell\n\n"
+            "**Rationale**: Guidance cut hits margins.\n\n"
+            "**Strategic Actions**: Exit existing exposure."
+        )
+        result = trader(state)
         assert result["trader_investment_plan"] == render_trader_proposal(
             TraderProposal(
                 action=TraderAction.SELL,
                 reasoning="Guidance cut hits margins.",
+                research_rating=PortfolioRating.SELL,
+                existing_position_intent=ExistingPositionAction.EXIT,
+                new_position_intent=NewPositionAction.AVOID,
             )
         )
 

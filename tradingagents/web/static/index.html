@@ -1,420 +1,1048 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>TradingAgents Web</title>
-  <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
-</head>
-<body>
-  <div class="app-shell">
-    <header class="pane topbar">
-      <div class="brand-block">
-        <p class="eyebrow">TradingAgents Web</p>
-        <h1>Research Desk</h1>
-        <p class="lede">Multi-ticker analysis with live execution tracking, report actions, and a streaming market chatter tape.</p>
-      </div>
-      <div class="topbar-market">
-        <div class="topbar-market-head">
-          <div>
-            <p class="eyebrow">Market Tape</p>
-            <p class="topbar-market-copy">Live benchmark indexes for the broader market backdrop.</p>
-          </div>
-          <p id="header-market-status" class="topbar-market-status">Loading market tape…</p>
-        </div>
-        <div class="ticker-marquee topbar-ticker-marquee">
-          <div id="header-market-track" class="ticker-track">
-            <div class="ticker-item market-ticker-item placeholder">Loading market tape…</div>
-          </div>
-        </div>
-      </div>
-    </header>
-
-    <main class="workspace-grid">
-      <section class="pane controls-pane">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">Configuration</p>
-            <h2>Launch Analysis</h2>
-          </div>
-          <span class="chip neutral">Batch</span>
-        </div>
-
-        <form id="analysis-form" class="control-form">
-          <label class="field field-wide">
-            <span>Tickers</span>
-            <textarea id="tickers" name="tickers" rows="4" placeholder="ASTS, NVDA, SPY"></textarea>
-          </label>
-
-          <div class="form-row">
-            <label class="field">
-              <span>Analysis Date</span>
-              <input id="analysis-date" name="analysis_date" type="date" />
-            </label>
-            <label class="field">
-              <span>Research Depth</span>
-              <select id="research-depth" name="research_depth">
-                <option value="1">Shallow</option>
-                <option value="3" selected>Medium</option>
-                <option value="5">Deep</option>
-              </select>
-            </label>
-          </div>
-
-          <section class="sidebar-section expanded">
-            <button class="sidebar-toggle" type="button" aria-expanded="true">Quick Thinker</button>
-            <div class="section-body role-card">
-              <div class="field">
-                <span>Provider</span>
-                <select id="quick-provider" name="quick_provider">
-                  <option value="openai" selected>OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="google">Google</option>
-                  <option value="xai">xAI</option>
-                  <option value="deepseek">DeepSeek</option>
-                  <option value="qwen">Qwen</option>
-                  <option value="glm">GLM</option>
-                  <option value="minimax">MiniMax</option>
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="ollama">Ollama</option>
-                </select>
-              </div>
-              <div class="field">
-                <span>Model</span>
-                <div class="select-shell">
-                  <select id="quick-thinker" name="quick_thinker" class="model-select"></select>
-                </div>
-              </div>
-              <span id="quick-promotion-status" class="role-status" aria-live="polite">Configured default</span>
-            </div>
-          </section>
-
-          <section class="sidebar-section expanded">
-            <button class="sidebar-toggle" type="button" aria-expanded="true">Deep Thinker</button>
-            <div class="section-body role-card">
-              <div class="field">
-                <span>Provider</span>
-                <select id="deep-provider" name="deep_provider">
-                  <option value="openai" selected>OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="google">Google</option>
-                  <option value="xai">xAI</option>
-                  <option value="deepseek">DeepSeek</option>
-                  <option value="qwen">Qwen</option>
-                  <option value="glm">GLM</option>
-                  <option value="minimax">MiniMax</option>
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="ollama">Ollama</option>
-                </select>
-              </div>
-              <div class="field">
-                <span>Model</span>
-                <div class="select-shell">
-                  <select id="deep-thinker" name="deep_thinker" class="model-select"></select>
-                </div>
-              </div>
-              <span id="deep-promotion-status" class="role-status" aria-live="polite">Configured default</span>
-            </div>
-          </section>
-
-          <section class="sidebar-section expanded">
-            <button class="sidebar-toggle" type="button" aria-expanded="true">Verifier / Reflection</button>
-            <div class="section-body role-card">
-              <div class="field">
-                <span>Provider</span>
-                <select id="final-report-provider" name="final_report_provider">
-                  <option value="openai" selected>OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="google">Google</option>
-                  <option value="xai">xAI</option>
-                  <option value="deepseek">DeepSeek</option>
-                  <option value="qwen">Qwen</option>
-                  <option value="glm">GLM</option>
-                  <option value="minimax">MiniMax</option>
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="ollama">Ollama</option>
-                </select>
-              </div>
-              <div class="field">
-                <span>Model</span>
-                <div class="select-shell">
-                  <select id="final-report-model" name="final_report_model" class="model-select"></select>
-                </div>
-              </div>
-              <span id="verifier-promotion-status" class="role-status" aria-live="polite">Configured default</span>
-            </div>
-          </section>
-
-          <div class="form-row provider-row">
-            <label id="openai-effort-wrap" class="field">
-              <span>OpenAI Reasoning</span>
-              <select id="openai-effort" name="openai_reasoning_effort">
-                <option value="low">Low</option>
-                <option value="medium" selected>Medium</option>
-                <option value="high">High</option>
-              </select>
-            </label>
-            <label id="google-thinking-wrap" class="field hidden">
-              <span>Gemini Thinking</span>
-              <select id="google-thinking" name="google_thinking_level">
-                <option value="">Default</option>
-                <option value="minimal">Minimal</option>
-                <option value="low">Low</option>
-                <option value="high">High</option>
-              </select>
-            </label>
-            <label id="sampling-temperature-wrap" class="field">
-              <span>Sampling Temperature</span>
-              <input id="sampling-temperature" name="temperature" type="number" min="0" max="2" step="0.1" value="0" />
-            </label>
-          </div>
-          <p id="model-capability-status" class="capability-status" aria-live="polite"></p>
-
-          <fieldset class="analyst-block">
-            <legend>Analysts</legend>
-            <label><input type="checkbox" name="analyst" value="market" checked /> Market</label>
-            <label><input type="checkbox" name="analyst" value="social" checked /> Social</label>
-            <label><input type="checkbox" name="analyst" value="news" checked /> News</label>
-            <label><input type="checkbox" name="analyst" value="fundamentals" checked /> Fundamentals</label>
-          </fieldset>
-
-          <section class="sidebar-section expanded">
-            <button class="sidebar-toggle" type="button" aria-expanded="true">Reports</button>
-            <div class="section-body reports-body">
-              <span id="report-state" class="chip neutral">Waiting</span>
-              <div class="save-block">
-                <label class="toggle-line"><input id="save-reports" name="save_reports" type="checkbox" checked /> Save reports to disk</label>
-                <label id="export-path-wrap" class="field field-wide">
-                  <span>Export Path</span>
-                  <input id="export-path" name="export_path" type="text" placeholder="/Users/slava/Documents/Development/private/investment/TradingAgents/reports/web_batch" />
-                </label>
-              </div>
-
-              <div class="report-actions">
-                <button id="open-html-report" class="primary-button" type="button" disabled>Open HTML Report</button>
-                <button id="download-markdown-report" class="secondary-button" type="button" disabled>Download Markdown</button>
-              </div>
-
-              <div class="report-notes">
-                <article class="note-card">
-                  <span>Default Save</span>
-                  <strong id="default-report-path">No report yet.</strong>
-                </article>
-                <article class="note-card">
-                  <span>Custom Save</span>
-                  <strong id="custom-report-path">Not written yet.</strong>
-                </article>
-              </div>
-            </div>
-          </section>
-
-          <section class="sidebar-section expanded">
-            <button class="sidebar-toggle" type="button" aria-expanded="true">Chatter Feed Controls</button>
-            <div class="section-body ticker-config">
-              <div class="form-row">
-                <label class="field slim">
-                  <span>Top N</span>
-                  <input id="speaking-topn" type="number" min="1" max="50" value="20" />
-                </label>
-                <label class="field slim">
-                  <span>Lookback</span>
-                  <input id="speaking-lookback" type="number" min="5" max="120" value="30" />
-                </label>
-              </div>
-              <button id="refresh-speaking" class="ghost-button wide-button" type="button">Refresh Ticker Tape</button>
-            </div>
-          </section>
-
-          <div class="button-row">
-            <button class="primary-button" type="submit">Start Run</button>
-            <button class="secondary-button" type="button" id="reset-form">Reset</button>
-          </div>
-        </form>
-      </section>
-
-      <section class="center-column">
-        <section class="pane run-pane">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Activity</p>
-              <h2>Messages &amp; Current Report</h2>
-            </div>
-          </div>
-
-          <section class="subpane activity-subpane activity-subpane-full">
-            <div class="subpane-head">
-              <h3>Messages &amp; Tools</h3>
-            </div>
-            <div id="recent-events" class="event-feed empty-state">Activity will appear here once agents start working.</div>
-            <div class="report-snippet">
-              <p class="section-kicker">Current Report</p>
-              <pre id="current-report">Waiting for report output.</pre>
-            </div>
-          </section>
-        </section>
-
-        <section class="pane results-pane">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Output</p>
-              <h2>Ticker Results</h2>
-            </div>
-          </div>
-          <div id="results-list" class="results-list empty-state">No analysis has been run yet.</div>
-        </section>
-      </section>
-
-      <aside class="pane progress-sidebar">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">Execution</p>
-            <h2>Run Status</h2>
-          </div>
-          <span id="status-badge" class="chip neutral">Idle</span>
-        </div>
-
-        <div class="summary-strip summary-strip-vertical">
-          <article class="summary-card">
-            <span>Current Ticker</span>
-            <strong id="current-ticker">—</strong>
-          </article>
-          <article class="summary-card">
-            <span>Completed</span>
-            <strong id="completed-count">0 / 0</strong>
-          </article>
-          <article class="summary-card wide">
-            <span>Message</span>
-            <strong id="progress-message">Waiting for a run.</strong>
-          </article>
-        </div>
-
-        <section class="subpane evaluation-subpane">
-          <div class="subpane-head">
-            <div>
-              <h3>Forecast Evaluation</h3>
-              <p class="capability-status">Coverage counts only; no performance guarantee.</p>
-            </div>
-            <button id="run-evaluation" class="ghost-button" type="button">Run Evaluation</button>
-          </div>
-          <div class="evaluation-controls">
-            <label class="field">
-              <span>Scope</span>
-              <select id="evaluation-scope">
-                <option value="all">All saved forecasts</option>
-                <option value="selected">Selected tickers</option>
-                <option value="current_batch">Current completed batch</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>From date</span>
-              <input id="evaluation-date-from" type="date" />
-            </label>
-            <label class="field">
-              <span>To date</span>
-              <input id="evaluation-date-to" type="date" />
-            </label>
-            <label class="toggle-line evaluation-pending-toggle">
-              <input id="evaluation-pending-only" type="checkbox" /> Pending forecasts only
-            </label>
-          </div>
-          <div class="evaluation-grid" aria-live="polite">
-            <article><span>Total</span><strong id="evaluation-total">0</strong></article>
-            <article><span>Scored</span><strong id="evaluation-scored">0</strong></article>
-            <article><span>Pending</span><strong id="evaluation-pending">0</strong></article>
-            <article><span>Errors</span><strong id="evaluation-errors">0</strong></article>
-          </div>
-          <p id="evaluation-status" class="capability-status">Not evaluated in this session.</p>
-        </section>
-
-        <section class="subpane progress-subpane progress-subpane-full">
-          <div class="subpane-head">
-            <h3>Execution Progress</h3>
-          </div>
-          <div class="table-wrap">
-            <table class="progress-table">
-              <thead>
-                <tr>
-                  <th>Team</th>
-                  <th>Agent</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody id="progress-body">
-                <tr>
-                  <td colspan="3" class="placeholder-row">Progress table will update when the run starts.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TradingAgents · My Research</title>
+    <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace-main">Skip to content</a>
+    <div class="app-shell">
+      <aside class="app-nav">
+        <a class="brand" href="#research"
+          >TradingAgents<span>RESEARCH DESK</span></a
+        >
+        <nav aria-label="Main navigation">
+          <a href="#research" data-view="research">My Research</a
+          ><a href="#new" data-view="new">New Analysis</a>
+          <a href="#runs" data-view="runs"
+            >Runs <span id="active-run-count"></span></a
+          ><a href="#discover" data-view="discover">Discover</a
+          ><a href="#settings" data-view="settings">Settings</a>
+        </nav>
+        <p class="nav-note">Your research, saved locally.</p>
       </aside>
+      <main id="workspace-main" class="workspace-main" tabindex="-1">
+        <div
+          id="workspace-notice"
+          class="workspace-notice hidden"
+          role="status"
+        ></div>
+        <section
+          id="view-research"
+          class="workspace-view research-layout"
+          aria-label="My Research"
+        >
+          <div class="research-library">
+            <header>
+              <h1>My Research</h1>
+              <p>Analyze tickers and review completed research.</p>
+            </header>
+            <label class="search-field"
+              ><span class="sr-only">Search tickers</span
+              ><input
+                id="research-search"
+                type="search"
+                placeholder="Search tickers"
+            /></label>
+            <div class="library-tools">
+              <label
+                ><span class="sr-only">Sort research</span
+                ><select id="research-sort">
+                  <option value="newest">Latest analysis</option>
+                  <option value="symbol">Ticker A–Z</option>
+                </select></label
+              ><label
+                ><span class="sr-only">Filter research</span
+                ><select id="research-filter">
+                  <option value="all">All statuses</option>
+                  <option value="completed">Completed</option>
+                  <option value="active">In progress</option>
+                  <option value="failed">Needs attention</option>
+                </select></label
+              >
+            </div>
+            <div id="research-list" class="research-list" aria-live="polite">
+              <p class="empty-state">Loading saved research…</p>
+            </div>
+            <p id="research-count" class="subtle"></p>
+            <button id="reload-history" class="text-button" type="button">
+              Refresh history
+            </button>
+          </div>
+          <div id="research-detail" class="research-detail">
+            <div class="empty-detail">
+              <h2>Your research starts here</h2>
+              <p>
+                Open a ticker to see its recommendations, reports and history.
+              </p>
+              <a href="#new" class="primary-button">New analysis</a>
+            </div>
+          </div>
+        </section>
+        <section
+          id="view-new"
+          class="workspace-view hidden"
+          aria-label="New Analysis"
+        >
+          <div class="page-heading">
+            <div>
+              <h1>New Analysis</h1>
+              <p>Select tickers, choose a date, and start your research.</p>
+            </div>
+            <a href="#research" class="text-button">Back to research</a>
+          </div>
+          <form id="analysis-form" class="control-form analysis-form">
+            <div class="field field-wide">
+              <label for="tickers">Tickers</label>
+              <input
+                id="tickers"
+                name="tickers"
+                type="text"
+                placeholder="PENG, NVDA, SHOP.TO"
+                autocomplete="off"
+                required
+                aria-describedby="ticker-selection-status"
+              />
+              <div id="ticker-chips" class="ticker-chips"></div>
+              <small id="ticker-selection-status" aria-live="polite"
+                >Enter or paste tickers separated by commas or spaces.</small
+              >
+            </div>
 
-    </main>
+            <div class="form-row">
+              <label class="field">
+                <span>Analysis Date</span>
+                <input id="analysis-date" name="analysis_date" type="date" />
+              </label>
+              <label class="field">
+                <span>Research Depth</span>
+                <select id="research-depth" name="research_depth">
+                  <option value="1">Shallow</option>
+                  <option value="3" selected>Medium</option>
+                  <option value="5">Deep</option>
+                </select>
+              </label>
+            </div>
 
-    <section class="pane ticker-pane">
-      <div class="ticker-pane-head">
-        <div>
-          <p class="section-kicker">Market Chatter</p>
-          <h2>Chatter Candidates</h2>
-        </div>
-        <p id="ticker-status" class="ticker-status">Loading chatter tape…</p>
-      </div>
-      <div class="ticker-marquee">
-        <div id="ticker-track" class="ticker-track">
-          <div class="ticker-item placeholder">Refreshing chatter feed…</div>
-        </div>
-      </div>
-    </section>
-  </div>
+            <div class="preset-summary">
+              <div>
+                <strong>Analysis models</strong>
+                <p id="analysis-model-summary">Using your configured models.</p>
+              </div>
+              <button id="configure-models" class="text-button" type="button">
+                Customize
+              </button>
+            </div>
+            <details id="analysis-advanced" class="advanced-options">
+              <summary>Advanced options</summary>
+              <div class="advanced-body">
+                <div class="model-roles">
+                  <section class="sidebar-section expanded">
+                    <button
+                      class="sidebar-toggle"
+                      type="button"
+                      aria-expanded="true"
+                    >
+                      Quick Thinker
+                    </button>
+                    <div class="section-body role-card">
+                      <div class="field">
+                        <label for="quick-provider">Provider</label>
+                        <select
+                          aria-label="Quick provider"
+                          id="quick-provider"
+                          name="quick_provider"
+                        >
+                          <option value="openai" selected>OpenAI</option>
+                          <option value="anthropic">Anthropic</option>
+                          <option value="google">Google</option>
+                          <option value="xai">xAI</option>
+                          <option value="deepseek">DeepSeek</option>
+                          <option value="meta">Meta</option>
+                          <option value="qwen">Qwen</option>
+                          <option value="qwen-cn">Qwen (China)</option>
+                          <option value="glm">GLM</option>
+                          <option value="glm-cn">GLM (China)</option>
+                          <option value="minimax">MiniMax</option>
+                          <option value="minimax-cn">MiniMax (China)</option>
+                          <option value="openrouter">OpenRouter</option>
+                          <option value="mistral">Mistral</option>
+                          <option value="kimi">Kimi</option>
+                          <option value="groq">Groq</option>
+                          <option value="nvidia">NVIDIA NIM</option>
+                          <option value="ollama">Ollama</option>
+                          <option value="azure">Azure OpenAI</option>
+                          <option value="bedrock">Amazon Bedrock</option>
+                          <option value="openai_compatible">
+                            OpenAI-compatible
+                          </option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <span>Model</span>
+                        <div class="select-shell">
+                          <select
+                            aria-label="Quick model"
+                            id="quick-thinker"
+                            name="quick_thinker"
+                            class="model-select"
+                          ></select>
+                        </div>
+                      </div>
+                      <label id="quick-custom-model-wrap" class="field hidden">
+                        <span>Custom model ID</span>
+                        <input
+                          id="quick-custom-model"
+                          type="text"
+                          autocomplete="off"
+                          placeholder="Exact provider model ID"
+                        />
+                      </label>
+                      <span
+                        id="quick-promotion-status"
+                        class="role-status"
+                        aria-live="polite"
+                        >Configured default</span
+                      >
+                      <button
+                        id="refresh-quick-models"
+                        class="ghost-button model-refresh-button"
+                        type="button"
+                      >
+                        Refresh available models
+                      </button>
+                      <span
+                        id="quick-model-refresh-status"
+                        class="role-status"
+                        aria-live="polite"
+                      ></span>
+                    </div>
+                  </section>
+                  <section class="sidebar-section expanded">
+                    <button
+                      class="sidebar-toggle"
+                      type="button"
+                      aria-expanded="true"
+                    >
+                      Deep Thinker
+                    </button>
+                    <div class="section-body role-card">
+                      <div class="field">
+                        <label for="deep-provider">Provider</label>
+                        <select
+                          aria-label="Deep provider"
+                          id="deep-provider"
+                          name="deep_provider"
+                        >
+                          <option value="openai" selected>OpenAI</option>
+                          <option value="anthropic">Anthropic</option>
+                          <option value="google">Google</option>
+                          <option value="xai">xAI</option>
+                          <option value="deepseek">DeepSeek</option>
+                          <option value="meta">Meta</option>
+                          <option value="qwen">Qwen</option>
+                          <option value="qwen-cn">Qwen (China)</option>
+                          <option value="glm">GLM</option>
+                          <option value="glm-cn">GLM (China)</option>
+                          <option value="minimax">MiniMax</option>
+                          <option value="minimax-cn">MiniMax (China)</option>
+                          <option value="openrouter">OpenRouter</option>
+                          <option value="mistral">Mistral</option>
+                          <option value="kimi">Kimi</option>
+                          <option value="groq">Groq</option>
+                          <option value="nvidia">NVIDIA NIM</option>
+                          <option value="ollama">Ollama</option>
+                          <option value="azure">Azure OpenAI</option>
+                          <option value="bedrock">Amazon Bedrock</option>
+                          <option value="openai_compatible">
+                            OpenAI-compatible
+                          </option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <span>Model</span>
+                        <div class="select-shell">
+                          <select
+                            aria-label="Deep model"
+                            id="deep-thinker"
+                            name="deep_thinker"
+                            class="model-select"
+                          ></select>
+                        </div>
+                      </div>
+                      <label id="deep-custom-model-wrap" class="field hidden">
+                        <span>Custom model ID</span>
+                        <input
+                          id="deep-custom-model"
+                          type="text"
+                          autocomplete="off"
+                          placeholder="Exact provider model ID"
+                        />
+                      </label>
+                      <span
+                        id="deep-promotion-status"
+                        class="role-status"
+                        aria-live="polite"
+                        >Configured default</span
+                      >
+                      <button
+                        id="refresh-deep-models"
+                        class="ghost-button model-refresh-button"
+                        type="button"
+                      >
+                        Refresh available models
+                      </button>
+                      <span
+                        id="deep-model-refresh-status"
+                        class="role-status"
+                        aria-live="polite"
+                      ></span>
+                    </div>
+                  </section>
+                  <section class="sidebar-section expanded">
+                    <button
+                      class="sidebar-toggle"
+                      type="button"
+                      aria-expanded="true"
+                    >
+                      Verifier / Reflection
+                    </button>
+                    <div class="section-body role-card">
+                      <div class="field">
+                        <label for="final-report-provider">Provider</label>
+                        <select
+                          aria-label="Verifier provider"
+                          id="final-report-provider"
+                          name="final_report_provider"
+                        >
+                          <option value="openai" selected>OpenAI</option>
+                          <option value="anthropic">Anthropic</option>
+                          <option value="google">Google</option>
+                          <option value="xai">xAI</option>
+                          <option value="deepseek">DeepSeek</option>
+                          <option value="meta">Meta</option>
+                          <option value="qwen">Qwen</option>
+                          <option value="qwen-cn">Qwen (China)</option>
+                          <option value="glm">GLM</option>
+                          <option value="glm-cn">GLM (China)</option>
+                          <option value="minimax">MiniMax</option>
+                          <option value="minimax-cn">MiniMax (China)</option>
+                          <option value="openrouter">OpenRouter</option>
+                          <option value="mistral">Mistral</option>
+                          <option value="kimi">Kimi</option>
+                          <option value="groq">Groq</option>
+                          <option value="nvidia">NVIDIA NIM</option>
+                          <option value="ollama">Ollama</option>
+                          <option value="azure">Azure OpenAI</option>
+                          <option value="bedrock">Amazon Bedrock</option>
+                          <option value="openai_compatible">
+                            OpenAI-compatible
+                          </option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <span>Model</span>
+                        <div class="select-shell">
+                          <select
+                            aria-label="Verifier model"
+                            id="final-report-model"
+                            name="final_report_model"
+                            class="model-select"
+                          ></select>
+                        </div>
+                      </div>
+                      <label
+                        id="verifier-custom-model-wrap"
+                        class="field hidden"
+                      >
+                        <span>Custom model ID</span>
+                        <input
+                          id="verifier-custom-model"
+                          type="text"
+                          autocomplete="off"
+                          placeholder="Exact provider model ID"
+                        />
+                      </label>
+                      <span
+                        id="verifier-promotion-status"
+                        class="role-status"
+                        aria-live="polite"
+                        >Configured default</span
+                      >
+                      <button
+                        id="refresh-verifier-models"
+                        class="ghost-button model-refresh-button"
+                        type="button"
+                      >
+                        Refresh available models
+                      </button>
+                      <span
+                        id="verifier-model-refresh-status"
+                        class="role-status"
+                        aria-live="polite"
+                      ></span>
+                    </div>
+                  </section>
+                </div>
+                <p class="capability-status">
+                  Curated choices remain available if refresh fails; use Custom
+                  model ID for an account-specific model.
+                </p>
+                <div class="form-row provider-row">
+                  <label id="openai-effort-wrap" class="field">
+                    <span>OpenAI Reasoning</span>
+                    <select id="openai-effort" name="openai_reasoning_effort">
+                      <option value="low">Low</option>
+                      <option value="medium" selected>Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </label>
+                  <label id="google-thinking-wrap" class="field hidden">
+                    <span>Gemini Thinking</span>
+                    <select id="google-thinking" name="google_thinking_level">
+                      <option value="">Default</option>
+                      <option value="minimal">Minimal</option>
+                      <option value="low">Low</option>
+                      <option value="high">High</option>
+                    </select>
+                  </label>
+                  <label id="sampling-temperature-wrap" class="field">
+                    <span>Sampling Temperature</span>
+                    <input
+                      id="sampling-temperature"
+                      name="temperature"
+                      type="number"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      value="0"
+                    />
+                  </label>
+                </div>
+                <p
+                  id="model-capability-status"
+                  class="capability-status"
+                  aria-live="polite"
+                ></p>
 
-  <div id="ticker-modal" class="modal-shell hidden" aria-hidden="true">
-    <div class="modal-backdrop" data-close-modal="true"></div>
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ticker-modal-title">
-      <div class="modal-head">
-        <div>
-          <p class="section-kicker">Ticker Detail</p>
-          <h2 id="ticker-modal-title">Ticker</h2>
+                <fieldset class="analyst-block">
+                  <legend>Analysts</legend>
+                  <label
+                    ><input
+                      type="checkbox"
+                      name="analyst"
+                      value="market"
+                      checked
+                    />
+                    Market</label
+                  >
+                  <label
+                    ><input
+                      type="checkbox"
+                      name="analyst"
+                      value="social"
+                      checked
+                    />
+                    Social</label
+                  >
+                  <label
+                    ><input
+                      type="checkbox"
+                      name="analyst"
+                      value="news"
+                      checked
+                    />
+                    News</label
+                  >
+                  <label
+                    ><input
+                      type="checkbox"
+                      name="analyst"
+                      value="fundamentals"
+                      checked
+                    />
+                    Fundamentals</label
+                  >
+                </fieldset>
+                <section class="export-settings">
+                  <h3>Custom export</h3>
+                  <p>
+                    Reports are always saved to the research library. Optionally
+                    export an additional copy.
+                  </p>
+                  <label class="toggle-line"
+                    ><input
+                      id="save-reports"
+                      name="save_reports"
+                      type="checkbox"
+                      checked
+                    />
+                    Enable custom export</label
+                  ><label id="export-path-wrap" class="field"
+                    ><span>Export folder</span
+                    ><input
+                      id="export-path"
+                      name="export_path"
+                      type="text"
+                      placeholder="Optional local folder"
+                  /></label>
+                </section>
+              </div>
+            </details>
+            <div class="analysis-actions">
+              <p id="analysis-form-status" role="status">Ready to analyze.</p>
+              <div class="button-row">
+                <button id="reset-form" class="secondary-button" type="button">
+                  Reset</button
+                ><button
+                  id="start-analysis"
+                  class="primary-button"
+                  type="submit"
+                >
+                  Analyze tickers
+                </button>
+              </div>
+            </div>
+          </form>
+        </section>
+        <section id="view-runs" class="workspace-view hidden" aria-label="Runs">
+          <div class="page-heading">
+            <div>
+              <h1>Runs</h1>
+              <p>Track batches and open their consolidated reports.</p>
+            </div>
+            <a class="primary-button" href="#new">New analysis</a>
+          </div>
+          <div class="runs-layout">
+            <div id="runs-list" class="runs-list"></div>
+            <div class="run-detail">
+              <div id="run-heading"></div>
+              <div id="run-runtime" class="hidden">
+                <div class="run-summary">
+                  <span id="status-badge" class="chip neutral">Idle</span
+                  ><span
+                    ><strong id="completed-count">0 / 0</strong> processed</span
+                  ><span
+                    >Current ticker:
+                    <strong id="current-ticker">—</strong></span
+                  >
+                </div>
+                <p id="progress-message" role="status">Waiting for a run.</p>
+                <div id="run-ticker-statuses" class="run-ticker-statuses"></div>
+                <details class="activity-details">
+                  <summary>Activity and execution details</summary>
+                  <div class="progress-sidebar">
+                    <h3>Execution Progress</h3>
+                    <div class="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Team</th>
+                            <th>Agent</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody id="progress-body"></tbody>
+                      </table>
+                    </div>
+                    <h3>Messages &amp; Tools</h3>
+                    <div id="recent-events" class="event-feed"></div>
+                    <h3>Current Report</h3>
+                    <pre id="current-report"></pre>
+                  </div>
+                </details>
+                <details>
+                  <summary>Detailed ticker results</summary>
+                  <div id="results-list" class="results-list"></div>
+                </details>
+                <div class="legacy-report-controls hidden">
+                  <span id="report-state"></span
+                  ><button id="open-html-report" type="button" disabled>
+                    Open consolidated report</button
+                  ><button id="download-markdown-report" type="button" disabled>
+                    Download Markdown</button
+                  ><span id="default-report-path"></span
+                  ><span id="custom-report-path"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <details class="evaluation-details">
+            <summary>Evaluate saved forecasts</summary>
+            <section class="subpane evaluation-subpane">
+              <div class="subpane-head">
+                <div>
+                  <h3>Forecast Evaluation</h3>
+                  <p class="capability-status">
+                    Coverage counts only; no performance guarantee.
+                  </p>
+                </div>
+                <button id="run-evaluation" class="ghost-button" type="button">
+                  Run Evaluation
+                </button>
+              </div>
+              <div class="evaluation-controls">
+                <label class="field">
+                  <span>Scope</span>
+                  <select id="evaluation-scope">
+                    <option value="all">All saved forecasts</option>
+                    <option value="selected">Selected tickers</option>
+                    <option value="current_batch">
+                      Current completed batch
+                    </option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>From date</span>
+                  <input id="evaluation-date-from" type="date" />
+                </label>
+                <label class="field">
+                  <span>To date</span>
+                  <input id="evaluation-date-to" type="date" />
+                </label>
+                <label class="toggle-line evaluation-pending-toggle">
+                  <input id="evaluation-pending-only" type="checkbox" /> Pending
+                  forecasts only
+                </label>
+              </div>
+              <div class="evaluation-grid" aria-live="polite">
+                <article>
+                  <span>Total</span><strong id="evaluation-total">0</strong>
+                </article>
+                <article>
+                  <span>Scored</span><strong id="evaluation-scored">0</strong>
+                </article>
+                <article>
+                  <span>Pending</span><strong id="evaluation-pending">0</strong>
+                </article>
+                <article>
+                  <span>Errors</span><strong id="evaluation-errors">0</strong>
+                </article>
+              </div>
+              <p id="evaluation-status" class="capability-status">
+                Not evaluated in this session.
+              </p>
+            </section>
+          </details>
+        </section>
+        <section
+          id="view-discover"
+          class="workspace-view hidden"
+          aria-label="Discover"
+        >
+          <div class="page-heading">
+            <div>
+              <h1>Discover</h1>
+              <p>Find candidates to add to your next analysis.</p>
+            </div>
+          </div>
+          <section class="market-overview">
+            <h2>Market overview</h2>
+            <p id="header-market-status" class="subtle">
+              Open Discover to load market data.
+            </p>
+            <div id="header-market-track" class="ticker-track"></div>
+          </section>
+          <section class="ticker-pane">
+            <div class="section-head">
+              <div>
+                <h2>Chatter Candidates</h2>
+                <p id="ticker-status" class="ticker-status">
+                  Open Discover to load candidates.
+                </p>
+              </div>
+            </div>
+            <div class="discovery-controls">
+              <label class="field"
+                ><span>Number of candidates</span
+                ><input
+                  id="speaking-topn"
+                  type="number"
+                  min="1"
+                  max="50"
+                  value="20" /></label
+              ><label class="field"
+                ><span>Lookback days</span
+                ><input
+                  id="speaking-lookback"
+                  type="number"
+                  min="5"
+                  max="120"
+                  value="30" /></label
+              ><button
+                id="refresh-speaking"
+                class="secondary-button"
+                type="button"
+              >
+                Refresh candidates
+              </button>
+            </div>
+            <div id="ticker-track" class="ticker-track"></div>
+          </section>
+        </section>
+        <section
+          id="view-settings"
+          class="workspace-view hidden"
+          aria-label="Settings"
+        >
+          <div class="page-heading">
+            <div>
+              <h1>Settings</h1>
+              <p>Manage analysis defaults and data sources.</p>
+            </div>
+          </div>
+          <section class="settings-section">
+            <h2>Analysis defaults</h2>
+            <p>
+              Your model, depth and analyst selections can be saved in this
+              browser. API keys stay on the server.
+            </p>
+            <p id="settings-model-summary"></p>
+            <div class="inline-actions">
+              <button
+                id="edit-model-defaults"
+                class="secondary-button"
+                type="button"
+              >
+                Edit analysis setup</button
+              ><button
+                id="save-analysis-defaults"
+                class="primary-button"
+                type="button"
+              >
+                Save current setup as default
+              </button>
+            </div>
+            <p id="defaults-status" role="status"></p>
+          </section>
+          <section class="settings-section">
+            <h2>Data sources</h2>
+            <p>Connect financial data, economic indicators and SEC filings.</p>
+            <button
+              id="open-data-settings"
+              class="secondary-button"
+              type="button"
+            >
+              Manage data sources
+            </button>
+          </section>
+          <section class="settings-section">
+            <h2>Saved reports</h2>
+            <p>
+              Investor reports, full research and consolidated batch reports are
+              available from My Research and Runs. Existing report files are
+              imported automatically.
+            </p>
+            <a class="text-button" href="#runs">Browse saved batches</a>
+          </section>
+        </section>
+      </main>
+    </div>
+    <div id="ticker-modal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-modal="true"></div>
+      <div
+        class="modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ticker-modal-title"
+      >
+        <div class="modal-head">
+          <div>
+            <p class="section-kicker">Ticker Detail</p>
+            <h2 id="ticker-modal-title">Ticker</h2>
+          </div>
+          <button
+            id="close-ticker-modal"
+            class="ghost-button icon-button"
+            type="button"
+            aria-label="Close"
+          >
+            Close
+          </button>
         </div>
-        <button id="close-ticker-modal" class="ghost-button icon-button" type="button" aria-label="Close">×</button>
-      </div>
         <div class="modal-body">
           <div class="modal-metrics">
-          <article class="metric-box"><span>Rank Score</span><strong id="modal-score">—</strong></article>
-          <article class="metric-box"><span>Price</span><strong id="modal-price">—</strong></article>
-          <article class="metric-box"><span>5D Return</span><strong id="modal-ret5">—</strong></article>
-          <article class="metric-box"><span>Avg Checks</span><strong id="modal-trend">—</strong></article>
-        </div>
-        <div class="modal-copy">
-          <div class="company-at-a-glance">
-            <article class="note-card"><span>Company</span><strong id="modal-company-name">—</strong></article>
-            <article class="note-card"><span>Sector</span><strong id="modal-sector">—</strong></article>
-            <article class="note-card"><span>Industry</span><strong id="modal-industry">—</strong></article>
-            <article class="note-card"><span>Market Cap</span><strong id="modal-market-cap">—</strong></article>
-            <article class="note-card"><span>P/E</span><strong id="modal-pe">—</strong></article>
-            <article class="note-card"><span>Current Price</span><strong id="modal-current-price">—</strong></article>
-            <article class="note-card"><span>52W High</span><strong id="modal-52w-high">—</strong></article>
-            <article class="note-card"><span>52W Low</span><strong id="modal-52w-low">—</strong></article>
-            <article class="note-card"><span>Avg Volume</span><strong id="modal-volume">—</strong></article>
-            <article class="note-card"><span>Employees</span><strong id="modal-employees">—</strong></article>
-            <article class="note-card"><span>Website</span><strong id="modal-website">—</strong></article>
-            <article class="note-card"><span>Lookback Window</span><strong id="modal-lookback">—</strong></article>
-            <article class="note-card"><span>Momentum Z-Score</span><strong id="modal-zret5">—</strong></article>
+            <article class="metric-box">
+              <span>Rank Score</span><strong id="modal-score">—</strong>
+            </article>
+            <article class="metric-box">
+              <span>Price</span><strong id="modal-price">—</strong>
+            </article>
+            <article class="metric-box">
+              <span>5D Return</span><strong id="modal-ret5">—</strong>
+            </article>
+            <article class="metric-box">
+              <span>Avg Checks</span><strong id="modal-trend">—</strong>
+            </article>
           </div>
-          <p id="modal-description">No ticker selected.</p>
+          <div class="modal-copy">
+            <div class="company-at-a-glance">
+              <article class="note-card">
+                <span>Company</span><strong id="modal-company-name">—</strong>
+              </article>
+              <article class="note-card">
+                <span>Sector</span><strong id="modal-sector">—</strong>
+              </article>
+              <article class="note-card">
+                <span>Industry</span><strong id="modal-industry">—</strong>
+              </article>
+              <article class="note-card">
+                <span>Market Cap</span><strong id="modal-market-cap">—</strong>
+              </article>
+              <article class="note-card">
+                <span>P/E</span><strong id="modal-pe">—</strong>
+              </article>
+              <article class="note-card">
+                <span>Current Price</span
+                ><strong id="modal-current-price">—</strong>
+              </article>
+              <article class="note-card">
+                <span>52W High</span><strong id="modal-52w-high">—</strong>
+              </article>
+              <article class="note-card">
+                <span>52W Low</span><strong id="modal-52w-low">—</strong>
+              </article>
+              <article class="note-card">
+                <span>Avg Volume</span><strong id="modal-volume">—</strong>
+              </article>
+              <article class="note-card">
+                <span>Employees</span><strong id="modal-employees">—</strong>
+              </article>
+              <article class="note-card">
+                <span>Website</span><strong id="modal-website">—</strong>
+              </article>
+              <article class="note-card">
+                <span>Lookback Window</span
+                ><strong id="modal-lookback">—</strong>
+              </article>
+              <article class="note-card">
+                <span>Momentum Z-Score</span><strong id="modal-zret5">—</strong>
+              </article>
+            </div>
+            <p id="modal-description">No ticker selected.</p>
+          </div>
         </div>
-      </div>
-      <div class="modal-actions">
-        <button id="add-ticker-to-analysis" class="primary-button" type="button">Add to Analysis</button>
+        <div class="modal-actions">
+          <button
+            id="add-ticker-to-analysis"
+            class="primary-button"
+            type="button"
+          >
+            Add to Analysis
+          </button>
+        </div>
       </div>
     </div>
-  </div>
 
-  <script>
-    window.TRADINGAGENTS_MODEL_OPTIONS = __MODEL_OPTIONS_JSON__;
-    window.TRADINGAGENTS_ROLE_MODEL_OPTIONS = __ROLE_MODEL_OPTIONS_JSON__;
-    window.TRADINGAGENTS_MODEL_CAPABILITIES = __MODEL_CAPABILITIES_JSON__;
-    window.TRADINGAGENTS_ROLE_DEFAULTS = __ROLE_DEFAULTS_JSON__;
-  </script>
-  <script src="/static/app.js?v=__ASSET_VERSION__" defer></script>
-</body>
+    <div id="data-settings-modal" class="modal-shell hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-settings="true"></div>
+      <div
+        class="modal-card settings-modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="data-settings-title"
+      >
+        <div class="modal-head">
+          <div>
+            <p class="section-kicker">Settings</p>
+            <h2 id="data-settings-title">Data Sources</h2>
+          </div>
+          <button
+            id="close-data-settings"
+            class="ghost-button icon-button"
+            type="button"
+            aria-label="Close data source settings"
+          >
+            Close
+          </button>
+        </div>
+        <div class="modal-body settings-body">
+          <p class="settings-security-note">
+            Saved locally. Secret values are never returned to the browser.
+          </p>
+
+          <article class="credential-row">
+            <div class="credential-heading">
+              <strong>SEC filings</strong
+              ><span id="SEC_USER_AGENT-status" class="credential-status"
+                >Checking…</span
+              >
+            </div>
+            <label class="field"
+              ><span>Application and contact email</span
+              ><input
+                type="text"
+                autocomplete="off"
+                placeholder="TradingAgents your-email@example.com"
+                data-setting-key="SEC_USER_AGENT"
+            /></label>
+            <div class="credential-actions">
+              <a
+                href="https://www.sec.gov/about/webmaster-frequently-asked-questions"
+                target="_blank"
+                rel="noreferrer"
+                >Access guidance</a
+              ><button
+                class="ghost-button remove-setting"
+                type="button"
+                data-setting-key="SEC_USER_AGENT"
+              >
+                Remove saved value
+              </button>
+            </div>
+          </article>
+
+          <article class="credential-row">
+            <div class="credential-heading">
+              <strong>Financial Modeling Prep</strong
+              ><span id="FMP_API_KEY-status" class="credential-status"
+                >Checking…</span
+              >
+            </div>
+            <label class="field"
+              ><span>API key</span>
+              <div class="secret-input">
+                <input
+                  type="password"
+                  autocomplete="new-password"
+                  placeholder="Enter API key"
+                  data-setting-key="FMP_API_KEY"
+                /><button
+                  class="ghost-button secret-toggle"
+                  type="button"
+                  data-secret-target="FMP_API_KEY"
+                  title="Show or hide entered key"
+                >
+                  Show
+                </button>
+              </div></label
+            >
+            <div class="credential-actions">
+              <a
+                href="https://site.financialmodelingprep.com/developer/docs"
+                target="_blank"
+                rel="noreferrer"
+                >Get a key</a
+              ><button
+                class="ghost-button remove-setting"
+                type="button"
+                data-setting-key="FMP_API_KEY"
+              >
+                Remove saved key
+              </button>
+            </div>
+          </article>
+
+          <article class="credential-row">
+            <div class="credential-heading">
+              <strong>FRED</strong
+              ><span id="FRED_API_KEY-status" class="credential-status"
+                >Checking…</span
+              >
+            </div>
+            <label class="field"
+              ><span>API key</span>
+              <div class="secret-input">
+                <input
+                  type="password"
+                  autocomplete="new-password"
+                  placeholder="Enter API key"
+                  data-setting-key="FRED_API_KEY"
+                /><button
+                  class="ghost-button secret-toggle"
+                  type="button"
+                  data-secret-target="FRED_API_KEY"
+                  title="Show or hide entered key"
+                >
+                  Show
+                </button>
+              </div></label
+            >
+            <div class="credential-actions">
+              <a
+                href="https://fred.stlouisfed.org/docs/api/api_key.html"
+                target="_blank"
+                rel="noreferrer"
+                >Get a key</a
+              ><button
+                class="ghost-button remove-setting"
+                type="button"
+                data-setting-key="FRED_API_KEY"
+              >
+                Remove saved key
+              </button>
+            </div>
+          </article>
+
+          <article class="credential-row">
+            <div class="credential-heading">
+              <strong>Alpha Vantage</strong
+              ><span id="ALPHA_VANTAGE_API_KEY-status" class="credential-status"
+                >Checking…</span
+              >
+            </div>
+            <label class="field"
+              ><span>API key</span>
+              <div class="secret-input">
+                <input
+                  type="password"
+                  autocomplete="new-password"
+                  placeholder="Enter API key"
+                  data-setting-key="ALPHA_VANTAGE_API_KEY"
+                /><button
+                  class="ghost-button secret-toggle"
+                  type="button"
+                  data-secret-target="ALPHA_VANTAGE_API_KEY"
+                  title="Show or hide entered key"
+                >
+                  Show
+                </button>
+              </div></label
+            >
+            <div class="credential-actions">
+              <a
+                href="https://www.alphavantage.co/support/#api-key"
+                target="_blank"
+                rel="noreferrer"
+                >Get a key</a
+              ><button
+                class="ghost-button remove-setting"
+                type="button"
+                data-setting-key="ALPHA_VANTAGE_API_KEY"
+              >
+                Remove saved key
+              </button>
+            </div>
+          </article>
+        </div>
+        <div class="modal-actions settings-footer">
+          <p
+            id="data-settings-status"
+            class="capability-status"
+            aria-live="polite"
+          >
+            Open settings to load saved status.
+          </p>
+          <button id="save-data-settings" class="primary-button" type="button">
+            Save Settings
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      window.TRADINGAGENTS_MODEL_OPTIONS = __MODEL_OPTIONS_JSON__;
+      window.TRADINGAGENTS_ROLE_MODEL_OPTIONS = __ROLE_MODEL_OPTIONS_JSON__;
+      window.TRADINGAGENTS_MODEL_CAPABILITIES = __MODEL_CAPABILITIES_JSON__;
+      window.TRADINGAGENTS_CATALOG_METADATA = __CATALOG_METADATA_JSON__;
+      window.TRADINGAGENTS_DISCOVERY_PROVIDERS = __DISCOVERY_PROVIDERS_JSON__;
+      window.TRADINGAGENTS_ROLE_DEFAULTS = __ROLE_DEFAULTS_JSON__;
+    </script>
+    <script src="/static/model_picker.js?v=__ASSET_VERSION__" defer></script>
+    <script src="/static/research.js?v=__ASSET_VERSION__" defer></script>
+    <script src="/static/app.js?v=__ASSET_VERSION__" defer></script>
+    <script src="/static/workspace.js?v=__ASSET_VERSION__" defer></script>
+  </body>
 </html>

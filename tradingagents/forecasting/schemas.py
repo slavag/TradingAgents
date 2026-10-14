@@ -206,10 +206,12 @@ class ForecastRecordPayload(_FrozenModel):
             raise ValueError("non-actionable forecast cannot carry a rating")
 
         if self.target_validation_status == "Accepted":
-            if self.central_target is None:
-                raise ValueError("accepted target validation requires a central target")
-        elif self.central_target is not None:
-            raise ValueError("only accepted target validation may carry a central target")
+            if self.central_target is None and not has_low:
+                raise ValueError("accepted target validation requires a point or range")
+            if has_low and self.central_target is None and self.expected_return is not None:
+                raise ValueError("range-only target cannot carry an invented expected return")
+        elif self.central_target is not None or has_low:
+            raise ValueError("only accepted target validation may carry a target")
 
         if (
             self.target_validation_status == "Rejected"

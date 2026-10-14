@@ -15,7 +15,10 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_OUTPUT_LANGUAGE":      "output_language",
     "TRADINGAGENTS_MAX_DEBATE_ROUNDS":    "max_debate_rounds",
     "TRADINGAGENTS_MAX_RISK_ROUNDS":      "max_risk_discuss_rounds",
+    "TRADINGAGENTS_ANTHROPIC_PROMPT_CACHE": "anthropic_prompt_cache",
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
+    "TRADINGAGENTS_ENRICHMENT_ENABLED":   "enrichment_enabled",
+    "TRADINGAGENTS_EVIDENCE_PROMPT_MAX_CHARS": "evidence_prompt_max_chars",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_OUTCOME_HOLDING_DAYS": "outcome_holding_days",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
@@ -132,12 +135,17 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Checkpoint/resume: when True, LangGraph saves state after each node
     # so a crashed run can resume from the last successful step.
     "checkpoint_enabled": False,
+    # Collect optional, source-labelled filings and earnings records once per run.
+    "enrichment_enabled": True,
+    # Hard character budget for source records inserted into each agent prompt.
+    "evidence_prompt_max_chars": 18000,
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
     "output_language": "English",
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
+    "anthropic_prompt_cache": True,
     "max_recur_limit": 100,
     # News / data fetching parameters
     # Increase for longer lookback strategies or to broaden macro coverage;
@@ -166,6 +174,8 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "news_data": "yfinance",             # Options: alpha_vantage, yfinance
         "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
         "prediction_markets": "polymarket",  # Options: polymarket (keyless)
+        "regulatory_filings": "sec",         # Options: sec (SEC_USER_AGENT required)
+        "earnings_data": "fmp",              # Options: fmp (FMP_API_KEY required)
     },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {

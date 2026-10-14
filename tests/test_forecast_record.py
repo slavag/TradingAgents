@@ -167,6 +167,32 @@ def test_schema_rejects_partial_target_range():
         forecast_payload(target_low=Decimal("220"), target_high=None)
 
 
+def test_schema_accepts_range_without_invented_central_target_or_return():
+    payload = forecast_payload(
+        rating="Hold", central_target=None,
+        target_low=Decimal("72.83"), target_high=Decimal("77.10"),
+        expected_return=None,
+        missing_fields=("expected_excess_return", "distribution", "direction_probabilities"),
+        target_confidence_score=18,
+    )
+
+    assert payload.target_validation_status == "Accepted"
+    assert payload.central_target is None
+    assert payload.target_low == Decimal("72.83")
+    assert payload.target_high == Decimal("77.10")
+
+
+def test_schema_keeps_central_target_with_a_scoring_interval():
+    payload = forecast_payload(
+        target_low=Decimal("220"), target_high=Decimal("260"),
+    )
+
+    assert payload.central_target == Decimal("250")
+    assert (payload.target_low, payload.target_high) == (
+        Decimal("220"), Decimal("260"),
+    )
+
+
 def test_schema_rejects_non_actionable_rating():
     with pytest.raises(ValidationError, match="non-actionable forecast cannot carry a rating"):
         forecast_payload(
@@ -266,6 +292,48 @@ def actionable_decision() -> PortfolioDecision:
         supporting_quote="Verified close: 236.22. Price target: 250.",
         target_validation_status=TargetValidationStatus.ACCEPTED,
     )
+
+
+def test_forecast_record_from_state_maps_accepted_range_without_midpoint():
+    values = actionable_decision().model_dump()
+    values.update({
+        "rating": PortfolioRating.HOLD,
+        "price_target": None,
+        "supporting_quote": None,
+        "target_low": 72.83,
+        "target_high": 77.10,
+        "supporting_quote_low": "| Low | 72.83 |",
+        "supporting_quote_high": "| High | 77.10 |",
+        "target_method": "Technical scenario",
+        "target_risks": "A failed breakout invalidates the range.",
+        "time_horizon": "3 months",
+        "confidence_score": 18,
+    })
+    decision = PortfolioDecision.model_validate(values)
+    state = {
+        "asset_type": "stock", "trade_date": "2026-10-09",
+        "portfolio_decision": decision.model_dump(mode="json"),
+        "final_trade_decision": render_pm_decision(decision),
+        "verified_market_snapshot": {
+            "symbol": "PENG", "requested_date": "2026-10-09",
+            "observed_on": "2026-10-09", "observed_at": None,
+            "close": "75.74", "quote_currency": "USD",
+            "adjustment_basis": "split_adjusted", "vendor": "yfinance",
+        },
+    }
+
+    record = forecast_record_from_state(
+        state, "PENG", {"models": {}, "temperature": 0.0},
+        generated_at=datetime(2026, 10, 9, 18, 30, tzinfo=timezone.utc),
+    )
+
+    assert record.target_validation_status == "Accepted"
+    assert record.central_target is None
+    assert record.target_low == Decimal("72.83")
+    assert record.target_high == Decimal("77.10")
+    assert record.expected_return is None
+    assert "target_range" not in record.missing_fields
+    assert '"target_low":"72.83"' in canonical_payload_json(record)
 
 
 def test_forecast_record_from_state_maps_typed_decision_and_exact_provenance():

@@ -25,7 +25,7 @@ from rich.text import Text
 
 from cli.announcements import display_announcements, fetch_announcements
 from cli.models import AssetType
-from cli.stats_handler import StatsCallbackHandler
+from cli.stats_handler import StatsCallbackHandler, format_cache_usage
 from cli.utils import (
     ask_anthropic_effort,
     ask_gemini_thinking_config,
@@ -47,11 +47,13 @@ from cli.utils import (
     select_llm_provider,
     select_research_depth,
     select_shallow_thinking_agent,
+    select_verifier_model,
 )
 from tradingagents.agents.schemas import (
     DecisionStatus,
     ExistingPositionAction,
     NewPositionAction,
+    PortfolioDecision,
     PortfolioDecisionDraft,
     PortfolioRating,
     TargetValidationStatus,
@@ -70,6 +72,8 @@ from tradingagents.graph.analyst_execution import (
     sync_analyst_tracker_from_chunk,
 )
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.investor_deck import build_investor_deck
+from tradingagents.report_names import report_stem, utc_report_timestamp
 from tradingagents.reporting import write_report_tree
 
 console = Console()
@@ -499,6 +503,8 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
         else:
             tokens_str = "Tokens: --"
         stats_parts.append(tokens_str)
+        if cache_usage := format_cache_usage(stats):
+            stats_parts.append(cache_usage)
 
     stats_parts.append(f"Reports: {reports_completed}/{reports_total}")
 
@@ -709,6 +715,28 @@ def get_user_selections():
         selected_shallow_thinker = select_shallow_thinking_agent(selected_llm_provider)
         selected_deep_thinker = select_deep_thinking_agent(selected_llm_provider)
 
+    # The final-report/reflection role may use a different provider, but must
+    # never inherit an OpenAI model ID when a non-OpenAI provider is selected.
+    selected_final_provider = (
+        DEFAULT_CONFIG.get("final_report_provider")
+        if os.environ.get("TRADINGAGENTS_FINAL_REPORT_PROVIDER") else None
+    ) or selected_llm_provider
+    if selected_final_provider != selected_llm_provider:
+        ensure_api_key(selected_final_provider)
+    if os.environ.get("TRADINGAGENTS_FINAL_REPORT_LLM"):
+        selected_final_model = DEFAULT_CONFIG["final_report_llm"]
+        console.print(
+            f"[green]✓ Verifier model from environment:[/green] {selected_final_model}"
+        )
+    else:
+        console.print(
+            create_question_box(
+                "Step 7b: Verifier / Final Report",
+                "Choose the model for reflection and the final report",
+            )
+        )
+        selected_final_model = select_verifier_model(selected_final_provider)
+
     # Step 8: Provider-specific reasoning/thinking configuration. Each knob is
     # settable via its TRADINGAGENTS_* env var; when that var is set (or the
     # provider itself came from env) the prompt is skipped and the configured
@@ -753,6 +781,8 @@ def get_user_selections():
         "backend_url": backend_url,
         "shallow_thinker": selected_shallow_thinker,
         "deep_thinker": selected_deep_thinker,
+        "final_report_provider": selected_final_provider.lower(),
+        "final_report_model": selected_final_model,
         "google_thinking_level": thinking_level,
         "openai_reasoning_effort": reasoning_effort,
         "anthropic_effort": anthropic_effort,
@@ -966,6 +996,65 @@ def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, d
         "conditional_alternative": markdown_field("conditional alternative"),
         "conditional_invalidation": markdown_field("conditional invalidation"),
     }
+    no_range = {
+        "target_low": None,
+        "target_high": None,
+        "supporting_quote_low": None,
+        "supporting_quote_high": None,
+        "target_method": None,
+        "target_risks": None,
+    }
+
+    typed_raw = final_state.get("portfolio_decision")
+    if isinstance(typed_raw, dict):
+        try:
+            typed = PortfolioDecision.model_validate(typed_raw)
+        except (ValueError, TypeError):
+            return {
+                "price_target": None,
+                "confidence_score": None,
+                "recommendation_confidence_score": None,
+                "target_horizon": None,
+                "target_summary": None,
+                "supporting_quote": None,
+                "target_validation_status": TargetValidationStatus.REJECTED.value,
+                "target_rejection_reason": "typed_decision_invalid",
+                "reference_price": current_price,
+                **no_range,
+                **position_guidance,
+            }
+        accepted = (
+            typed.status is DecisionStatus.ACTIONABLE
+            and typed.target_validation_status is TargetValidationStatus.ACCEPTED
+        )
+        plan = typed.conditional_plan
+        return {
+            "price_target": typed.price_target if accepted else None,
+            "target_low": typed.target_low if accepted else None,
+            "target_high": typed.target_high if accepted else None,
+            "confidence_score": typed.confidence_score if accepted else None,
+            "recommendation_confidence_score": typed.recommendation_confidence_score,
+            "target_horizon": typed.time_horizon if accepted else None,
+            "target_summary": typed.target_summary if accepted else None,
+            "supporting_quote": typed.supporting_quote if accepted else None,
+            "supporting_quote_low": typed.supporting_quote_low if accepted else None,
+            "supporting_quote_high": typed.supporting_quote_high if accepted else None,
+            "target_method": typed.target_method if accepted else None,
+            "target_risks": typed.target_risks if accepted else None,
+            "target_validation_status": typed.target_validation_status.value,
+            "target_rejection_reason": typed.target_validation_reason,
+            "reference_price": current_price,
+            "thesis": typed.thesis.value if typed.thesis else None,
+            "existing_position_action": (
+                typed.existing_position_action.value if typed.existing_position_action else None
+            ),
+            "existing_position_summary": typed.existing_position_summary,
+            "new_position_action": typed.new_position_action.value if typed.new_position_action else None,
+            "new_position_summary": typed.new_position_summary,
+            "conditional_confirmation": plan.confirmation if plan else None,
+            "conditional_alternative": plan.alternative if plan else None,
+            "conditional_invalidation": plan.invalidation if plan else None,
+        }
 
     rejection_match = re.search(
         r"(?im)^\s*\*\*target validation\*\*\s*:\s*"
@@ -988,6 +1077,7 @@ def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, d
             "target_validation_status": TargetValidationStatus.NOT_PROPOSED.value,
             "target_rejection_reason": None,
             "reference_price": current_price,
+            **no_range,
             **position_guidance,
         }
 
@@ -1002,6 +1092,7 @@ def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, d
             "target_validation_status": TargetValidationStatus.REJECTED.value,
             "target_rejection_reason": prevalidated_rejection,
             "reference_price": current_price,
+            **no_range,
             **position_guidance,
         }
 
@@ -1146,6 +1237,7 @@ Fill only metrics supported by this evidence. Return strict JSON only.""",
         "target_validation_status": validated.target_validation_status.value,
         "target_rejection_reason": validated.target_validation_reason,
         "reference_price": current_price,
+        **no_range,
         **position_guidance,
     }
 
@@ -1156,6 +1248,10 @@ def save_report_to_disk(
     save_path: Path,
     *,
     run_metadata: dict | None = None,
+    report_timestamp: str | None = None,
+    investor_deck=None,
+    full_report_href: str | None = None,
+    investor_brief=None,
 ):
     """Save the complete analysis report to disk (shared CLI/API writer)."""
     return write_report_tree(
@@ -1163,6 +1259,10 @@ def save_report_to_disk(
         ticker,
         save_path,
         run_metadata=run_metadata,
+        report_timestamp=report_timestamp,
+        investor_deck=investor_deck,
+        full_report_href=full_report_href,
+        investor_brief=investor_brief,
     )
 
 
@@ -1269,7 +1369,8 @@ def compact_report_text(content, max_chars=280):
 def target_outlook_text(result: dict) -> str:
     """Return a visible outlook or deterministic target-rejection explanation."""
     summary = result.get("target_summary")
-    if summary:
+    status = str(result.get("target_validation_status") or "").casefold()
+    if summary and status in {"", TargetValidationStatus.ACCEPTED.value.casefold()}:
         return str(summary)
     rejection = result.get("target_rejection_reason")
     if rejection:
@@ -1296,15 +1397,26 @@ def target_status_text(result: dict) -> str:
 
 def displayed_target(result: dict) -> str:
     """Avoid presenting a rejected target as an unexplained dash."""
+    status = str(result.get("target_validation_status") or "").casefold()
+    if status == TargetValidationStatus.ACCEPTED.value.casefold():
+        low, high = result.get("target_low"), result.get("target_high")
+        if low is not None and high is not None:
+            return f"{format_price_target(low)}–{format_price_target(high)}"
+    elif status:
+        return "No validated target" if status == "rejected" else "-"
     if result.get("price_target") is not None:
         return format_price_target(result.get("price_target"))
-    if str(result.get("target_validation_status") or "").casefold() == "rejected":
-        return "No validated target"
     return "-"
 
 
 def target_evidence_text(result: dict) -> str | None:
     """Return the accepted verbatim target evidence, when available."""
+    if str(result.get("target_validation_status") or "").casefold() == "accepted":
+        low, high = result.get("supporting_quote_low"), result.get("supporting_quote_high")
+        if low and high:
+            return f"Lower anchor: {low}; Upper anchor: {high}"
+    elif result.get("target_validation_status"):
+        return None
     quote = result.get("supporting_quote")
     return str(quote) if quote else None
 
@@ -1629,6 +1741,10 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
                 f"Horizon: {result.get('target_horizon') or '-'}",
             ]
         )
+        if result.get("target_validation_status") == "Accepted" and result.get("target_method"):
+            lines.append(f"Target Method: {result['target_method']}")
+        if result.get("target_validation_status") == "Accepted" and result.get("target_risks"):
+            lines.append(f"Target Risks: {result['target_risks']}")
 
         if result.get("error"):
             lines.extend(
@@ -1883,6 +1999,12 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             if supporting_evidence
             else ""
         )
+        target_context_html = "".join(
+            f"<div class='target-evidence'><strong>{escape(label)}:</strong> "
+            f"{escape(str(result[key]))}</div>"
+            for label, key in (("Target method", "target_method"), ("Target risks", "target_risks"))
+            if result.get("target_validation_status") == "Accepted" and result.get(key)
+        )
         reference_price = format_price_target(result.get("reference_price"))
         delta_label = format_target_gap_percent(
             result.get("reference_price"),
@@ -1953,6 +2075,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             f"<div class='confidence-bar'><span style='width:{confidence_width}%'></span></div>"
             f"<div class='confidence-copy'>{escape(sanitize_report_language(target_outlook_text(result)))}</div>"
             f"{target_evidence_html}"
+            f"{target_context_html}"
             "</div>"
             "<div class='narrative-block'>"
             "<h3>Portfolio Management Decision</h3>"
@@ -2468,11 +2591,21 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
 """
 
 
-def save_consolidated_report(analysis_results, analysis_date: str, save_path: Path, summary_llm=None) -> dict[str, Path]:
+def save_consolidated_report(
+    analysis_results,
+    analysis_date: str,
+    save_path: Path,
+    summary_llm=None,
+    *,
+    tickers: list[str] | None = None,
+    report_timestamp: str | None = None,
+) -> dict[str, Path]:
     """Write the consolidated batch report to disk in markdown and HTML."""
+    selected = tickers if tickers is not None else [result["ticker"] for result in analysis_results]
+    stem = report_stem("consolidated", selected, report_timestamp)
     save_path.mkdir(parents=True, exist_ok=True)
-    markdown_path = save_path / "consolidated_report.md"
-    html_path = save_path / "consolidated_report.html"
+    markdown_path = save_path / f"{stem}.md"
+    html_path = save_path / f"{stem}.html"
     markdown_path.write_text(build_consolidated_report(analysis_results, analysis_date, summary_llm=summary_llm))
     html_path.write_text(build_consolidated_report_html(analysis_results, analysis_date, summary_llm=summary_llm))
     return {"markdown": markdown_path, "html": html_path}
@@ -2645,6 +2778,10 @@ def _build_run_config(selections: dict, checkpoint: bool | None) -> dict:
         config["max_risk_discuss_rounds"] = selections["research_depth"]
     config["quick_think_llm"] = selections["shallow_thinker"]
     config["deep_think_llm"] = selections["deep_thinker"]
+    if "final_report_provider" in selections:
+        config["final_report_provider"] = selections["final_report_provider"]
+    if "final_report_model" in selections:
+        config["final_report_llm"] = selections["final_report_model"]
     config["backend_url"] = selections["backend_url"]
     config["llm_provider"] = selections["llm_provider"].lower()
     # Provider-specific thinking configuration
@@ -2939,6 +3076,7 @@ def run_single_analysis(
         "decision": decision,
         "final_state": final_state,
         "results_dir": str(results_dir.resolve()),
+        "_investor_llm": graph.final_report_llm,
         **target_profile,
     }
 
@@ -2948,6 +3086,7 @@ def run_analysis(checkpoint: bool | None = None):
     selections = get_user_selections()
     save_preferences = get_save_preferences(selections)
     tickers = selections["tickers"]
+    report_timestamp = utc_report_timestamp()
     analysis_results = []
 
     if len(tickers) > 1:
@@ -3008,6 +3147,8 @@ def run_analysis(checkpoint: bool | None = None):
                 analysis_results,
                 selections["analysis_date"],
                 consolidated_default_dir,
+                tickers=tickers,
+                report_timestamp=report_timestamp,
             )
             console.print(
                 f"[green]✓ Default consolidated reports saved to:[/green] {consolidated_default_dir.resolve()}"
@@ -3031,11 +3172,25 @@ def run_analysis(checkpoint: bool | None = None):
     if save_preferences["save_enabled"] and successful_results:
         save_path = save_preferences["save_path"]
         try:
+            for result in successful_results:
+                try:
+                    result["_investor_deck"] = build_investor_deck(
+                        result["final_state"], result["ticker"],
+                        selections["analysis_date"], result.get("_investor_llm"),
+                    )
+                except Exception:  # noqa: BLE001 - optional deck cannot abort batch saving
+                    result["_investor_deck"] = None
+                    console.print(
+                        f"[yellow]Investor deck unavailable for {result['ticker']}; "
+                        "the full report will still be saved.[/yellow]"
+                    )
             if len(tickers) == 1:
                 report_file = save_report_to_disk(
                     successful_results[0]["final_state"],
                     successful_results[0]["ticker"],
                     save_path,
+                    report_timestamp=report_timestamp,
+                    investor_deck=successful_results[0]["_investor_deck"],
                 )
                 console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
                 console.print(f"  [dim]Complete report:[/dim] {report_file.name}")
@@ -3048,11 +3203,15 @@ def run_analysis(checkpoint: bool | None = None):
                         result["final_state"],
                         result["ticker"],
                         save_path / result["ticker"],
+                        report_timestamp=report_timestamp,
+                        investor_deck=result["_investor_deck"],
                     )
                 report_file = save_consolidated_report(
                     analysis_results,
                     selections["analysis_date"],
                     save_path,
+                    tickers=tickers,
+                    report_timestamp=report_timestamp,
                 )
                 console.print(f"\n[green]✓ Batch reports saved to:[/green] {save_path.resolve()}")
                 console.print(f"  [dim]Markdown:[/dim] {report_file['markdown'].name}")

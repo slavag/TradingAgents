@@ -9,12 +9,11 @@ A free API key (https://fred.stlouisfed.org/docs/api/api_key.html) is read from
 the routing layer treats it as "unavailable" rather than a hard crash.
 """
 import logging
-import os
 from datetime import datetime, timedelta
 
 import requests
 
-from .errors import VendorNotConfiguredError
+from .errors import VendorNotConfiguredError, VendorRateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +80,19 @@ class FredNotConfiguredError(VendorNotConfiguredError):
     """
 
 
+class FredRequestError(RuntimeError):
+    """A credential-safe FRED request failure."""
+
+
+class FredRateLimitError(VendorRateLimitError):
+    """FRED rejected the request because its quota was exhausted."""
+
+
 def get_api_key() -> str:
     """Retrieve the FRED API key from the environment."""
-    api_key = os.getenv("FRED_API_KEY")
+    from tradingagents.settings import get_data_source_setting
+
+    api_key = get_data_source_setting("FRED_API_KEY")
     if not api_key:
         raise FredNotConfiguredError(
             "FRED_API_KEY environment variable is not set. Get a free key at "
@@ -116,21 +125,27 @@ def _resolve_series_id(indicator: str) -> str:
 
 
 def _request(path: str, params: dict) -> dict:
-    """GET a FRED endpoint, surfacing FRED's JSON error body on a bad request."""
+    """GET a FRED endpoint without exposing the credential-bearing URL."""
     api_params = {**params, "api_key": get_api_key(), "file_type": "json"}
-    response = requests.get(
-        f"{FRED_API_BASE}/{path}", params=api_params, timeout=REQUEST_TIMEOUT
-    )
-    # FRED returns 400 with a JSON {"error_message": ...} for unknown series IDs
-    # or malformed params; turn that into a clear, actionable error.
-    if response.status_code == 400:
-        try:
-            message = response.json().get("error_message", response.text)
-        except ValueError:
-            message = response.text
-        raise ValueError(f"FRED request failed: {message}")
-    response.raise_for_status()
-    return response.json()
+    try:
+        response = requests.get(
+            f"{FRED_API_BASE}/{path}", params=api_params, timeout=REQUEST_TIMEOUT
+        )
+    except requests.RequestException:
+        raise FredRequestError("FRED network request failed; retry later.") from None
+    if response.status_code == 429:
+        raise FredRateLimitError("FRED rate limit reached; retry later.")
+    if response.status_code in {401, 403}:
+        raise FredNotConfiguredError("FRED rejected the configured API key.")
+    if response.status_code >= 400:
+        raise FredRequestError(f"FRED request failed with HTTP {response.status_code}.")
+    try:
+        payload = response.json()
+    except (TypeError, ValueError):
+        raise FredRequestError("FRED returned malformed JSON.") from None
+    if not isinstance(payload, dict):
+        raise FredRequestError("FRED returned malformed JSON.")
+    return payload
 
 
 def get_macro_data(

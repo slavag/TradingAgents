@@ -62,13 +62,14 @@ def _ensure_date_column(data: pd.DataFrame) -> pd.DataFrame:
 
 def _clean_dataframe(data: pd.DataFrame) -> pd.DataFrame:
     """Normalize a stock DataFrame for stockstats: parse dates, drop invalid rows, fill price gaps."""
-    data = _ensure_date_column(data)
+    # Own each frame before assigning; callers and row filters may return views.
+    data = _ensure_date_column(data).copy()
     data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
-    data = data.dropna(subset=["Date"])
+    data = data.dropna(subset=["Date"]).copy()
 
     price_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in data.columns]
     data[price_cols] = data[price_cols].apply(pd.to_numeric, errors="coerce")
-    data = data.dropna(subset=["Close"])
+    data = data.dropna(subset=["Close"]).copy()
     data[price_cols] = data[price_cols].ffill().bfill()
 
     return data

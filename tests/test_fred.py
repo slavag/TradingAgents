@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 import pytest
+import requests
 
 import tradingagents.dataflows.config as config_module
 import tradingagents.default_config as default_config
@@ -78,13 +79,43 @@ class FredResolutionTests(unittest.TestCase):
 @pytest.mark.unit
 class FredConfigTests(unittest.TestCase):
     def test_missing_key_raises_not_configured(self):
-        with mock.patch.dict("os.environ", {}, clear=True), \
-                self.assertRaises(fred.FredNotConfiguredError):
+        with (
+            mock.patch("tradingagents.settings.get_data_source_setting", return_value=None),
+            self.assertRaises(fred.FredNotConfiguredError),
+        ):
             fred.get_api_key()
 
     def test_not_configured_is_a_value_error(self):
         # Routing relies on this subclassing for "vendor unavailable" handling.
         self.assertTrue(issubclass(fred.FredNotConfiguredError, ValueError))
+
+    def test_http_errors_never_expose_saved_api_key(self):
+        secret = "fred-saved-secret"
+        response = requests.Response()
+        response.status_code = 500
+        response.url = f"https://api.stlouisfed.org/fred/series?api_key={secret}"
+        with (
+            mock.patch.object(fred, "get_api_key", return_value=secret),
+            mock.patch.object(fred.requests, "get", return_value=response),
+            self.assertRaises(Exception) as raised,
+        ):
+            fred._request("series", {"series_id": "CPIAUCSL"})
+        self.assertNotIn(secret, str(raised.exception))
+
+    def test_optional_router_never_returns_or_logs_saved_api_key(self):
+        secret = "fred-saved-secret"
+        response = requests.Response()
+        response.status_code = 500
+        response.url = f"https://api.stlouisfed.org/fred/series?api_key={secret}"
+        with (
+            mock.patch.object(fred, "get_api_key", return_value=secret),
+            mock.patch.object(fred.requests, "get", return_value=response),
+            mock.patch.object(interface, "get_vendor", return_value="fred"),
+            self.assertLogs("tradingagents.dataflows.interface", level="WARNING") as logs,
+        ):
+            result = interface.route_to_vendor("get_macro_indicators", "cpi", "2026-01-01")
+        self.assertNotIn(secret, result)
+        self.assertNotIn(secret, "\n".join(logs.output))
 
 
 @pytest.mark.unit

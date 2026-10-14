@@ -22,6 +22,11 @@ class TestNormalizeSymbol(unittest.TestCase):
         self.assertEqual(normalize_symbol("aapl"), "AAPL")
         self.assertEqual(normalize_symbol("  msft  "), "MSFT")
 
+    def test_sentence_period_is_removed_without_damaging_exchange_or_class_dots(self):
+        self.assertEqual(normalize_symbol("PENG."), "PENG")
+        self.assertEqual(normalize_symbol("brk.b"), "BRK.B")
+        self.assertEqual(normalize_symbol("2059.TW"), "2059.TW")
+
     def test_metal_aliases_map_to_futures(self):
         self.assertEqual(normalize_symbol("XAUUSD"), "GC=F")
         self.assertEqual(normalize_symbol("XAUUSD+"), "GC=F")   # broker CFD suffix

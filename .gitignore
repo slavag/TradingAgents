@@ -225,3 +225,9 @@ __marimo__/
 # Enterprise env file (secrets) and generated run reports
 .env.enterprise
 reports/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+/.omc
+/.playwright-cli
+/.playwright-mcp

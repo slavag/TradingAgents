@@ -5,7 +5,6 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from .base_client import BaseLLMClient, normalize_content
 from .validators import validate_model
 
-
 _NO_SAMPLING_PARAMETER_MODELS = {
     "gemini-3.6-flash",
     "gemini-3.5-flash-lite",

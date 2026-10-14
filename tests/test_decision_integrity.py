@@ -3,6 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
+from tradingagents.agents import schemas as agent_schemas
 from tradingagents.agents.schemas import (
     ConditionalActionPlan,
     DecisionStatus,
@@ -19,6 +20,7 @@ from tradingagents.agents.utils.decision_integrity import (
     build_decision_evidence,
     extract_verified_reference_price,
     finalize_portfolio_decision,
+    verified_target_candidates,
 )
 
 
@@ -42,6 +44,33 @@ def actionable_draft(**overrides):
     }
     values.update(overrides)
     return PortfolioDecisionDraft(**values)
+
+
+_PENG_PRICE_ROWS = ["| Low | 72.83 |", "| Close | 75.74 |", "| High | 77.10 |"]
+
+
+def peng_range_draft(**overrides):
+    values = {
+        "rating": PortfolioRating.HOLD,
+        "target_low": 72.83,
+        "target_high": 77.10,
+        "supporting_quote_low": "| Low | 72.83 |",
+        "supporting_quote_high": "| High | 77.10 |",
+        "time_horizon": "3 months",
+        "confidence_score": 18,
+        "target_summary": (
+            "Demand persistence could allow a three-month recovery between "
+            "verified support and resistance."
+        ),
+        "target_method": "Technical scenario",
+        "target_risks": "A failed breakout or weaker demand invalidates the scenario.",
+    }
+    values.update(overrides)
+    return actionable_draft(**values)
+
+
+def peng_price_evidence():
+    return "Verified close: 75.74.\n" + "\n".join(_PENG_PRICE_ROWS)
 
 
 def test_actionable_draft_requires_rating():
@@ -189,6 +218,154 @@ def test_final_decision_rejects_partial_target_bundle():
         )
 
 
+def test_range_draft_and_final_decision_keep_low_confidence_and_full_explanation():
+    rationale = "A three-month technical recovery could revisit verified resistance if demand persists."
+    risks = "The observed levels are not a valuation; a failed breakout or weaker demand would invalidate the scenario."
+    draft = actionable_draft(
+        rating=PortfolioRating.HOLD,
+        target_low=72.83,
+        target_high=77.10,
+        supporting_quote_low="| Low | 72.83 |",
+        supporting_quote_high="| High | 77.10 |",
+        time_horizon="3 months",
+        confidence_score=18,
+        target_summary=rationale,
+        target_method="Technical scenario",
+        target_risks=risks,
+    )
+
+    assert draft.target_low == 72.83
+    assert draft.target_high == 77.10
+    assert draft.confidence_score == 18
+    decision = PortfolioDecision(
+        **draft.model_dump(), target_validation_status=TargetValidationStatus.ACCEPTED,
+    )
+    rendered = render_pm_decision(decision)
+    assert "**Price Target Range**: 72.83–77.10" in rendered
+    assert "**Target Method**: Technical scenario" in rendered
+    assert f"**Target Rationale**: {rationale}" in rendered
+    assert f"**Target Risks**: {risks}" in rendered
+    assert "**Target Low Supporting Quote**: | Low | 72.83 |" in rendered
+    assert "**Target High Supporting Quote**: | High | 77.10 |" in rendered
+
+
+def test_verified_peng_hold_range_is_accepted_at_low_confidence():
+    result = finalize_portfolio_decision(
+        peng_range_draft(), peng_price_evidence(), reference_price=75.74,
+        eligible_quotes=_PENG_PRICE_ROWS,
+    )
+
+    assert result.target_validation_status is TargetValidationStatus.ACCEPTED
+    assert result.price_target is None
+    assert (result.target_low, result.target_high) == (72.83, 77.10)
+    assert result.confidence_score == 18
+    assert result.target_method == "Technical scenario"
+
+
+@pytest.mark.parametrize("changes,expected_reason", [
+    ({"target_low": 80.0, "target_high": 77.10}, "target_range_reversed"),
+    ({"supporting_quote_high": None}, "target_bundle_incomplete"),
+    ({"supporting_quote_high": "| Low | 72.83 |"}, "supporting_quote_number_mismatch"),
+    ({"supporting_quote_low": "| Support | 72.83 |"}, "supporting_quote_not_eligible"),
+    ({"target_low": 0.0}, "target_not_positive_finite"),
+    ({"target_high": float("nan")}, "target_not_positive_finite"),
+    ({"target_method": " "}, "target_method_missing"),
+    ({"target_risks": ""}, "target_risks_missing"),
+    ({"target_summary": ""}, "target_rationale_missing"),
+    ({"time_horizon": "3 months ago"}, "target_horizon_invalid"),
+    ({"price_target": 77.10, "supporting_quote": "| High | 77.10 |"}, "target_shape_mixed"),
+    ({"rating": PortfolioRating.BUY}, "target_direction_conflict"),
+])
+def test_peng_range_rejects_invalid_or_ineligible_bounds(changes, expected_reason):
+    result = finalize_portfolio_decision(
+        peng_range_draft(**changes),
+        peng_price_evidence() + "\n| Support | 72.83 |",
+        reference_price=75.74, eligible_quotes=_PENG_PRICE_ROWS,
+    )
+
+    assert result.target_validation_status is TargetValidationStatus.REJECTED
+    assert result.target_validation_reason == expected_reason
+    assert result.target_low is None and result.target_high is None
+
+
+def test_point_quote_from_debate_text_is_not_an_eligible_target_row():
+    draft = actionable_draft(
+        price_target=80.0, time_horizon="3 months", confidence_score=14,
+        target_summary="A speculative recovery scenario.",
+        supporting_quote="Resistance: 80.",
+    )
+    result = finalize_portfolio_decision(
+        draft, peng_price_evidence() + "\n[risk_debate]\nResistance: 80.",
+        reference_price=75.74, eligible_quotes=_PENG_PRICE_ROWS,
+    )
+
+    assert result.target_validation_status is TargetValidationStatus.REJECTED
+    assert result.target_validation_reason == "supporting_quote_not_eligible"
+
+
+def test_verified_target_candidates_exclude_postdate_snapshot():
+    def snapshot(published_at, content):
+        return {
+            "source": "get_verified_market_snapshot", "status": "available",
+            "as_of_date": "2026-10-09", "published_at": published_at,
+            "content": content,
+        }
+
+    state = {
+        "trade_date": "2026-10-09",
+        "shared_evidence": [
+            snapshot("2026-10-09", "| Low | 72.83 |\n| Close | 75.74 |"),
+            snapshot("2026-10-10", "| High | 80.00 |"),
+        ],
+    }
+
+    assert verified_target_candidates(state) == [
+        "| Low | 72.83 |", "| Close | 75.74 |",
+    ]
+
+
+def test_equal_range_bounds_keep_the_corrected_high_quote():
+    result = finalize_portfolio_decision(
+        peng_range_draft(
+            target_high=72.83,
+            supporting_quote_high="| Unverified support | 72.83 |",
+        ),
+        peng_price_evidence(), reference_price=75.74,
+        eligible_quotes=_PENG_PRICE_ROWS,
+    )
+
+    assert result.target_validation_status is TargetValidationStatus.ACCEPTED
+    assert result.supporting_quote_low == "| Low | 72.83 |"
+    assert result.supporting_quote_high == "| Low | 72.83 |"
+
+
+def test_final_decision_rejects_mixed_point_and_range_targets():
+    draft = actionable_draft(
+        target_low=72.83, target_high=77.10,
+        supporting_quote_low="| Low | 72.83 |",
+        supporting_quote_high="| High | 77.10 |",
+        price_target=77.10, supporting_quote="| High | 77.10 |",
+        time_horizon="3 months", confidence_score=18,
+        target_summary="Technical scenario", target_method="Technical scenario",
+        target_risks="Breakout may fail.",
+    )
+
+    with pytest.raises(ValidationError, match="point or range"):
+        PortfolioDecision(
+            **draft.model_dump(), target_validation_status=TargetValidationStatus.ACCEPTED,
+        )
+
+
+def test_target_repair_schema_cannot_change_rating_or_position_actions():
+    repair_model = getattr(agent_schemas, "PortfolioTargetRepair", None)
+    assert repair_model is not None
+    assert {"rating", "existing_position_action", "new_position_action"}.isdisjoint(
+        repair_model.model_fields,
+    )
+    with pytest.raises(ValidationError):
+        repair_model.model_validate({"target_low": 72.83, "rating": "Buy"})
+
+
 def test_unavailable_factory_renders_explicit_status_without_rating():
     """A structured failure must remain visibly unavailable, never Hold."""
     decision = PortfolioDecision.unavailable("structured_response_invalid")
@@ -219,6 +396,26 @@ def test_finalize_accepts_complete_verbatim_price_quote():
     assert result.target_validation_status is TargetValidationStatus.ACCEPTED
     assert result.price_target == 120.0
     assert result.supporting_quote == "Verified close: 100. Resistance: 120."
+
+
+def test_finalize_accepts_verified_markdown_table_price_level():
+    quote = "| Resistance | 120.00 |"
+    draft = actionable_draft(
+        price_target=120.0,
+        time_horizon="3 months",
+        confidence_score=78,
+        target_summary="Verified resistance supports the central case.",
+        supporting_quote=quote,
+    )
+
+    result = finalize_portfolio_decision(
+        draft,
+        evidence_text=f"Verified close: 100.\n{quote}",
+        reference_price=100.0,
+    )
+
+    assert result.target_validation_status is TargetValidationStatus.ACCEPTED
+    assert result.supporting_quote == quote
 
 
 def test_target_rejection_preserves_recommendation_confidence():

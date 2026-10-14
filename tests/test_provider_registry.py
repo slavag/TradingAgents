@@ -16,6 +16,7 @@ from tradingagents.llm_clients.openai_client import (
 @pytest.mark.unit
 def test_registry_membership():
     assert is_openai_compatible("openai")
+    assert is_openai_compatible("meta")
     assert is_openai_compatible("openai_compatible")  # the generic endpoint
     # native (different API) clients are intentionally NOT in the registry
     assert not is_openai_compatible("anthropic")
@@ -28,6 +29,7 @@ def test_registry_membership():
     ("openai", None, NormalizedChatOpenAI, True),
     ("xai", "https://api.x.ai/v1", NormalizedChatOpenAI, False),
     ("deepseek", "https://api.deepseek.com", DeepSeekChatOpenAI, False),
+    ("meta", "https://api.meta.ai/v1", NormalizedChatOpenAI, False),
     ("qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", NormalizedChatOpenAI, False),
     ("qwen-cn", "https://dashscope.aliyuncs.com/compatible-mode/v1", NormalizedChatOpenAI, False),
     ("glm", "https://api.z.ai/api/paas/v4/", NormalizedChatOpenAI, False),

@@ -290,6 +290,7 @@ class TestRateLimitSweepStopping:
             )
 
         assert op.call_count == 4
+        assert out.startswith("DATA_UNAVAILABLE:")
         assert "temporarily unavailable due to Reddit rate limiting" in out
 
 

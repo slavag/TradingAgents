@@ -1,26 +1,42 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import logging.config
 import os
 import threading
 import webbrowser
+from dataclasses import asdict
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from tradingagents.llm_clients.api_key_env import PROVIDER_API_KEY_ENV
 from tradingagents.llm_clients.model_catalog import (
+    get_catalog_metadata,
+    get_model_capabilities,
     get_role_model_options,
     get_web_model_capabilities,
     get_web_model_options,
 )
+from tradingagents.llm_clients.model_discovery import DISCOVERY_ADAPTERS, discover_models
+from tradingagents.report_html import render_report
+from tradingagents.settings import (
+    SettingsStorageError,
+    SettingsValidationError,
+    credential_status,
+    update_credentials,
+)
+from tradingagents.web import service as web_service
+from tradingagents.web.history import report_path
 from tradingagents.web.service import (
     create_job,
     evaluate_saved_forecasts,
@@ -33,7 +49,7 @@ from tradingagents.web.service import (
 )
 
 logger = logging.getLogger("tradingagents.web")
-WEB_BUILD = "sidebar-accordion-v2"
+WEB_BUILD = "research-workspace-v1"
 
 STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -42,7 +58,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 def _compute_asset_version() -> str:
     digest = hashlib.sha256()
-    for filename in ("index.html", "styles.css", "app.js"):
+    for filename in ("index.html", "styles.css", "model_picker.js", "app.js", "workspace.js", "research.js"):
         path = STATIC_DIR / filename
         if path.exists():
             digest.update(path.read_bytes())
@@ -169,6 +185,7 @@ async def log_requests(request: Request, call_next):
 
 
 class AnalysisRequest(BaseModel):
+    request_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
     tickers: list[str] | str
     analysis_date: str
     analysts: list[str] = Field(
@@ -201,6 +218,12 @@ class EvaluationRunRequest(BaseModel):
 def _render_index_response(promotion_root: Path | None = None) -> HTMLResponse:
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
+        role_defaults = get_role_model_status(promotion_root=promotion_root)
+        capabilities = get_web_model_capabilities()
+        for entry in role_defaults.values():
+            provider, model = entry.get("provider"), entry.get("model")
+            if provider and model:
+                capabilities.setdefault(provider, {})[model] = get_model_capabilities(provider, model)
         html = (
             index_path.read_text(encoding="utf-8")
             .replace("__ASSET_VERSION__", ASSET_VERSION)
@@ -214,11 +237,19 @@ def _render_index_response(promotion_root: Path | None = None) -> HTMLResponse:
             )
             .replace(
                 "__MODEL_CAPABILITIES_JSON__",
-                json.dumps(get_web_model_capabilities()),
+                json.dumps(capabilities),
+            )
+            .replace(
+                "__CATALOG_METADATA_JSON__",
+                json.dumps(get_catalog_metadata()),
+            )
+            .replace(
+                "__DISCOVERY_PROVIDERS_JSON__",
+                json.dumps(sorted(DISCOVERY_ADAPTERS)),
             )
             .replace(
                 "__ROLE_DEFAULTS_JSON__",
-                json.dumps(get_role_model_status(promotion_root=promotion_root)),
+                json.dumps(role_defaults),
             )
         )
         return HTMLResponse(
@@ -260,6 +291,68 @@ def health():
     return {"status": "ok"}
 
 
+def _require_local_settings_request(request: Request) -> None:
+    try:
+        client_is_local = ipaddress.ip_address(request.client.host).is_loopback
+    except (ValueError, AttributeError):
+        client_is_local = False
+    hostname = request.url.hostname or ""
+    try:
+        host_is_local = hostname == "localhost" or ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        host_is_local = False
+    origin = request.headers.get("origin")
+    expected_origin = f"{request.url.scheme}://{request.url.netloc}"
+    if (
+        not client_is_local
+        or not host_is_local
+        or (origin is not None and origin != expected_origin)
+        or request.headers.get("sec-fetch-site") == "cross-site"
+    ):
+        raise HTTPException(status_code=403, detail="Settings are available from the local app only.")
+
+
+@app.get("/api/models/{provider}/refresh")
+def refresh_available_models(provider: str, request: Request):
+    """Return only bounded account-visible IDs to the local web picker."""
+    _require_local_settings_request(request)
+    if provider not in PROVIDER_API_KEY_ENV:
+        raise HTTPException(status_code=400, detail="Unknown model provider.")
+    result = discover_models(provider, force=True)
+    return JSONResponse(asdict(result), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/settings/data-sources")
+def data_source_settings(request: Request):
+    _require_local_settings_request(request)
+    try:
+        return JSONResponse({"fields": credential_status()}, headers={"Cache-Control": "no-store"})
+    except SettingsStorageError as exc:
+        raise HTTPException(status_code=503, detail="Could not load data-source settings.") from exc
+
+
+@app.put("/api/settings/data-sources")
+async def save_data_source_settings(request: Request):
+    _require_local_settings_request(request)
+    if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
+        raise HTTPException(status_code=415, detail="Settings must be submitted as JSON.")
+    try:
+        body = await request.body()
+        if len(body) > 20_000:
+            raise SettingsValidationError("Settings request is too large.")
+        payload = json.loads(body)
+        if not isinstance(payload, dict) or set(payload) - {"values", "remove"}:
+            raise SettingsValidationError("Invalid settings update.")
+        fields = await run_in_threadpool(
+            update_credentials, payload.get("values", {}), payload.get("remove", [])
+        )
+        return JSONResponse({"fields": fields}, headers={"Cache-Control": "no-store"})
+    except (json.JSONDecodeError, SettingsValidationError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid settings. Check the fields and SEC contact email.") from exc
+    except SettingsStorageError as exc:
+        raise HTTPException(status_code=503, detail="Could not save data-source settings.") from exc
+
+
 @app.get("/api/speaking-stocks")
 def speaking_stocks(
     top_n: int = Query(default=10, ge=1, le=50),
@@ -299,6 +392,14 @@ def speaking_stock_detail(ticker: str):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@app.get("/api/jobs")
+def job_history(request: Request, q: str = Query(default="", max_length=100),
+                offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=200)):
+    _require_local_settings_request(request)
+    return JSONResponse(web_service.list_jobs(q=q, offset=offset, limit=limit),
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/jobs")
 def create_analysis_job(request: AnalysisRequest):
     try:
@@ -321,6 +422,76 @@ def job_status(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     return job
+
+
+@app.get("/api/jobs/{job_id}/reports/{ticker}/investor")
+def investor_report(job_id: str, ticker: str, request: Request):
+    return _job_report_response(job_id, ticker, request, "investor")
+
+
+@app.get("/api/jobs/{job_id}/reports/{ticker}/full")
+def full_report(job_id: str, ticker: str, request: Request):
+    return _job_report_response(job_id, ticker, request, "full")
+
+
+@app.get("/api/jobs/{job_id}/reports/consolidated")
+def consolidated_report(job_id: str, request: Request,
+                        format: str = Query(default="html", pattern="^(html|md)$")):
+    _require_local_settings_request(request)
+    job = get_job(job_id)
+    path = report_path(web_service.RESULTS_ROOT, job, None, "consolidated", format) if job else None
+    if path is None:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    if path.suffix == ".md" and format == "html":
+        return _markdown_report_response(path, ", ".join(job["tickers"]), job["analysis_date"])
+    return FileResponse(path, media_type="text/html" if format == "html" else "text/markdown",
+                        filename=path.name,
+                        content_disposition_type="inline" if format == "html" else "attachment",
+                        headers=_report_headers())
+
+
+def _report_headers() -> dict[str, str]:
+    return {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"}
+
+
+def _markdown_report_response(path: Path, ticker: str, analysis_date: str) -> HTMLResponse:
+    try:
+        if path.stat().st_size > 8_000_000:
+            raise ValueError("Report is too large")
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError, ValueError):
+        raise HTTPException(status_code=404, detail="Report not found.") from None
+    html = render_report(ticker, {"trade_date": analysis_date}, None,
+                         [("1. Saved research", "", [("Full research", path.name, text)])])
+    return HTMLResponse(html, headers=_report_headers())
+
+
+def _job_report_response(job_id: str, ticker: str, request: Request, kind: str):
+    try:
+        _require_local_settings_request(request)
+    except HTTPException as exc:
+        raise HTTPException(status_code=403, detail="Reports are available from the local app only.") from exc
+    job = get_job(job_id)
+    if job is None or ticker not in job.get("tickers", []):
+        raise HTTPException(status_code=404, detail="Report not found.")
+    if not any(
+        result.get("ticker") == ticker and result.get("status") == "completed"
+        for result in job.get("results", [])
+    ):
+        raise HTTPException(status_code=404, detail="Report not found.")
+    path = report_path(web_service.RESULTS_ROOT, job, ticker, kind)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Report not found.") from None
+    if path.suffix == ".md":
+        return _markdown_report_response(path, ticker, job["analysis_date"])
+    return FileResponse(
+        path,
+        media_type="text/html",
+        filename=path.name,
+        content_disposition_type="inline",
+        headers=_report_headers(),
+    )
 
 
 @app.post("/api/evaluations/run")

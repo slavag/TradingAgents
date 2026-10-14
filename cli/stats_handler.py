@@ -16,6 +16,10 @@ class StatsCallbackHandler(BaseCallbackHandler):
         self.tool_calls = 0
         self.tokens_in = 0
         self.tokens_out = 0
+        self.cache_read_tokens = 0
+        self.cache_creation_tokens = 0
+        self.cache_usage_reported_calls = 0
+        self.cache_usage_unreported_calls = 0
 
     def on_llm_start(
         self,
@@ -54,6 +58,18 @@ class StatsCallbackHandler(BaseCallbackHandler):
             with self._lock:
                 self.tokens_in += usage_metadata.get("input_tokens", 0)
                 self.tokens_out += usage_metadata.get("output_tokens", 0)
+                details = usage_metadata.get("input_token_details")
+                if isinstance(details, dict) and (
+                    "cache_read" in details or "cache_creation" in details
+                ):
+                    self.cache_usage_reported_calls += 1
+                    self.cache_read_tokens += int(details.get("cache_read") or 0)
+                    self.cache_creation_tokens += int(details.get("cache_creation") or 0)
+                else:
+                    self.cache_usage_unreported_calls += 1
+        else:
+            with self._lock:
+                self.cache_usage_unreported_calls += 1
 
     def on_tool_start(
         self,
@@ -73,4 +89,25 @@ class StatsCallbackHandler(BaseCallbackHandler):
                 "tool_calls": self.tool_calls,
                 "tokens_in": self.tokens_in,
                 "tokens_out": self.tokens_out,
+                "cache_read_tokens": self.cache_read_tokens,
+                "cache_creation_tokens": self.cache_creation_tokens,
+                "cache_usage_reported_calls": self.cache_usage_reported_calls,
+                "cache_usage_unreported_calls": self.cache_usage_unreported_calls,
             }
+
+
+def format_cache_usage(stats: dict[str, Any]) -> str | None:
+    """Describe provider-reported cache tokens without inventing dollar savings."""
+    reported = stats.get("cache_usage_reported_calls", 0)
+    unreported = stats.get("cache_usage_unreported_calls", 0)
+    if not reported and not unreported:
+        return None
+    parts = []
+    if reported:
+        parts.append(
+            f"Cache: {stats.get('cache_read_tokens', 0)} read / "
+            f"{stats.get('cache_creation_tokens', 0)} write"
+        )
+    if unreported:
+        parts.append(f"{unreported} call{'s' if unreported != 1 else ''} unreported")
+    return " · ".join(parts)

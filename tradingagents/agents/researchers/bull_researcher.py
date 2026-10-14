@@ -1,11 +1,13 @@
 from tradingagents.agents.utils.agent_utils import (
-    get_instrument_context_from_state,
+    get_agent_context_from_state,
     get_language_instruction,
     normalize_text_content,
 )
+from tradingagents.llm_clients.prompt_cache import PromptCachePolicy, invoke_with_prompt_cache
 
 
-def create_bull_researcher(llm):
+def create_bull_researcher(llm, cache_policy: PromptCachePolicy | None = None):
+    cache_policy = cache_policy or PromptCachePolicy("", "")
     def bull_node(state) -> dict:
         investment_debate_state = state["investment_debate_state"]
         history = investment_debate_state.get("history", "")
@@ -16,7 +18,7 @@ def create_bull_researcher(llm):
         sentiment_report = state["sentiment_report"]
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
-        instrument_context = get_instrument_context_from_state(state)
+        instrument_context = get_agent_context_from_state(state, "bull_researcher")
         asset_type = state.get("asset_type", "stock")
         target_label = "stock" if asset_type == "stock" else "asset"
         fundamentals_label = (
@@ -25,7 +27,7 @@ def create_bull_researcher(llm):
             else "Asset fundamentals report (may be unavailable for crypto)"
         )
 
-        prompt = f"""You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
+        stable_prefix = f"""You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
 
 Key points to focus on:
 - Growth Potential: Highlight the company's market opportunities, revenue projections, and scalability.
@@ -40,12 +42,15 @@ Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
 {fundamentals_label}: {fundamentals_report}
-Conversation history of the debate: {history}
+Conversation history of the debate: """
+        dynamic_suffix = f"""{history}
 Last bear argument: {current_response}
 Use this information to deliver a compelling bull argument, refute the bear's concerns, and engage in a dynamic debate that demonstrates the strengths of the bull position.
 """ + get_language_instruction()
 
-        response = llm.invoke(prompt)
+        response = invoke_with_prompt_cache(
+            llm, stable_prefix, dynamic_suffix, cache_policy,
+        )
 
         argument = f"Bull Analyst: {normalize_text_content(response.content)}"
 

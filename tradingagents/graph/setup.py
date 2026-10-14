@@ -1,5 +1,6 @@
 # TradingAgents/graph/setup.py
 
+from dataclasses import replace
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -21,6 +22,8 @@ from tradingagents.agents import (
     create_trader,
 )
 from tradingagents.agents.utils.agent_states import AgentState
+from tradingagents.agents.utils.evidence import collect_shared_evidence
+from tradingagents.llm_clients.prompt_cache import PromptCachePolicy
 
 from .analyst_execution import build_analyst_execution_plan
 from .conditional_logic import ConditionalLogic
@@ -51,12 +54,20 @@ class GraphSetup:
         deep_thinking_llm: Any,
         tool_nodes: dict[str, ToolNode],
         conditional_logic: ConditionalLogic,
+        quick_cache_policy: PromptCachePolicy | None = None,
     ):
         """Initialize with required components."""
         self.quick_thinking_llm = quick_thinking_llm
         self.deep_thinking_llm = deep_thinking_llm
         self.tool_nodes = tool_nodes
         self.conditional_logic = conditional_logic
+        self.quick_cache_policy = quick_cache_policy or PromptCachePolicy("", "")
+
+    def _policy_for_rounds(self, rounds: int) -> PromptCachePolicy:
+        return replace(
+            self.quick_cache_policy,
+            expected_reuse=self.quick_cache_policy.enabled and rounds > 1,
+        )
 
     def setup_graph(
         self, selected_analysts=("market", "social", "news", "fundamentals")
@@ -80,15 +91,27 @@ class GraphSetup:
         }
 
         # Create researcher and manager nodes
-        bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
-        bear_researcher_node = create_bear_researcher(self.quick_thinking_llm)
+        research_cache = self._policy_for_rounds(self.conditional_logic.max_debate_rounds)
+        bull_researcher_node = create_bull_researcher(
+            self.quick_thinking_llm, cache_policy=research_cache,
+        )
+        bear_researcher_node = create_bear_researcher(
+            self.quick_thinking_llm, cache_policy=research_cache,
+        )
         research_manager_node = create_research_manager(self.deep_thinking_llm)
         trader_node = create_trader(self.quick_thinking_llm)
 
         # Create risk analysis nodes
-        aggressive_analyst = create_aggressive_debator(self.quick_thinking_llm)
-        neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
-        conservative_analyst = create_conservative_debator(self.quick_thinking_llm)
+        risk_cache = self._policy_for_rounds(self.conditional_logic.max_risk_discuss_rounds)
+        aggressive_analyst = create_aggressive_debator(
+            self.quick_thinking_llm, cache_policy=risk_cache,
+        )
+        neutral_analyst = create_neutral_debator(
+            self.quick_thinking_llm, cache_policy=risk_cache,
+        )
+        conservative_analyst = create_conservative_debator(
+            self.quick_thinking_llm, cache_policy=risk_cache,
+        )
         portfolio_manager_node = create_portfolio_manager(self.deep_thinking_llm)
 
         # Create workflow
@@ -101,6 +124,7 @@ class GraphSetup:
             workflow.add_node(spec.tool_node, self.tool_nodes[spec.key])
 
         # Add other nodes
+        workflow.add_node("Evidence Collector", collect_shared_evidence)
         workflow.add_node("Bull Researcher", bull_researcher_node)
         workflow.add_node("Bear Researcher", bear_researcher_node)
         workflow.add_node("Research Manager", research_manager_node)
@@ -112,7 +136,8 @@ class GraphSetup:
 
         # Define edges
         # Start with the first analyst
-        workflow.add_edge(START, plan.specs[0].agent_node)
+        workflow.add_edge(START, "Evidence Collector")
+        workflow.add_edge("Evidence Collector", plan.specs[0].agent_node)
 
         # Connect analysts in sequence
         for i, spec in enumerate(plan.specs):

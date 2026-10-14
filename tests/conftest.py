@@ -38,6 +38,12 @@ def _dummy_api_keys(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_persistent_settings(monkeypatch, tmp_path):
+    """Never let tests read or overwrite the user's persisted credentials."""
+    monkeypatch.setenv("TRADINGAGENTS_SETTINGS_DIR", str(tmp_path / "settings"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_config():
     """Reset the global dataflows config before and after each test.
 

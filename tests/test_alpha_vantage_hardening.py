@@ -7,6 +7,7 @@ the point-in-time boundary for non-vintaged fundamental endpoints.
 import json
 
 import pytest
+import requests
 
 import tradingagents.dataflows.alpha_vantage_common as av
 import tradingagents.dataflows.alpha_vantage_fundamentals as avf
@@ -53,6 +54,34 @@ def test_invalid_key_not_mislabeled_as_rate_limit(monkeypatch):
     monkeypatch.setattr(av.requests, "get", _patched_get(body))
     with pytest.raises(av.AlphaVantageNotConfiguredError):
         av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
+
+
+@pytest.mark.unit
+def test_http_errors_never_expose_saved_api_key(monkeypatch):
+    secret = "alpha-saved-secret"
+    response = requests.Response()
+    response.status_code = 500
+    response.url = f"https://www.alphavantage.co/query?apikey={secret}"
+    monkeypatch.setattr(av, "get_api_key", lambda: secret)
+    monkeypatch.setattr(av.requests, "get", lambda *args, **kwargs: response)
+
+    with pytest.raises(Exception) as raised:
+        av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
+
+    assert secret not in str(raised.value)
+
+
+@pytest.mark.unit
+def test_error_notice_redacts_saved_api_key(monkeypatch):
+    secret = "alpha-saved-secret"
+    body = json.dumps({"Information": f"API key {secret} is invalid"})
+    monkeypatch.setattr(av, "get_api_key", lambda: secret)
+    monkeypatch.setattr(av.requests, "get", _patched_get(body))
+
+    with pytest.raises(av.AlphaVantageNotConfiguredError) as raised:
+        av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
+
+    assert secret not in str(raised.value)
     with pytest.raises(av.AlphaVantageRateLimitError):  # sanity: rate-limit path still distinct
         monkeypatch.setattr(av.requests, "get", _patched_get('{"Note": "API call frequency is 5 calls per minute."}'))
         av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})

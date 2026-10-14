@@ -56,6 +56,15 @@ class TestPatternMatches:
         caps = get_capabilities("MiniMax-M4-highspeed")
         assert caps.supports_tool_choice is False
 
+    @pytest.mark.parametrize(
+        "model",
+        ["muse-spark-1.2", "muse-spark-1.2-contributor", "muse-spark-1.1"],
+    )
+    def test_muse_spark_prefers_schema_constrained_output(self, model):
+        caps = get_capabilities(model)
+        assert caps.supports_json_schema is True
+        assert caps.preferred_structured_method == "json_schema"
+
 
 @pytest.mark.unit
 class TestMinimaxExactMatches:

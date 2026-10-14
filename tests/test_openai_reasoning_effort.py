@@ -40,3 +40,19 @@ def test_reasoning_model_receives_effort(monkeypatch):
 def test_non_reasoning_model_drops_effort(monkeypatch):
     # gpt-4.1 would 400 with reasoning_effort — it must be dropped.
     assert _effort_on("gpt-4.1", monkeypatch) is None
+
+
+def test_gpt6_reasoning_omits_unsupported_sampling_temperature(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    llm = OpenAIClient(
+        "gpt-6.1-sol", provider="openai", reasoning_effort="medium", temperature=0.0,
+    ).get_llm()
+    assert llm.temperature is None
+
+
+def test_gpt6_luna_none_effort_keeps_supported_temperature(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    llm = OpenAIClient(
+        "gpt-6-luna", provider="openai", reasoning_effort="none", temperature=0.2,
+    ).get_llm()
+    assert llm.temperature == 0.2

@@ -31,10 +31,11 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.schemas import SentimentReport, render_sentiment_report
 from tradingagents.agents.utils.agent_utils import (
-    get_instrument_context_from_state,
+    get_agent_context_from_state,
     get_language_instruction,
     get_news,
 )
+from tradingagents.agents.utils.evidence import merge_evidence
 from tradingagents.agents.utils.structured import (
     NO_EXTERNAL_TOOLS,
     bind_structured,
@@ -62,7 +63,7 @@ def create_sentiment_analyst(llm):
         ticker = state["company_of_interest"]
         end_date = state["trade_date"]
         start_date = _seven_days_back(end_date)
-        instrument_context = get_instrument_context_from_state(state)
+        instrument_context = get_agent_context_from_state(state, "sentiment")
 
         # Pre-fetch all three sources. Each fetcher degrades gracefully and
         # returns a string (no exceptions surface from here), so the LLM
@@ -117,9 +118,34 @@ def create_sentiment_analyst(llm):
             "Sentiment Analyst",
         )
 
+        prefetched_evidence = []
+        for source, title, content in (
+            ("news", "Sentiment analyst news input", news_block),
+            ("stocktwits", "StockTwits messages", stocktwits_block),
+            ("reddit", "Reddit posts", reddit_block),
+        ):
+            unavailable = str(content).lstrip().startswith(
+                ("DATA_UNAVAILABLE:", "NO_DATA_AVAILABLE:")
+            )
+            prefetched_evidence.append(
+                {
+                    "source": source,
+                    "category": "sentiment",
+                    "title": title,
+                    "content": content,
+                    "url": None,
+                    "published_at": None if unavailable else end_date,
+                    "as_of_date": end_date,
+                    "status": "unavailable" if unavailable else "available",
+                }
+            )
+
         return {
             "messages": [AIMessage(content=report_text)],
             "sentiment_report": report_text,
+            "shared_evidence": merge_evidence(
+                state.get("shared_evidence", []), prefetched_evidence, end_date
+            ),
         }
 
     return sentiment_analyst_node

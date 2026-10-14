@@ -22,7 +22,7 @@ import re
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # LLMs sometimes write a placeholder string ("None", "N/A", ...) into an optional
 # numeric field instead of omitting it. Coerce those to None so the structured
@@ -78,6 +78,13 @@ class TargetValidationReason(str, Enum):
     SUPPORTING_QUOTE_NUMBER_MISMATCH = "supporting_quote_number_mismatch"
     SUPPORTING_QUOTE_NOT_PRICE_CONTEXT = "supporting_quote_not_price_context"
     TARGET_DIRECTION_CONFLICT = "target_direction_conflict"
+    TARGET_SHAPE_MIXED = "target_shape_mixed"
+    TARGET_RANGE_REVERSED = "target_range_reversed"
+    SUPPORTING_QUOTE_NOT_ELIGIBLE = "supporting_quote_not_eligible"
+    TARGET_METHOD_MISSING = "target_method_missing"
+    TARGET_RISKS_MISSING = "target_risks_missing"
+    TARGET_RATIONALE_MISSING = "target_rationale_missing"
+    TARGET_HORIZON_INVALID = "target_horizon_invalid"
 
 
 class ThesisRating(str, Enum):
@@ -303,6 +310,9 @@ class TraderProposal(BaseModel):
             "the research plan. Two to four sentences."
         ),
     )
+    research_rating: PortfolioRating | None = None
+    existing_position_intent: ExistingPositionAction | None = None
+    new_position_intent: NewPositionAction | None = None
     entry_price: float | None = Field(
         default=None,
         description="Optional entry price target in the instrument's quote currency.",
@@ -313,7 +323,7 @@ class TraderProposal(BaseModel):
     )
     position_sizing: str | None = Field(
         default=None,
-        description="Optional sizing guidance, e.g. '5% of portfolio'.",
+        description="Optional risk-budget formula; no numeric portfolio weight without account context.",
     )
 
     @field_validator("entry_price", "stop_loss", mode="before")
@@ -334,6 +344,12 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
         "",
         f"**Reasoning**: {proposal.reasoning}",
     ]
+    if proposal.research_rating is not None:
+        parts.extend(["", f"**Research Rating**: {proposal.research_rating.value}"])
+    if proposal.existing_position_intent is not None:
+        parts.extend(["", f"**Existing Position Intent**: {proposal.existing_position_intent.value}"])
+    if proposal.new_position_intent is not None:
+        parts.extend(["", f"**New Position Intent**: {proposal.new_position_intent.value}"])
     if proposal.entry_price is not None:
         parts.extend(["", f"**Entry Price**: {proposal.entry_price}"])
     if proposal.stop_loss is not None:
@@ -349,7 +365,10 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
 
 def parse_trader_proposal_markdown(text: str) -> TraderProposal:
     """Validate compatibility prose and return a typed Trader Proposal."""
-    labels = ("Action", "Reasoning", "Entry Price", "Stop Loss", "Position Sizing")
+    labels = (
+        "Action", "Reasoning", "Research Rating", "Existing Position Intent",
+        "New Position Intent", "Entry Price", "Stop Loss", "Position Sizing",
+    )
     action = _enum_value(
         TraderAction,
         _markdown_field(text, "Action", labels[1:]),
@@ -367,11 +386,20 @@ def parse_trader_proposal_markdown(text: str) -> TraderProposal:
         except ValueError:
             return None
 
+    def optional_enum(enum_type, label: str, following: tuple[str, ...]):
+        value = optional_field(label, following)
+        return _enum_value(enum_type, value) if value else None
+
     return TraderProposal(
         action=action,
         reasoning=_markdown_field(text, "Reasoning", labels[2:]),
-        entry_price=optional_field("Entry Price", labels[3:]),
-        stop_loss=optional_field("Stop Loss", labels[4:]),
+        research_rating=optional_enum(PortfolioRating, "Research Rating", labels[3:]),
+        existing_position_intent=optional_enum(
+            ExistingPositionAction, "Existing Position Intent", labels[4:]
+        ),
+        new_position_intent=optional_enum(NewPositionAction, "New Position Intent", labels[5:]),
+        entry_price=optional_field("Entry Price", labels[6:]),
+        stop_loss=optional_field("Stop Loss", labels[7:]),
         position_sizing=optional_field("Position Sizing", ()),
     )
 
@@ -443,9 +471,17 @@ class PortfolioDecisionDraft(BaseModel):
     )
     target_summary: str | None = Field(default=None)
     supporting_quote: str | None = Field(default=None)
+    target_low: float | None = Field(default=None)
+    target_high: float | None = Field(default=None)
+    supporting_quote_low: str | None = Field(default=None)
+    supporting_quote_high: str | None = Field(default=None)
+    target_method: str | None = Field(default=None)
+    target_risks: str | None = Field(default=None)
 
     @field_validator(
         "price_target",
+        "target_low",
+        "target_high",
         "confidence_score",
         "recommendation_confidence_score",
         mode="before",
@@ -484,6 +520,29 @@ class PortfolioDecisionDraft(BaseModel):
             conditional_plan=self.conditional_plan,
         )
         return self
+
+
+class PortfolioTargetRepair(BaseModel):
+    """Target-only response; provider output cannot alter the investment decision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    price_target: float | None = None
+    target_low: float | None = None
+    target_high: float | None = None
+    time_horizon: str | None = None
+    confidence_score: int | None = Field(default=None, ge=0, le=100)
+    target_summary: str | None = None
+    target_method: str | None = None
+    target_risks: str | None = None
+    supporting_quote: str | None = None
+    supporting_quote_low: str | None = None
+    supporting_quote_high: str | None = None
+
+    @field_validator("price_target", "target_low", "target_high", "confidence_score", mode="before")
+    @classmethod
+    def _nullish_numeric_to_none(cls, value):
+        return _coerce_optional_float(value)
 
 
 class PortfolioDecision(BaseModel):
@@ -566,6 +625,12 @@ class PortfolioDecision(BaseModel):
             "target and nearby price-level context."
         ),
     )
+    target_low: float | None = None
+    target_high: float | None = None
+    supporting_quote_low: str | None = None
+    supporting_quote_high: str | None = None
+    target_method: str | None = None
+    target_risks: str | None = None
     target_validation_status: TargetValidationStatus = (
         TargetValidationStatus.NOT_PROPOSED
     )
@@ -574,6 +639,8 @@ class PortfolioDecision(BaseModel):
 
     @field_validator(
         "price_target",
+        "target_low",
+        "target_high",
         "confidence_score",
         "recommendation_confidence_score",
         mode="before",
@@ -612,15 +679,25 @@ class PortfolioDecision(BaseModel):
             conditional_plan=self.conditional_plan,
         )
 
-        bundle = (
-            self.price_target,
-            self.time_horizon,
-            self.confidence_score,
-            self.target_summary,
-            self.supporting_quote,
+        point = (self.price_target, self.supporting_quote)
+        target_range = (
+            self.target_low, self.target_high,
+            self.supporting_quote_low, self.supporting_quote_high,
         )
-        has_any = any(value is not None for value in bundle)
-        has_all = all(value is not None for value in bundle)
+        shared = (self.time_horizon, self.confidence_score, self.target_summary)
+        explanation = (self.target_method, self.target_risks)
+        has_point = any(value is not None for value in point)
+        has_range = any(value is not None for value in target_range)
+        has_any = any(value is not None for value in (*point, *target_range, *shared, *explanation))
+        if has_point and has_range:
+            raise ValueError("accepted target must be a point or range, not both")
+        has_all = (
+            all(value is not None for value in (*point, *shared))
+            if has_point else
+            all(value is not None and (not isinstance(value, str) or value.strip())
+                for value in (*target_range, *shared, *explanation))
+            if has_range else False
+        )
         if has_any and not has_all:
             raise ValueError("finalized target bundle must be complete or absent")
         if (
@@ -712,14 +789,26 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         parts.extend(["", f"**Decision Reason**: {decision.status_reason}"])
     if decision.price_target is not None:
         parts.extend(["", f"**Price Target**: {decision.price_target}"])
+    if decision.target_low is not None and decision.target_high is not None:
+        parts.extend([
+            "", f"**Price Target Range**: {decision.target_low:.2f}–{decision.target_high:.2f}",
+        ])
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
     if decision.confidence_score is not None:
         parts.extend(["", f"**Target Confidence**: {decision.confidence_score}/100"])
     if decision.target_summary:
         parts.extend(["", f"**Target Rationale**: {decision.target_summary}"])
+    if decision.target_method:
+        parts.extend(["", f"**Target Method**: {decision.target_method}"])
+    if decision.target_risks:
+        parts.extend(["", f"**Target Risks**: {decision.target_risks}"])
     if decision.supporting_quote:
         parts.extend(["", f"**Target Supporting Quote**: {decision.supporting_quote}"])
+    if decision.supporting_quote_low:
+        parts.extend(["", f"**Target Low Supporting Quote**: {decision.supporting_quote_low}"])
+    if decision.supporting_quote_high:
+        parts.extend(["", f"**Target High Supporting Quote**: {decision.supporting_quote_high}"])
     if decision.target_validation_status is TargetValidationStatus.REJECTED:
         parts.extend([
             "",

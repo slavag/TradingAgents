@@ -139,7 +139,7 @@ def test_unavailable_trader_proposal_failcloses_final_decision_without_model_cal
     llm.with_structured_output.return_value.invoke.assert_not_called()
 
 
-def test_primary_target_without_verbatim_quote_is_removed_but_rating_survives():
+def test_primary_target_without_verbatim_quote_withholds_actionable_rating():
     draft = actionable_draft(
         price_target=999.0,
         time_horizon="12 months",
@@ -152,24 +152,33 @@ def test_primary_target_without_verbatim_quote_is_removed_but_rating_survives():
         make_pm_state()
     )["final_trade_decision"]
 
-    assert "**Decision Status**: Actionable" in result
-    assert "**Rating**: Buy" in result
+    assert "**Decision Status**: Abstain" in result
+    assert "**Rating**" not in result
     assert "**Price Target**" not in result
-    assert "supporting_quote_not_in_evidence" in result
+    assert "target_unavailable" in result
 
 
 def test_primary_target_with_verbatim_quote_is_rendered():
-    quote = "Verified close: 100. Resistance: 120."
+    quote = "| Resistance | 120.00 |"
     draft = actionable_draft(
         price_target=120.0,
         time_horizon="3 months",
         confidence_score=78,
         target_summary="Resistance supports the central case.",
         supporting_quote=quote,
+        target_method="Technical scenario",
+        target_risks="Resistance may fail before the horizon.",
     )
+    state = make_pm_state(market_report="Verified close: 100. Resistance: 120.")
+    state["trade_date"] = "2026-10-09"
+    state["shared_evidence"] = [{
+        "source": "get_verified_market_snapshot", "status": "available",
+        "published_at": "2026-10-09", "as_of_date": "2026-10-09",
+        "content": "Verified close: 100.\n| Close | 100.00 |\n| Resistance | 120.00 |",
+    }]
 
     result = create_portfolio_manager(configured_llm(result=draft))(
-        make_pm_state(market_report=quote)
+        state
     )["final_trade_decision"]
 
     assert "**Price Target**: 120.0" in result
@@ -182,9 +191,9 @@ def test_portfolio_manager_result_preserves_typed_decision_snapshot():
 
     result = create_portfolio_manager(configured_llm(result=draft))(make_pm_state())
 
-    assert result["portfolio_decision"]["status"] == "Actionable"
-    assert result["portfolio_decision"]["rating"] == "Buy"
-    assert result["portfolio_decision"]["recommendation_confidence_score"] == 72
+    assert result["portfolio_decision"]["status"] == "Abstain"
+    assert result["portfolio_decision"]["rating"] is None
+    assert result["portfolio_decision"]["status_reason"] == "target_unavailable"
 
 
 def test_prompt_defines_independent_thesis_and_symmetric_conditional_actions():

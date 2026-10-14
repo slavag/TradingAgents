@@ -1,117 +1,118 @@
+"""Exercise ticker provenance and analysis rendering, independent of CSS layout."""
+
+import json
+import shutil
+import subprocess
+from html.parser import HTMLParser
 from pathlib import Path
+
+import pytest
 
 WEB_STATIC_ROOT = Path(__file__).resolve().parents[1] / "tradingagents" / "web" / "static"
 
 
-def test_bottom_chatter_tape_shows_why_each_ticker_is_present():
-    app_js = (WEB_STATIC_ROOT / "app.js").read_text()
-    styles_css = (WEB_STATIC_ROOT / "styles.css").read_text()
-    index_html = (WEB_STATIC_ROOT / "index.html").read_text()
-
-    assert "function sourceSummary" in app_js
-    assert "function trendSummary" in app_js
-    assert "function currentMoveSummary" in app_js
-    assert "source_count" in app_js
-    assert "ticker-source-line" in app_js
-    assert "ticker-divider" in app_js
-    assert "ticker-bottom-block" in app_js
-    assert "ticker-signal-line" in app_js
-    assert "ticker-rank-block" in app_js
-    assert "ticker-helper ticker-rank-help" in app_js
-    assert "ticker-detail-row" in app_js
-    assert "ticker-avg-block" in app_js
-    assert "ticker-avg-help-row" in app_js
-    assert "ticker-helper ticker-avg-help" in app_js
-    assert "ticker-current-change" in app_js
-    assert "market_open" in app_js
-    assert "Rank score" in app_js
-    assert "5D move + avg checks" in app_js
-    assert "not a buy/sell signal" in app_js
-    assert "Moving-average checks" in app_js
-    assert "price > 50D, 50D > 200D" in app_js
-    assert "ticker-signal" in app_js
-    assert "ticker-move" in app_js
-    assert "Today" in app_js
-    assert "Latest close" in app_js
-    assert "market is not trading" in app_js
-    assert "Top chatter candidates" in app_js
-    assert "Sources " not in app_js
-
-    assert ".ticker-pane .ticker-group" in styles_css
-    assert ".ticker-pane .ticker-track" in styles_css
-    assert "ticker-scroll-from-right" in styles_css
-    assert "minmax(256px, 256px)" in styles_css
-    assert ".ticker-source-line" in styles_css
-    assert ".ticker-divider" in styles_css
-    assert ".ticker-bottom-block" in styles_css
-    assert ".ticker-rank-block" in styles_css
-    assert ".ticker-avg-block" in styles_css
-    assert ".ticker-avg-help-row" in styles_css
-    assert ".ticker-helper" in styles_css
-    assert "overflow: visible" in styles_css
-    assert "text-overflow: clip" in styles_css
-    assert "align-self: end" in styles_css
-    assert "font-smoothing" in styles_css
-    assert "-webkit-font-smoothing: subpixel-antialiased" in styles_css
-    assert "font-family: -apple-system" in styles_css
-    assert "letter-spacing: 0" in styles_css
-    assert "font-size: 18px" in styles_css
-    assert "font-size: 12px" in styles_css
-    assert "animation-duration: 68s" in styles_css
-    assert "color: #f7f9ff" in styles_css
-    assert ".ticker-current-change" in styles_css
-    assert ".ticker-signal" in styles_css
-    assert ".ticker-move" in styles_css
-    assert "margin-left: auto" in styles_css
-    assert "text-align: right" in styles_css
-    assert ".ticker-source-count" not in styles_css
-
-    assert "Chatter Candidates" in index_html
-    assert "Rank Score" in index_html
-    assert "Avg Checks" in index_html
+def evaluate_runtime(expression):
+    if not shutil.which("node"):
+        pytest.skip("Node.js is required to exercise the browser runtime")
+    harness = r"""
+const fs = require('node:fs'), vm = require('node:vm');
+const picker = require(process.argv[1] + '/model_picker.js');
+const nodes = new Map();
+const context = vm.createContext({
+  window: {TradingAgentsModelPicker:picker},
+  document: {getElementById(id) {if (!nodes.has(id)) nodes.set(id,{value:'',checked:false,options:[],classList:{toggle(){},add(){},remove(){}},style:{setProperty(){}}});return nodes.get(id);}, querySelectorAll(){return[];}},
+  URL, Date, console, Set, Map,
+});
+const source = fs.readFileSync(process.argv[1] + '/app.js','utf8').replace(/\nboot\(\);\s*$/, '');
+vm.runInContext(source,context);
+console.log(JSON.stringify(vm.runInContext(process.argv[2],context)));
+"""
+    result = subprocess.run(
+        ["node", "-e", harness, str(WEB_STATIC_ROOT), expression],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
 
 
-def test_result_cards_render_position_aware_thesis_and_conditions():
-    app_js = (WEB_STATIC_ROOT / "app.js").read_text()
-    styles_css = (WEB_STATIC_ROOT / "styles.css").read_text()
+class Buttons(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.buttons = []
 
-    assert "function thesisVisual" in app_js
-    assert "function positionPlan" in app_js
-    assert "result.existing_position_action" in app_js
-    assert "result.new_position_action" in app_js
-    assert "result.conditional_confirmation" in app_js
-    assert "result.conditional_alternative" in app_js
-    assert "result.conditional_invalidation" in app_js
-    assert "aria-label=\"${label}\"" in app_js
-    assert "escapeHtml(value)" in app_js
-    assert "result.recommendation_confidence_label" in app_js
-    assert "Recommendation confidence" in app_js
-    assert "result.target_status_label" in app_js
-    assert 'result.snapshot_mode === "live_current_day"' in app_js
-    assert "Live current-day snapshot" in app_js
-    assert "result.evidence_fingerprint" in app_js
-    assert "result.comparison_status" in app_js
-    assert "Decision changed despite identical evidence" in app_js
-
-    assert ".result-position-plan" in styles_css
-    assert ".result-thesis-icon.bullish" in styles_css
-    assert ".result-thesis-icon.bearish" in styles_css
-    assert ".result-condition.confirmation" in styles_css
-    assert ".result-condition.invalidation" in styles_css
+    def handle_starttag(self, tag, attrs):
+        if tag == "button":
+            self.buttons.append(dict(attrs))
 
 
-def test_progress_sidebar_scrolls_and_evaluation_controls_adapt_to_container():
-    styles_css = (WEB_STATIC_ROOT / "styles.css").read_text(encoding="utf-8")
+def test_chatter_candidates_preserve_provenance_and_use_native_buttons():
+    html = evaluate_runtime(
+        "tickerItem({ticker:'PENG',price:79.24,market_open:false,score:1.2,ret_5d_pct:5,trend_score:2,sources:['ApeWisdom','StockTwits'],source_count:2})"
+    )
+    parser = Buttons()
+    parser.feed(html)
+    assert len(parser.buttons) == 1
+    assert parser.buttons[0]["type"] == "button"
+    assert parser.buttons[0]["data-ticker-symbol"] == "PENG"
+    assert "not a buy/sell signal" in parser.buttons[0]["aria-label"]
+    assert "ApeWisdom" in html and "StockTwits" in html
+    assert "79.24" in html and "5D +5.0%" in html
 
-    assert ".progress-sidebar {\n  overflow-y: auto;" in styles_css
-    assert "repeat(auto-fit, minmax(min(220px, 100%), 1fr))" in styles_css
-    assert '.evaluation-controls input:not([type="checkbox"]),' in styles_css
+
+def test_chatter_list_does_not_duplicate_tickers_or_inject_markup():
+    html = evaluate_runtime(
+        "(() => { const track={style:{setProperty(){}}}; renderTape(track,[{ticker:'<img src=x>',price:1},{ticker:'NVDA',price:2}],tickerItem,20,'Empty'); return track.innerHTML; })()"
+    )
+    parser = Buttons()
+    parser.feed(html)
+    assert len(parser.buttons) == 2
+    assert "<img src=x>" not in html
+    assert "&lt;img src=x&gt;" in html
 
 
-def test_messages_and_tools_feed_has_independent_vertical_scroll():
-    styles_css = (WEB_STATIC_ROOT / "styles.css").read_text(encoding="utf-8")
+def test_result_guidance_conditions_and_confidence_survive_rendering():
+    html = evaluate_runtime(
+        "resultCard({ticker:'PENG',decision:'Overweight',status:'completed',existing_position_action:'Hold',existing_position_summary:'Keep the existing core.',new_position_action:'Conditional Buy',new_position_summary:'Enter only after confirmation.',conditional_confirmation:'Close above the prior high.',conditional_alternative:'Wait for stabilization.',conditional_invalidation:'Cancel on a closing loss.',recommendation_confidence_label:'72/100 (uncalibrated)',price_target_label:'80.10',target_status_label:'Validated',executive_summary:'Evidence <requires> care.'})"
+    )
+    for text in (
+        "Keep the existing core.",
+        "Enter only after confirmation.",
+        "Close above the prior high.",
+        "Wait for stabilization.",
+        "Cancel on a closing loss.",
+        "72/100 (uncalibrated)",
+        "80.10",
+    ):
+        assert text in html
+    assert "Evidence &lt;requires&gt; care." in html
 
-    assert "overflow-y: scroll;" in styles_css
-    assert "overflow-x: hidden;" in styles_css
-    assert "scrollbar-gutter: stable;" in styles_css
-    assert "overscroll-behavior: contain;" in styles_css
+
+def test_evaluation_uses_selected_tickers_and_exact_completed_batch_paths():
+    result = evaluate_runtime(
+        "(() => { elements.evaluationScope.value='selected'; elements.tickers.value='PENG, SHOP.TO'; const selected=buildEvaluationRequest(); elements.evaluationScope.value='current_batch'; state.currentResults=[{results_dir:'/saved/PENG/run-a'}]; return {selected,batch:buildEvaluationRequest()}; })()"
+    )
+    assert result["selected"]["tickers"] == ["PENG", "SHOP.TO"]
+    assert result["batch"]["report_paths"] == ["/saved/PENG/run-a"]
+
+
+def test_empty_current_batch_evaluation_requires_a_completed_selection():
+    result = evaluate_runtime(
+        "(() => { elements.evaluationScope.value='current_batch'; state.currentResults=[]; try {buildEvaluationRequest(); return false;} catch (_) {return true;} })()"
+    )
+    assert result is True
+
+
+def test_recovered_and_partial_runs_have_explicit_statuses():
+    assert evaluate_runtime("statusChip({status:'interrupted'})") == [
+        "Interrupted",
+        "chip interrupted",
+    ]
+    assert evaluate_runtime("statusChip({status:'partial'})") == ["Partial", "chip partial"]
+
+
+def test_saved_google_reasoning_and_export_preferences_are_restored():
+    result = evaluate_runtime(
+        "(() => { elements.googleThinking.value='low'; elements.saveReports.checked=true; window.TradingAgentsRuntime.restoreDefaults({google_thinking_level:'high',save_reports:false}); return {thinking:elements.googleThinking.value,export:elements.saveReports.checked}; })()"
+    )
+    assert result == {"thinking": "high", "export": False}

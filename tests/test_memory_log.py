@@ -1204,12 +1204,21 @@ class TestPortfolioManagerInjection:
             time_horizon="3-6 months",
             confidence_score=82,
             target_summary="Earnings revisions and trend support the central-case target.",
-            supporting_quote="Verified close: 190. Resistance: 215.",
+            supporting_quote="| Resistance | 215.00 |",
+            target_method="Technical scenario",
+            target_risks="The trend can fail before the target horizon.",
             **_position_guidance(),
         )
         llm = _structured_pm_llm(captured, decision)
         pm_node = create_portfolio_manager(llm)
-        result = pm_node(_make_pm_state())
+        state = _make_pm_state()
+        state["trade_date"] = "2026-10-09"
+        state["shared_evidence"] = [{
+            "source": "get_verified_market_snapshot", "status": "available",
+            "published_at": "2026-10-09", "as_of_date": "2026-10-09",
+            "content": "Verified close: 190.\n| Resistance | 215.00 |",
+        }]
+        result = pm_node(state)
         md = result["final_trade_decision"]
         assert "**Rating**: Overweight" in md
         assert "**Executive Summary**: Build position gradually" in md
@@ -1225,10 +1234,7 @@ class TestPortfolioManagerInjection:
             "**Target Rationale**: Earnings revisions and trend support the "
             "central-case target."
         ) in md
-        assert (
-            "**Target Supporting Quote**: Verified close: 190. Resistance: 215."
-            in md
-        )
+        assert "**Target Supporting Quote**: | Resistance | 215.00 |" in md
 
     def test_pm_is_unavailable_when_structured_output_is_unsupported(self):
         """Provider incompatibility must never become an unchecked Sell signal."""

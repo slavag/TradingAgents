@@ -371,7 +371,7 @@ def fetch_reddit_posts(
     if total_posts == 0:
         if rate_limit_exhausted:
             return (
-                f"<Reddit temporarily unavailable due to Reddit rate limiting "
+                f"DATA_UNAVAILABLE: <Reddit temporarily unavailable due to Reddit rate limiting "
                 f"while searching for {ticker.upper()}; remaining subreddits were not requested>"
             )
         return (

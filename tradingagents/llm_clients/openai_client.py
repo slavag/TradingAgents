@@ -173,10 +173,11 @@ _PASSTHROUGH_KWARGS = (
 )
 
 # OpenAI's ``reasoning_effort`` is only accepted by reasoning models — the GPT-5
-# family and the o-series. Non-reasoning models (gpt-4.1, gpt-4o, ...) 400 with
+# and GPT-6 families, and the o-series. Non-reasoning models (gpt-4.1,
+# gpt-4o, ...) 400 with
 # "Unsupported parameter: 'reasoning.effort' is not supported with this model".
 # Drop the kwarg for those rather than crash the run.
-_OPENAI_REASONING_MODEL = re.compile(r"^(gpt-5|o[1-9])")
+_OPENAI_REASONING_MODEL = re.compile(r"^(gpt-[56]|o[1-9])")
 
 
 def _supports_reasoning_effort(model: str) -> bool:
@@ -217,6 +218,7 @@ OPENAI_COMPATIBLE_PROVIDERS: dict[str, ProviderSpec] = {
     "openai":     ProviderSpec(use_responses_api=True),
     "xai":        ProviderSpec(base_url="https://api.x.ai/v1"),
     "deepseek":   ProviderSpec(base_url="https://api.deepseek.com", chat_class=DeepSeekChatOpenAI),
+    "meta":       ProviderSpec(base_url="https://api.meta.ai/v1"),
     "qwen":       ProviderSpec(base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
     "qwen-cn":    ProviderSpec(base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"),
     "glm":        ProviderSpec(base_url="https://api.z.ai/api/paas/v4/"),
@@ -334,6 +336,14 @@ class OpenAIClient(BaseLLMClient):
             if key not in self.kwargs:
                 continue
             if key == "reasoning_effort" and not _supports_reasoning_effort(self.model):
+                continue
+            if (
+                key == "temperature"
+                and self.provider == "openai"
+                and _is_native_openai_base_url(llm_kwargs.get("base_url"))
+                and _supports_reasoning_effort(self.model)
+                and self.kwargs.get("reasoning_effort") != "none"
+            ):
                 continue
             llm_kwargs[key] = self.kwargs[key]
 

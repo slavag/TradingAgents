@@ -188,6 +188,52 @@ def test_consolidated_reports_render_position_plan_and_accessible_bull_icon():
     assert "&lt;script&gt;alert(&#x27;x&#x27;)&lt;/script&gt;" in html
 
 
+def test_consolidated_reports_label_accepted_range_method_risk_and_both_anchors():
+    result = _position_aware_result(
+        ticker="PENG", decision="Hold", reference_price=75.74,
+        target_validation_status="Accepted", target_rejection_reason=None,
+        target_low=72.83, target_high=77.10,
+        confidence_score=18, target_horizon="3 months",
+        target_summary="Demand persistence may support a technical recovery.",
+        target_method="Technical scenario",
+        target_risks="A failed breakout would invalidate the range.",
+        supporting_quote_low="| Low | 72.83 |",
+        supporting_quote_high="| High | 77.10 |",
+    )
+
+    markdown = build_consolidated_report([result], "2026-10-09")
+    html = build_consolidated_report_html([result], "2026-10-09")
+
+    assert "72.83–77.10" in markdown and "72.83–77.10" in html
+    assert "Target Method: Technical scenario" in markdown
+    assert "Target Risks: A failed breakout would invalidate the range." in markdown
+    assert "Technical scenario" in html
+    assert "A failed breakout would invalidate the range." in html
+    assert "| Low | 72.83 |" in markdown and "| High | 77.10 |" in markdown
+    assert "| Low | 72.83 |" in html and "| High | 77.10 |" in html
+    assert "Average validated target across 0 of 1 completed runs" in html
+
+
+def test_consolidated_report_hides_rejected_range_method_risk_and_anchors():
+    result = _position_aware_result(
+        ticker="PENG", target_low=72.83, target_high=77.10,
+        target_summary="Unsupported interpretation secret",
+        target_method="Unsupported method secret",
+        target_risks="Unsupported risk secret",
+        supporting_quote_low="| Low | 72.83 |",
+        supporting_quote_high="| High | 77.10 |",
+    )
+
+    markdown = build_consolidated_report([result], "2026-10-09")
+    html = build_consolidated_report_html([result], "2026-10-09")
+
+    assert "72.83–77.10" not in markdown + html
+    assert "Unsupported method secret" not in markdown + html
+    assert "Unsupported interpretation secret" not in markdown + html
+    assert "Unsupported risk secret" not in markdown + html
+    assert "| Low | 72.83 |" not in markdown + html
+
+
 def test_consolidated_html_renders_bear_and_neutral_thesis_icons():
     bearish = _position_aware_result(
         ticker="DOWN",

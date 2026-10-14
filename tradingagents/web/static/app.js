@@ -1,14 +1,24 @@
 const state = {
   jobId: null,
+  submitting: false,
+  submission: null,
+  modalReturnFocus: null,
   pollHandle: null,
   marketRefreshHandle: null,
   speakingRefreshHandle: null,
   htmlBlobUrl: null,
   markdownBlobUrl: null,
+  markdownFilename: null,
   marketItems: [],
   speakingItems: [],
   activeTickerItem: null,
   currentResults: [],
+  sourceSettings: [],
+  pendingSettingRemovals: new Set(),
+  discoveredModels: { quick: {}, deep: {}, verifier: {} },
+  modelRefreshTokens: { quick: 0, deep: 0, verifier: 0 },
+  selectedModels: { quick: {}, deep: {}, verifier: {} },
+  customModelIds: { quick: {}, deep: {}, verifier: {} },
 };
 
 const MARKET_TAPE_REFRESH_MS = 10 * 60 * 1000;
@@ -17,7 +27,10 @@ const SPEAKING_TAPE_REFRESH_MS = 30 * 60 * 1000;
 const MODEL_OPTIONS = window.TRADINGAGENTS_MODEL_OPTIONS || {};
 const ROLE_MODEL_OPTIONS = window.TRADINGAGENTS_ROLE_MODEL_OPTIONS || {};
 const MODEL_CAPABILITIES = window.TRADINGAGENTS_MODEL_CAPABILITIES || {};
+const CATALOG_METADATA = window.TRADINGAGENTS_CATALOG_METADATA || {};
+const DISCOVERY_PROVIDERS = window.TRADINGAGENTS_DISCOVERY_PROVIDERS || [];
 const ROLE_DEFAULTS = window.TRADINGAGENTS_ROLE_DEFAULTS || {};
+const { mergeModelChoices, isCurrentRefresh, preferredModelForProvider, canRefreshProvider } = window.TradingAgentsModelPicker;
 
 const elements = {
   form: document.getElementById("analysis-form"),
@@ -25,10 +38,22 @@ const elements = {
   analysisDate: document.getElementById("analysis-date"),
   quickProvider: document.getElementById("quick-provider"),
   quickThinker: document.getElementById("quick-thinker"),
+  quickCustomModel: document.getElementById("quick-custom-model"),
+  quickCustomModelWrap: document.getElementById("quick-custom-model-wrap"),
+  quickModelRefresh: document.getElementById("refresh-quick-models"),
+  quickModelRefreshStatus: document.getElementById("quick-model-refresh-status"),
   deepProvider: document.getElementById("deep-provider"),
   deepThinker: document.getElementById("deep-thinker"),
+  deepCustomModel: document.getElementById("deep-custom-model"),
+  deepCustomModelWrap: document.getElementById("deep-custom-model-wrap"),
+  deepModelRefresh: document.getElementById("refresh-deep-models"),
+  deepModelRefreshStatus: document.getElementById("deep-model-refresh-status"),
   finalReportProvider: document.getElementById("final-report-provider"),
   finalReportModel: document.getElementById("final-report-model"),
+  verifierCustomModel: document.getElementById("verifier-custom-model"),
+  verifierCustomModelWrap: document.getElementById("verifier-custom-model-wrap"),
+  verifierModelRefresh: document.getElementById("refresh-verifier-models"),
+  verifierModelRefreshStatus: document.getElementById("verifier-model-refresh-status"),
   researchDepth: document.getElementById("research-depth"),
   openaiEffortWrap: document.getElementById("openai-effort-wrap"),
   openaiEffort: document.getElementById("openai-effort"),
@@ -96,6 +121,11 @@ const elements = {
   defaultReportPath: document.getElementById("default-report-path"),
   customReportPath: document.getElementById("custom-report-path"),
   resetForm: document.getElementById("reset-form"),
+  openDataSettings: document.getElementById("open-data-settings"),
+  dataSettingsModal: document.getElementById("data-settings-modal"),
+  closeDataSettings: document.getElementById("close-data-settings"),
+  saveDataSettings: document.getElementById("save-data-settings"),
+  dataSettingsStatus: document.getElementById("data-settings-status"),
 };
 
 function escapeHtml(value) {
@@ -112,7 +142,7 @@ function setToday() {
 }
 
 function populateModelSelect(selectElement, options, preferredValue = null) {
-  const previousValue = preferredValue || selectElement.value;
+  const previousValue = preferredValue ?? selectElement.value;
   if (!options.length) {
     selectElement.innerHTML = "";
     return;
@@ -121,14 +151,22 @@ function populateModelSelect(selectElement, options, preferredValue = null) {
     .map(([label, value]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`)
     .join("");
 
-  const hasPreferred = options.some(([, value]) => value === previousValue);
-  selectElement.value = hasPreferred ? previousValue : options[0][1];
+  selectElement.value = previousValue && options.some(([, value]) => value === previousValue)
+    ? previousValue : options[0][1];
 }
 
 function updateModelOptions(role, provider, selectElement, preferredValue = null) {
   const roleOptions = ROLE_MODEL_OPTIONS[role] || {};
-  const options = roleOptions[provider] || roleOptions.openai || MODEL_OPTIONS[provider] || [];
-  populateModelSelect(selectElement, options, preferredValue);
+  const scopedOptions = { [role]: { [provider]: roleOptions[provider] || MODEL_OPTIONS[provider] || [["Custom model ID", "custom"]] } };
+  const selectedValue = preferredValue ?? selectElement.value;
+  const discovered = state.discoveredModels[role][provider] || [];
+  const options = mergeModelChoices(role, provider, selectedValue, discovered, scopedOptions).map(([label, value]) => {
+    const metadata = CATALOG_METADATA[provider]?.[value];
+    if (!metadata) return [label, value];
+    const lifecycle = metadata.lifecycle === "preview" ? "Preview" : "Recommended";
+    return [`${label} · ${lifecycle}`, value];
+  });
+  populateModelSelect(selectElement, options, selectedValue);
 }
 
 function roleBindings() {
@@ -137,6 +175,105 @@ function roleBindings() {
     deep: [elements.deepProvider, elements.deepThinker, elements.deepPromotionStatus],
     verifier: [elements.finalReportProvider, elements.finalReportModel, elements.verifierPromotionStatus],
   };
+}
+
+function roleRefreshControls() {
+  return {
+    quick: [elements.quickModelRefresh, elements.quickModelRefreshStatus],
+    deep: [elements.deepModelRefresh, elements.deepModelRefreshStatus],
+    verifier: [elements.verifierModelRefresh, elements.verifierModelRefreshStatus],
+  };
+}
+
+function roleCustomControls() {
+  return {
+    quick: [elements.quickCustomModelWrap, elements.quickCustomModel],
+    deep: [elements.deepCustomModelWrap, elements.deepCustomModel],
+    verifier: [elements.verifierCustomModelWrap, elements.verifierCustomModel],
+  };
+}
+
+function updateCustomModelFields() {
+  Object.entries(roleBindings()).forEach(([role, [, modelSelect]]) => {
+    const [wrap, input] = roleCustomControls()[role];
+    const selectedCustom = modelSelect.value === "custom";
+    wrap.classList.toggle("hidden", !selectedCustom);
+    input.required = selectedCustom;
+  });
+}
+
+function updateRefreshControls() {
+  Object.entries(roleBindings()).forEach(([role, [providerSelect]]) => {
+    const [button, status] = roleRefreshControls()[role];
+    const supported = canRefreshProvider(providerSelect.value, DISCOVERY_PROVIDERS);
+    button.disabled = !supported;
+    if (!supported) {
+      status.textContent = "This provider uses a custom/deployment ID; model-list refresh is unavailable.";
+    } else if (status.textContent.startsWith("This provider uses")) {
+      status.textContent = "";
+    }
+  });
+}
+
+function selectedModelId(role) {
+  const [, modelSelect] = roleBindings()[role];
+  if (modelSelect.value !== "custom") return modelSelect.value.trim();
+  const [, input] = roleCustomControls()[role];
+  const typed = input.value.trim();
+  if (!typed) throw new Error(`Enter an exact custom model ID for ${role}.`);
+  return typed;
+}
+
+async function refreshRoleModels(role) {
+  const [providerSelect, modelSelect] = roleBindings()[role];
+  const [button, status] = roleRefreshControls()[role];
+  const provider = providerSelect.value;
+  if (!canRefreshProvider(provider, DISCOVERY_PROVIDERS)) {
+    status.textContent = "This provider uses a custom/deployment ID; model-list refresh is unavailable.";
+    return;
+  }
+  const token = ++state.modelRefreshTokens[role];
+  button.disabled = true;
+  status.textContent = "Checking available models…";
+  try {
+    const response = await fetch(`/api/models/${encodeURIComponent(provider)}/refresh`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) throw new Error("refresh_unavailable");
+    const payload = await response.json();
+    if (!isCurrentRefresh(role, provider, token, role, providerSelect.value, state.modelRefreshTokens[role])) return;
+    if (!Array.isArray(payload.models)) throw new Error("refresh_unavailable");
+    if (payload.status === "fresh" || payload.status === "cached") {
+      state.discoveredModels[role][provider] = payload.models.filter((id) => typeof id === "string");
+      const selected = modelSelect.value;
+      updateModelOptions(role, provider, modelSelect, selected);
+      status.textContent = `Available in this account · checked ${payload.fetched_at || "now"}`;
+    } else {
+      status.textContent = "Model listing unavailable; curated and custom choices remain available.";
+    }
+  } catch (_error) {
+    if (isCurrentRefresh(role, provider, token, role, providerSelect.value, state.modelRefreshTokens[role])) {
+      status.textContent = "Model listing unavailable; curated and custom choices remain available.";
+    }
+  } finally {
+    if (token === state.modelRefreshTokens[role]) button.disabled = false;
+  }
+}
+
+function onProviderChange(role) {
+  state.modelRefreshTokens[role] += 1;
+  const [button, status] = roleRefreshControls()[role];
+  button.disabled = false;
+  status.textContent = "";
+  const [providerSelect, modelSelect] = roleBindings()[role];
+  const preferred = preferredModelForProvider(
+    role, providerSelect.value, state.selectedModels, ROLE_DEFAULTS,
+  );
+  const [, customInput] = roleCustomControls()[role];
+  customInput.value = state.customModelIds[role][providerSelect.value] || "";
+  modelSelect.value = "";
+  updateModelOptions(role, providerSelect.value, modelSelect, preferred);
+  updateProviderFields();
 }
 
 function applyRoleDefaults() {
@@ -169,6 +306,11 @@ function updateProviderFields() {
   updateModelOptions("quick", elements.quickProvider.value, elements.quickThinker);
   updateModelOptions("deep", elements.deepProvider.value, elements.deepThinker);
   updateModelOptions("verifier", elements.finalReportProvider.value, elements.finalReportModel);
+  updateCustomModelFields();
+  updateRefreshControls();
+  Object.entries(roleBindings()).forEach(([role, [provider, model]]) => {
+    if (model.value) state.selectedModels[role][provider.value] = model.value;
+  });
   const capabilities = selectedCapabilities();
   const isOpenAI = capabilities.some((item) => item.capabilities.reasoning_effort);
   const isGoogle = capabilities.some((item) => item.capabilities.thinking_level);
@@ -241,52 +383,19 @@ function updateExportToggle() {
 }
 
 function revokeReportUrls() {
-  if (state.htmlBlobUrl) {
-    URL.revokeObjectURL(state.htmlBlobUrl);
-    state.htmlBlobUrl = null;
-  }
-  if (state.markdownBlobUrl) {
-    URL.revokeObjectURL(state.markdownBlobUrl);
-    state.markdownBlobUrl = null;
-  }
+  state.htmlBlobUrl = null;
+  state.markdownBlobUrl = null;
 }
 
 function setReportButtons(job) {
-  revokeReportUrls();
-
-  const html = job.consolidated_html;
-  const markdown = job.consolidated_markdown;
-  const paths = job.consolidated_paths || {};
-  const defaultPaths = paths.default || null;
-  const customPaths = paths.custom || null;
-
-  if (html) {
-    state.htmlBlobUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-  }
-  if (markdown) {
-    state.markdownBlobUrl = URL.createObjectURL(new Blob([markdown], { type: "text/markdown" }));
-  }
-
+  state.htmlBlobUrl = job.consolidated_reports?.html || null;
+  state.markdownBlobUrl = job.consolidated_reports?.md || null;
+  state.markdownFilename = `consolidated_${(job.tickers || []).join("_")}_${job.report_timestamp || "batch"}.md`;
   elements.openHtmlReport.disabled = !state.htmlBlobUrl;
   elements.downloadMarkdownReport.disabled = !state.markdownBlobUrl;
-
-  if (job.status === "completed" && (state.htmlBlobUrl || state.markdownBlobUrl)) {
-    elements.reportState.textContent = "Ready";
-    elements.reportState.className = "chip done";
-  } else if (job.status === "failed") {
-    elements.reportState.textContent = "Failed";
-    elements.reportState.className = "chip failed";
-  } else {
-    elements.reportState.textContent = "Waiting";
-    elements.reportState.className = "chip neutral";
-  }
-
-  elements.defaultReportPath.textContent = defaultPaths
-    ? (defaultPaths.html || defaultPaths.markdown || "Saved")
-    : "No report yet.";
-  elements.customReportPath.textContent = customPaths
-    ? (customPaths.html || customPaths.markdown || "Saved")
-    : "Not written yet.";
+  elements.reportState.textContent = state.htmlBlobUrl ? "Ready" : "Not available yet";
+  elements.defaultReportPath.textContent = job.consolidated_paths?.default?.html || "";
+  elements.customReportPath.textContent = job.consolidated_paths?.custom?.html || "";
 }
 
 const SOURCE_DISPLAY_NAMES = {
@@ -401,7 +510,7 @@ function tickerItem(item) {
     `5D move ${ret5}. ${trend.detail}. ${sources.detail}.`
   );
   return `
-    <article class="ticker-item clickable" data-ticker-symbol="${escapeHtml(item.ticker)}" role="button" tabindex="0" aria-label="${escapeHtml(itemLabel)}" title="${escapeHtml(itemLabel)}">
+    <button type="button" class="ticker-item clickable" data-ticker-symbol="${escapeHtml(item.ticker)}" aria-label="${escapeHtml(itemLabel)}" title="${escapeHtml(itemLabel)}">
       <div class="ticker-row ticker-row-main">
         <span class="ticker-symbol">${escapeHtml(item.ticker)}</span>
         <span class="ticker-current-change ${currentMove.tone}" title="${escapeHtml(currentMove.detail)}">${escapeHtml(currentMove.label)}</span>
@@ -423,7 +532,7 @@ function tickerItem(item) {
         <div class="ticker-divider"></div>
         <div class="ticker-source-line" title="${escapeHtml(sources.detail)}">${escapeHtml(sources.text)}</div>
       </div>
-    </article>
+    </button>
   `;
 }
 
@@ -460,9 +569,9 @@ function renderTape(trackElement, items, renderer, targetCount, emptyMessage) {
     return [];
   }
 
-  const visibleItems = fillTickerSlots(items, targetCount);
+  const visibleItems = items.slice(0, targetCount);
   trackElement.style.setProperty("--visible-tickers", String(targetCount));
-  trackElement.innerHTML = tickerGroup(visibleItems, renderer) + tickerGroup(visibleItems, renderer);
+  trackElement.innerHTML = tickerGroup(visibleItems, renderer);
   return visibleItems;
 }
 
@@ -571,8 +680,10 @@ function openTickerModal(item) {
     `${rankScoreDetail(score)} ` +
     `Avg checks means ${trend.detail}`;
 
+  state.modalReturnFocus = document.activeElement;
   elements.tickerModal.classList.remove("hidden");
   elements.tickerModal.setAttribute("aria-hidden", "false");
+  elements.closeTickerModal.focus();
   hydrateTickerModal(item.ticker);
 }
 
@@ -636,6 +747,7 @@ function closeTickerModal() {
   state.activeTickerItem = null;
   elements.tickerModal.classList.add("hidden");
   elements.tickerModal.setAttribute("aria-hidden", "true");
+  state.modalReturnFocus?.focus();
 }
 
 function handleTickerTrackClick(event) {
@@ -650,6 +762,7 @@ function addActiveTickerToAnalysis() {
   if (!state.activeTickerItem) return;
   appendTickerToTextarea(state.activeTickerItem.ticker);
   closeTickerModal();
+  window.dispatchEvent(new Event("tradingagents:ticker-added"));
 }
 
 function decisionClass(decision) {
@@ -770,6 +883,7 @@ function resultCard(result) {
         <strong>News:</strong> ${escapeHtml(highlights.news || "—")}<br />
         <strong>Fundamentals:</strong> ${escapeHtml(highlights.fundamentals || "—")}
       </p>
+      <div class="result-report-links"></div>
     </article>
   `;
 }
@@ -784,6 +898,15 @@ function renderResults(job) {
 
   elements.resultsList.className = "results-list";
   elements.resultsList.innerHTML = results.map(resultCard).join("");
+  elements.resultsList.querySelectorAll(".result-card").forEach((card, index) => {
+    const result = results[index];
+    if (result.status !== "completed" || !result.investor_report_path) return;
+    const link = document.createElement("a");
+    link.href = `/api/jobs/${encodeURIComponent(job.id)}/reports/${encodeURIComponent(result.ticker)}/investor`;
+    link.rel = "noopener noreferrer";
+    link.textContent = "Open investor brief";
+    card.querySelector(".result-report-links").appendChild(link);
+  });
 }
 
 function renderProgressRows(job) {
@@ -832,6 +955,8 @@ function renderEvents(job) {
 }
 
 function statusChip(job) {
+  if (job.status === "interrupted") return ["Interrupted", "chip interrupted"];
+  if (job.status === "partial") return ["Partial", "chip partial"];
   if (job.status === "completed") return ["Completed", "chip done"];
   if (job.status === "failed") return ["Failed", "chip failed"];
   if (job.status === "running") return ["Running", "chip live"];
@@ -839,21 +964,20 @@ function statusChip(job) {
   return ["Idle", "chip neutral"];
 }
 
-function updateJobStatus(job) {
+function updateJobStatus(job, notify = true) {
   const [label, className] = statusChip(job);
   elements.statusBadge.textContent = label;
   elements.statusBadge.className = className;
   elements.currentTicker.textContent = job.current_ticker || "—";
   elements.completedCount.textContent = `${job.completed || 0} / ${job.total || 0}`;
   elements.progressMessage.textContent = job.progress_message || "Waiting for a run.";
-  if (Array.isArray(job.results) && job.results.length) {
-    state.currentResults = job.results;
-  }
+  state.currentResults = job.results || [];
   renderProgressRows(job);
   renderEvents(job);
   elements.currentReport.textContent = job.current_report || "Waiting for report output.";
   renderResults(job);
   setReportButtons(job);
+  if (notify) window.dispatchEvent(new CustomEvent("tradingagents:job", {detail:job}));
 }
 
 async function pollJob(jobId) {
@@ -866,7 +990,7 @@ async function pollJob(jobId) {
     const job = await response.json();
     updateJobStatus(job);
 
-    if (job.status === "completed" || job.status === "failed") {
+    if (["completed", "failed", "partial", "interrupted"].includes(job.status)) {
       clearInterval(state.pollHandle);
       state.pollHandle = null;
     }
@@ -885,11 +1009,11 @@ function collectPayload() {
     research_depth: Number(elements.researchDepth.value),
     llm_provider: elements.quickProvider.value,
     quick_provider: elements.quickProvider.value,
-    quick_thinker: elements.quickThinker.value.trim(),
+    quick_thinker: selectedModelId("quick"),
     deep_provider: elements.deepProvider.value,
-    deep_thinker: elements.deepThinker.value.trim(),
+    deep_thinker: selectedModelId("deep"),
     final_report_provider: elements.finalReportProvider.value,
-    final_report_model: elements.finalReportModel.value.trim(),
+    final_report_model: selectedModelId("verifier"),
     openai_reasoning_effort: [elements.quickProvider.value, elements.deepProvider.value, elements.finalReportProvider.value].includes("openai")
       ? elements.openaiEffort.value
       : null,
@@ -904,12 +1028,26 @@ function collectPayload() {
 
 async function submitAnalysis(event) {
   event.preventDefault();
-  const payload = collectPayload();
-  revokeReportUrls();
-  elements.defaultReportPath.textContent = "Preparing reports…";
-  elements.customReportPath.textContent = payload.save_reports ? "Will write after completion." : "Custom export disabled.";
-
+  if (state.submitting) return;
+  state.submitting = true;
+  const submit = document.getElementById("start-analysis");
+  const status = document.getElementById("analysis-form-status");
+  submit.disabled = true;
+  submit.textContent = "Starting analysis…";
+  status.textContent = "Submitting your analysis…";
   try {
+    const payload = collectPayload();
+    const selection = window.TradingAgentsResearch.tickerSelection(payload.tickers);
+    if (selection.invalid.length || !selection.tickers.length) throw new Error("Enter valid ticker symbols.");
+    payload.tickers = selection.tickers;
+    const signature = JSON.stringify(payload);
+    if (!state.submission || state.submission.signature !== signature) {
+      state.submission = {signature, id:crypto.randomUUID()};
+    }
+    payload.request_id = state.submission.id;
+    revokeReportUrls();
+    elements.defaultReportPath.textContent = "Preparing reports…";
+    elements.customReportPath.textContent = payload.save_reports ? "Will write after completion." : "Custom export disabled.";
     const response = await fetch("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -922,6 +1060,9 @@ async function submitAnalysis(event) {
     }
 
     state.jobId = job.id;
+    state.submission = null;
+    status.textContent = "Analysis started. Follow its progress in Runs.";
+    window.dispatchEvent(new CustomEvent("tradingagents:started", {detail:job}));
     updateJobStatus(job);
 
     if (state.pollHandle) {
@@ -930,9 +1071,14 @@ async function submitAnalysis(event) {
     state.pollHandle = setInterval(() => pollJob(state.jobId), 5000);
     pollJob(state.jobId);
   } catch (error) {
+    status.textContent = error.message;
     elements.progressMessage.textContent = error.message;
     elements.statusBadge.textContent = "Failed";
     elements.statusBadge.className = "chip failed";
+  } finally {
+    state.submitting = false;
+    submit.disabled = false;
+    submit.textContent = "Analyze tickers";
   }
 }
 
@@ -958,10 +1104,109 @@ function downloadMarkdownReport() {
   if (!state.markdownBlobUrl) return;
   const anchor = document.createElement("a");
   anchor.href = state.markdownBlobUrl;
-  anchor.download = `tradingagents-report-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.md`;
+  anchor.download = state.markdownFilename || "consolidated_batch_report.md";
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
+}
+
+function closeDataSourceSettings() {
+  elements.dataSettingsModal.classList.add("hidden");
+  elements.dataSettingsModal.setAttribute("aria-hidden", "true");
+  state.modalReturnFocus?.focus();
+  state.pendingSettingRemovals.clear();
+  document.querySelectorAll(".data-settings-modal input[type='password']").forEach((input) => {
+    input.value = "";
+    input.type = "password";
+  });
+  document.querySelectorAll(".secret-toggle").forEach((button) => { button.textContent = "Show"; });
+}
+
+function renderDataSourceSettings(payload) {
+  state.sourceSettings = payload.fields || [];
+  state.pendingSettingRemovals.clear();
+  state.sourceSettings.forEach((item) => {
+    const input = document.querySelector(`input[data-setting-key="${item.key}"]`);
+    const status = document.getElementById(`${item.key}-status`);
+    const remove = document.querySelector(`button.remove-setting[data-setting-key="${item.key}"]`);
+    if (!input || !status || !remove) return;
+    if (input.type === "password") {
+      input.value = "";
+      input.placeholder = item.configured ? "Saved · enter a new value to replace" : "Enter API key";
+    } else {
+      input.value = item.value || "";
+    }
+    status.textContent = item.origin === "saved" ? "Saved locally" : item.origin === "environment" ? "Set in environment" : "Not configured";
+    status.classList.toggle("configured", item.configured);
+    remove.disabled = !item.saved;
+  });
+}
+
+async function loadDataSourceSettings() {
+  elements.dataSettingsStatus.textContent = "Loading saved status…";
+  try {
+    const response = await fetch("/api/settings/data-sources", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "Could not load settings.");
+    renderDataSourceSettings(payload);
+    elements.dataSettingsStatus.textContent = "Ready.";
+  } catch (error) {
+    elements.dataSettingsStatus.textContent = error.message;
+  }
+}
+
+async function openDataSourceSettings() {
+  state.modalReturnFocus = document.activeElement;
+  elements.dataSettingsModal.classList.remove("hidden");
+  elements.dataSettingsModal.setAttribute("aria-hidden", "false");
+  elements.closeDataSettings.focus();
+  await loadDataSourceSettings();
+  document.querySelector(".data-settings-modal input")?.focus();
+}
+
+function markSettingForRemoval(event) {
+  const key = event.currentTarget.dataset.settingKey;
+  state.pendingSettingRemovals.add(key);
+  const input = document.querySelector(`input[data-setting-key="${key}"]`);
+  const status = document.getElementById(`${key}-status`);
+  if (input) input.value = "";
+  if (status) status.textContent = "Will remove when saved";
+  elements.dataSettingsStatus.textContent = "Unsaved changes.";
+}
+
+async function saveDataSourceSettings() {
+  const values = {};
+  document.querySelectorAll("input[data-setting-key]").forEach((input) => {
+    const key = input.dataset.settingKey;
+    const value = input.value.trim();
+    if (value && !state.pendingSettingRemovals.has(key)) values[key] = value;
+  });
+  elements.saveDataSettings.disabled = true;
+  elements.dataSettingsStatus.textContent = "Saving…";
+  try {
+    const response = await fetch("/api/settings/data-sources", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values, remove: [...state.pendingSettingRemovals] }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "Could not save settings.");
+    renderDataSourceSettings(payload);
+    elements.dataSettingsStatus.textContent = "Settings saved.";
+  } catch (error) {
+    elements.dataSettingsStatus.textContent = error.message;
+  } finally {
+    elements.saveDataSettings.disabled = false;
+  }
+}
+
+function toggleSecretInput(event) {
+  const key = event.currentTarget.dataset.secretTarget;
+  const input = document.querySelector(`input[data-setting-key="${key}"]`);
+  if (!input) return;
+  const shouldShow = input.type === "password";
+  input.type = shouldShow ? "text" : "password";
+  event.currentTarget.textContent = shouldShow ? "Hide" : "Show";
 }
 
 function boot() {
@@ -969,10 +1214,7 @@ function boot() {
   applyRoleDefaults();
   updateProviderFields();
   updateExportToggle();
-  fetchMarketTickers();
-  fetchSpeakingStocks();
-  state.marketRefreshHandle = setInterval(fetchMarketTickers, MARKET_TAPE_REFRESH_MS);
-  state.speakingRefreshHandle = setInterval(fetchSpeakingStocks, SPEAKING_TAPE_REFRESH_MS);
+
 
   document.querySelectorAll(".sidebar-toggle").forEach((toggle) => {
     const section = toggle.parentElement;
@@ -988,9 +1230,21 @@ function boot() {
     });
   });
 
-  elements.quickProvider.addEventListener("change", updateProviderFields);
-  elements.deepProvider.addEventListener("change", updateProviderFields);
-  elements.finalReportProvider.addEventListener("change", updateProviderFields);
+  elements.quickProvider.addEventListener("change", () => onProviderChange("quick"));
+  elements.deepProvider.addEventListener("change", () => onProviderChange("deep"));
+  elements.finalReportProvider.addEventListener("change", () => onProviderChange("verifier"));
+  elements.quickThinker.addEventListener("change", updateProviderFields);
+  elements.deepThinker.addEventListener("change", updateProviderFields);
+  elements.finalReportModel.addEventListener("change", updateProviderFields);
+  Object.entries(roleCustomControls()).forEach(([role, [, input]]) => {
+    input.addEventListener("input", () => {
+      const [provider] = roleBindings()[role];
+      state.customModelIds[role][provider.value] = input.value;
+    });
+  });
+  elements.quickModelRefresh.addEventListener("click", () => refreshRoleModels("quick"));
+  elements.deepModelRefresh.addEventListener("click", () => refreshRoleModels("deep"));
+  elements.verifierModelRefresh.addEventListener("click", () => refreshRoleModels("verifier"));
   elements.saveReports.addEventListener("change", updateExportToggle);
   elements.refreshSpeaking.addEventListener("click", fetchSpeakingStocks);
   elements.tickerTrack.addEventListener("click", handleTickerTrackClick);
@@ -999,6 +1253,14 @@ function boot() {
   elements.openHtmlReport.addEventListener("click", openHtmlReport);
   elements.downloadMarkdownReport.addEventListener("click", downloadMarkdownReport);
   elements.runEvaluation.addEventListener("click", runForecastEvaluation);
+  elements.openDataSettings.addEventListener("click", openDataSourceSettings);
+  elements.closeDataSettings.addEventListener("click", closeDataSourceSettings);
+  elements.saveDataSettings.addEventListener("click", saveDataSourceSettings);
+  document.querySelectorAll(".remove-setting").forEach((button) => button.addEventListener("click", markSettingForRemoval));
+  document.querySelectorAll(".secret-toggle").forEach((button) => button.addEventListener("click", toggleSecretInput));
+  elements.dataSettingsModal.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.closeSettings === "true") closeDataSourceSettings();
+  });
   elements.closeTickerModal.addEventListener("click", closeTickerModal);
   elements.addTickerToAnalysis.addEventListener("click", addActiveTickerToAnalysis);
   elements.tickerModal.addEventListener("click", (event) => {
@@ -1007,9 +1269,19 @@ function boot() {
     }
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !elements.tickerModal.classList.contains("hidden")) {
-      closeTickerModal();
+    if (event.key === "Tab") {
+      const modal = document.querySelector(".modal-shell:not(.hidden) .modal-card");
+      if (modal) {
+        const focusable = [...modal.querySelectorAll('button, a[href], input, select, textarea')]
+          .filter(node => !node.disabled && node.getClientRects().length);
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
     }
+    if (event.key !== "Escape") return;
+    if (!elements.dataSettingsModal.classList.contains("hidden")) closeDataSourceSettings();
+    else if (!elements.tickerModal.classList.contains("hidden")) closeTickerModal();
   });
   window.addEventListener("beforeunload", () => {
     if (state.pollHandle) {
@@ -1024,4 +1296,39 @@ function boot() {
   });
 }
 
+window.TradingAgentsRuntime = {
+  renderJob: job => updateJobStatus(job, false),
+  isSubmitting: () => state.submitting,
+  loadDiscovery: () => {
+    if (state.marketRefreshHandle) return;
+    fetchMarketTickers(); fetchSpeakingStocks();
+    state.marketRefreshHandle = setInterval(fetchMarketTickers, MARKET_TAPE_REFRESH_MS);
+    state.speakingRefreshHandle = setInterval(fetchSpeakingStocks, SPEAKING_TAPE_REFRESH_MS);
+  },
+  modelSummary: () => Object.entries(roleBindings()).map(([role,[provider]]) => {
+    try { return `${role}: ${provider.value} / ${selectedModelId(role)}`; }
+    catch (_) { return `${role}: custom model required`; }
+  }).join(" · "),
+  defaults: () => {
+    const payload = collectPayload();
+    delete payload.tickers; delete payload.analysis_date; delete payload.export_path;
+    return payload;
+  },
+  restoreDefaults: value => {
+    for (const [role,[provider,model]] of Object.entries(roleBindings())) {
+      const prefix = role === "verifier" ? "final_report" : role;
+      const configuredProvider = value[`${prefix}_provider`];
+      if ([...provider.options].some(option => option.value === configuredProvider)) provider.value = configuredProvider;
+      const selected = value[role === "verifier" ? "final_report_model" : `${role}_thinker`];
+      if (typeof selected === "string" && selected.length <= 160) updateModelOptions(role, provider.value, model, selected);
+    }
+    if ([1,3,5].includes(value.research_depth)) elements.researchDepth.value = String(value.research_depth);
+    if (["low","medium","high"].includes(value.openai_reasoning_effort)) elements.openaiEffort.value = value.openai_reasoning_effort;
+    if (["", "minimal", "low", "high"].includes(value.google_thinking_level)) elements.googleThinking.value = value.google_thinking_level;
+    if (typeof value.save_reports === "boolean") elements.saveReports.checked = value.save_reports;
+    if (typeof value.temperature === "number" && value.temperature >= 0 && value.temperature <= 2) elements.samplingTemperature.value = value.temperature;
+    if (Array.isArray(value.analysts)) document.querySelectorAll('input[name="analyst"]').forEach(input => { input.checked = value.analysts.includes(input.value); });
+    updateProviderFields(); updateExportToggle();
+  },
+};
 boot();

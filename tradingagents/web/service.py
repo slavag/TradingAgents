@@ -32,6 +32,7 @@ from cli.main import (
     target_status_text,
 )
 from cli.stats_handler import StatsCallbackHandler
+from tradingagents.dataflows.symbol_utils import normalize_symbol
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.evaluation.leaderboard import ConfigurationIdentity
 from tradingagents.evaluation.promotion_registry import ModelPromotionRegistry
@@ -42,6 +43,7 @@ from tradingagents.evaluation.runtime import (
     evaluate_report_trees,
 )
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.investor_deck import build_investor_deck
 from tradingagents.portfolio.optimizer import optimize_portfolio
 from tradingagents.portfolio.risk_model import RiskModel
 from tradingagents.portfolio.state import (
@@ -50,7 +52,9 @@ from tradingagents.portfolio.state import (
     PortfolioConstraints,
     PortfolioState,
 )
+from tradingagents.report_names import report_stem, utc_report_timestamp
 from tradingagents.reporting import build_run_manifest, compare_run_manifests
+from tradingagents.web.history import decorate_job, save_job, saved_jobs, valid_job_id
 from tradingagents.web.speaking_sources import (
     build_speaking_candidate_universe,
     fetch_external_market_symbols,
@@ -183,6 +187,11 @@ def _update_job(job_id: str, **updates):
         job = _JOBS[job_id]
         job.update(updates)
         job["updated_at"] = _now_iso()
+        if valid_job_id(job_id) and ("status" in updates or "results" in updates):
+            try:
+                save_job(RESULTS_ROOT, job)
+            except (OSError, ValueError):
+                logger.exception("Could not save run history for %s", job_id)
 
 
 class WebProgressTracker:
@@ -412,7 +421,7 @@ def normalize_tickers(raw_tickers: Any) -> list[str]:
     seen = set()
     normalized = []
     for part in parts:
-        ticker = part.strip().upper()
+        ticker = normalize_symbol(part.strip())
         if ticker and ticker not in seen:
             seen.add(ticker)
             normalized.append(ticker)
@@ -446,6 +455,23 @@ def build_graph_config(payload: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+_LLM_USAGE_FIELDS = (
+    "llm_calls", "tool_calls", "tokens_in", "tokens_out",
+    "cache_read_tokens", "cache_creation_tokens",
+    "cache_usage_reported_calls", "cache_usage_unreported_calls",
+)
+
+
+def _safe_llm_usage(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        key: number for key in _LLM_USAGE_FIELDS
+        if isinstance((number := value.get(key)), int) and not isinstance(number, bool)
+        and number >= 0
+    }
+
+
 def serialize_result(result: dict[str, Any]) -> dict[str, Any]:
     if result.get("error"):
         return {
@@ -454,6 +480,8 @@ def serialize_result(result: dict[str, Any]) -> dict[str, Any]:
             "status": "failed",
             "decision": None,
             "price_target": None,
+            "target_low": None,
+            "target_high": None,
             "price_target_label": "-",
             "confidence_score": None,
             "recommendation_confidence_score": None,
@@ -461,14 +489,21 @@ def serialize_result(result: dict[str, Any]) -> dict[str, Any]:
             "target_horizon": None,
             "target_summary": None,
             "supporting_quote": None,
+            "supporting_quote_low": None,
+            "supporting_quote_high": None,
+            "target_method": None,
+            "target_risks": None,
             "target_validation_status": None,
             "target_status_label": "Unavailable",
             "target_rejection_reason": None,
+            "investor_deck_synthesis_status": result.get("investor_deck_synthesis_status"),
+            "investor_deck_synthesis_reason": result.get("investor_deck_synthesis_reason"),
             "run_id": result.get("run_id"),
             "snapshot_mode": result.get("snapshot_mode"),
             "evidence_fingerprint": result.get("evidence_fingerprint"),
             "comparison_status": result.get("comparison_status"),
             "previous_run_id": result.get("previous_run_id"),
+            "llm_usage": _safe_llm_usage(result.get("llm_usage")),
             "thesis": None,
             "existing_position_action": None,
             "existing_position_summary": None,
@@ -479,40 +514,52 @@ def serialize_result(result: dict[str, Any]) -> dict[str, Any]:
             "conditional_invalidation": None,
             "results_dir": result["results_dir"],
             "report_path": None,
+            "investor_report_path": None,
             "custom_report_path": result.get("custom_report_path"),
+            "custom_investor_report_path": None,
             "error_kind": result.get("error_kind"),
             "error": result["error"],
         }
 
     final_state = result["final_state"]
-    confidence = result.get("confidence_score")
+    accepted_target = result.get("target_validation_status") == "Accepted"
+    confidence = result.get("confidence_score") if accepted_target else None
     recommendation_confidence = result.get("recommendation_confidence_score")
     return {
         "ticker": result["ticker"],
         "analysis_date": result["analysis_date"],
         "status": "completed",
         "decision": result.get("decision"),
-        "price_target": result.get("price_target"),
+        "price_target": result.get("price_target") if accepted_target else None,
+        "target_low": result.get("target_low") if accepted_target else None,
+        "target_high": result.get("target_high") if accepted_target else None,
         "price_target_label": displayed_target(result),
         "confidence_score": confidence,
         "confidence_label": f"{confidence}/100" if confidence is not None else "-",
         "recommendation_confidence_score": recommendation_confidence,
         "recommendation_confidence_label": (
-            f"{recommendation_confidence}/100"
+            f"{recommendation_confidence}/100 (uncalibrated)"
             if recommendation_confidence is not None
             else "-"
         ),
-        "target_horizon": result.get("target_horizon"),
-        "target_summary": result.get("target_summary"),
-        "supporting_quote": result.get("supporting_quote"),
+        "target_horizon": result.get("target_horizon") if accepted_target else None,
+        "target_summary": result.get("target_summary") if accepted_target else None,
+        "supporting_quote": result.get("supporting_quote") if accepted_target else None,
+        "supporting_quote_low": result.get("supporting_quote_low") if accepted_target else None,
+        "supporting_quote_high": result.get("supporting_quote_high") if accepted_target else None,
+        "target_method": result.get("target_method") if accepted_target else None,
+        "target_risks": result.get("target_risks") if accepted_target else None,
         "target_validation_status": result.get("target_validation_status"),
         "target_status_label": target_status_text(result),
         "target_rejection_reason": result.get("target_rejection_reason"),
+        "investor_deck_synthesis_status": result.get("investor_deck_synthesis_status"),
+        "investor_deck_synthesis_reason": result.get("investor_deck_synthesis_reason"),
         "run_id": result.get("run_id"),
         "snapshot_mode": result.get("snapshot_mode"),
         "evidence_fingerprint": result.get("evidence_fingerprint"),
         "comparison_status": result.get("comparison_status"),
         "previous_run_id": result.get("previous_run_id"),
+        "llm_usage": _safe_llm_usage(result.get("llm_usage")),
         "thesis": result.get("thesis"),
         "existing_position_action": result.get("existing_position_action"),
         "existing_position_summary": result.get("existing_position_summary"),
@@ -523,7 +570,9 @@ def serialize_result(result: dict[str, Any]) -> dict[str, Any]:
         "conditional_invalidation": result.get("conditional_invalidation"),
         "results_dir": result["results_dir"],
         "report_path": result.get("report_path"),
+        "investor_report_path": result.get("investor_report_path"),
         "custom_report_path": result.get("custom_report_path"),
+        "custom_investor_report_path": result.get("custom_investor_report_path"),
         "executive_summary": compact_report_text(
             final_state.get("final_trade_decision"), max_chars=900
         ),
@@ -991,6 +1040,7 @@ def _latest_run_manifest(run_root: Path, current_run_id: str) -> dict | None:
 def _run_job(job_id: str, payload: dict[str, Any]):
     tickers = normalize_tickers(payload.get("tickers"))
     analysis_date = payload["analysis_date"]
+    report_timestamp = utc_report_timestamp()
     selected_analysts = payload.get("analysts") or [
         "market",
         "social",
@@ -1012,7 +1062,10 @@ def _run_job(job_id: str, payload: dict[str, Any]):
 
     raw_results: list[dict[str, Any]] = []
     serialized_results: list[dict[str, Any]] = []
-    _update_job(job_id, status="running", total=len(tickers), completed=0)
+    _update_job(
+        job_id, status="running", total=len(tickers), completed=0,
+        report_timestamp=report_timestamp,
+    )
     logger.info(
         "Job %s started (provider=%s, tickers=%s, analysis_date=%s)",
         job_id,
@@ -1076,6 +1129,13 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     final_state,
                     decision_text,
                 )
+                try:
+                    investor_deck = build_investor_deck(
+                        final_state, ticker, analysis_date, graph.final_report_llm
+                    )
+                except Exception:  # noqa: BLE001 - optional output must not fail the ticker
+                    logger.warning("Investor deck generation failed for %s", ticker)
+                    investor_deck = None
 
                 run_root = RESULTS_ROOT / ticker / analysis_date / "runs"
                 previous_manifest = _latest_run_manifest(run_root, job_id)
@@ -1121,8 +1181,13 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     ticker,
                     default_report_dir,
                     run_metadata=run_metadata,
+                    report_timestamp=report_timestamp,
+                    investor_deck=investor_deck,
+                    full_report_href=f"/api/jobs/{job_id}/reports/{ticker}/full",
                 )
+                investor_report_path = default_report_dir / f"{report_stem('investor', [ticker], report_timestamp)}.html"
                 custom_report_path = None
+                custom_investor_report_path = None
                 if custom_save_enabled:
                     custom_dir = export_root if len(tickers) == 1 else export_root / ticker
                     custom_report_path = save_report_to_disk(
@@ -1130,7 +1195,10 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                         ticker,
                         custom_dir,
                         run_metadata=run_metadata,
+                        report_timestamp=report_timestamp,
+                        investor_deck=investor_deck,
                     )
+                    custom_investor_report_path = custom_dir / f"{report_stem('investor', [ticker], report_timestamp)}.html"
 
                 result = {
                     "ticker": ticker,
@@ -1139,14 +1207,24 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     "final_state": final_state,
                     "results_dir": str(default_report_dir.resolve()),
                     "report_path": str(default_report_path.resolve()),
+                    "investor_report_path": str(investor_report_path.resolve()),
                     "custom_report_path": str(custom_report_path.resolve())
                     if custom_report_path
+                    else None,
+                    "custom_investor_report_path": str(custom_investor_report_path.resolve())
+                    if custom_investor_report_path
                     else None,
                     "run_id": job_id,
                     "snapshot_mode": snapshot_mode,
                     "evidence_fingerprint": run_metadata["evidence_fingerprint"],
                     "comparison_status": comparison_status,
                     "previous_run_id": run_metadata["previous_run_id"],
+                    "investor_deck_synthesis_status": (
+                        investor_deck.synthesis_status if investor_deck else "unavailable"
+                    ),
+                    "investor_deck_synthesis_reason": (
+                        investor_deck.synthesis_reason if investor_deck else None
+                    ),
                     **target_profile,
                 }
                 logger.info(
@@ -1188,6 +1266,7 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     "raw_error": error_info["raw_message"],
                 }
 
+            result["llm_usage"] = stats_handler.get_stats()
             raw_results.append(result)
             serialized_results.append(serialize_result(result))
             _update_job(
@@ -1271,6 +1350,8 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                 analysis_date,
                 default_batch_dir,
                 summary_llm=None,
+                tickers=tickers,
+                report_timestamp=report_timestamp,
             )
 
             if custom_save_enabled:
@@ -1279,6 +1360,8 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                     analysis_date,
                     export_root,
                     summary_llm=None,
+                    tickers=tickers,
+                    report_timestamp=report_timestamp,
                 )
 
         fatal_provider_error = next(
@@ -1337,9 +1420,15 @@ def create_job(payload: dict[str, Any]) -> dict[str, Any]:
     if not tickers:
         raise ValueError("At least one ticker is required.")
 
-    job_id = uuid.uuid4().hex
+    request_id = payload.get("request_id")
+    job_id = uuid.UUID(request_id).hex if request_id else uuid.uuid4().hex
+    request_fingerprint = hashlib.sha256(json.dumps(
+        {key: value for key, value in payload.items() if key != "request_id"},
+        sort_keys=True,
+    ).encode()).hexdigest()
     job = {
         "id": job_id,
+        "request_fingerprint": request_fingerprint,
         "status": "queued",
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
@@ -1347,6 +1436,7 @@ def create_job(payload: dict[str, Any]) -> dict[str, Any]:
         "completed": 0,
         "tickers": tickers,
         "analysis_date": payload["analysis_date"],
+        "report_timestamp": None,
         "current_ticker": None,
         "progress_message": "Queued.",
         "results": [],
@@ -1359,6 +1449,14 @@ def create_job(payload: dict[str, Any]) -> dict[str, Any]:
         "error": None,
     }
     with _JOB_LOCK:
+        previous = _JOBS.get(job_id)
+        if previous is None and request_id:
+            previous = saved_jobs(RESULTS_ROOT).get(job_id)
+        if previous is not None:
+            if previous.get("request_fingerprint") != request_fingerprint:
+                raise ValueError("This submission ID belongs to a different analysis.")
+            return decorate_job(RESULTS_ROOT, previous)
+        save_job(RESULTS_ROOT, job)
         _JOBS[job_id] = job
 
     thread = threading.Thread(target=_run_job, args=(job_id, payload), daemon=True)
@@ -1369,9 +1467,27 @@ def create_job(payload: dict[str, Any]) -> dict[str, Any]:
 
 def get_job(job_id: str) -> dict[str, Any] | None:
     with _JOB_LOCK:
-        if job_id not in _JOBS:
+        job = json.loads(json.dumps(_JOBS[job_id])) if job_id in _JOBS else None
+    if job is None:
+        if not valid_job_id(job_id):
             return None
-    return _job_snapshot(job_id)
+        job = saved_jobs(RESULTS_ROOT).get(job_id)
+    return decorate_job(RESULTS_ROOT, job) if job else None
+
+
+def list_jobs(*, q: str = "", offset: int = 0, limit: int = 50) -> dict[str, Any]:
+    jobs = saved_jobs(RESULTS_ROOT)
+    with _JOB_LOCK:
+        jobs.update(json.loads(json.dumps(_JOBS)))
+    query = q.strip().casefold()
+    ordered = sorted(jobs.values(), key=lambda j: j.get("created_at", ""), reverse=True)
+    if query:
+        ordered = [job for job in ordered if query in " ".join(job.get("tickers", [])).casefold()]
+    return {
+        "jobs": [decorate_job(RESULTS_ROOT, job) for job in ordered[offset:offset + limit]],
+        "total": len(ordered), "offset": offset, "limit": limit,
+        "has_more": offset + limit < len(ordered),
+    }
 
 
 def evaluate_saved_forecasts(

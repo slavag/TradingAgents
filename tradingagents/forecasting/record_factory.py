@@ -229,6 +229,16 @@ def forecast_record_from_state(
         if target_status == "Accepted" and decision.get("price_target") is not None
         else None
     )
+    target_low = (
+        Decimal(str(decision["target_low"]))
+        if target_status == "Accepted" and decision.get("target_low") is not None
+        else None
+    )
+    target_high = (
+        Decimal(str(decision["target_high"]))
+        if target_status == "Accepted" and decision.get("target_high") is not None
+        else None
+    )
     horizon_text = decision.get("time_horizon")
     horizon_sessions = normalize_horizon_sessions(horizon_text)
     reference_price = _reference_snapshot(metadata, final_state)
@@ -269,6 +279,8 @@ def forecast_record_from_state(
         "direction_probabilities",
         "target_range",
     }
+    if target_low is not None and target_high is not None:
+        missing_fields.remove("target_range")
     if not typed_decision:
         missing_fields.add("typed_portfolio_decision")
     if reference_price is None:
@@ -303,8 +315,8 @@ def forecast_record_from_state(
         distribution=None,
         direction_probabilities=None,
         central_target=central_target,
-        target_low=None,
-        target_high=None,
+        target_low=target_low,
+        target_high=target_high,
         invalidation_conditions=invalidations,
         evidence_ids=evidence_ids,
         missing_fields=tuple(sorted(missing_fields)),

@@ -92,6 +92,11 @@ def test_bool_coercion(monkeypatch, raw, expected):
     assert dc.DEFAULT_CONFIG["checkpoint_enabled"] is expected
 
 
+def test_anthropic_prompt_cache_override_is_boolean(monkeypatch):
+    dc = _reload_with_env(monkeypatch, TRADINGAGENTS_ANTHROPIC_PROMPT_CACHE="false")
+    assert dc.DEFAULT_CONFIG["anthropic_prompt_cache"] is False
+
+
 def test_reasoning_thinking_overrides(monkeypatch):
     """The provider reasoning/thinking knobs are env-configurable (non-interactive runs)."""
     dc = _reload_with_env(

@@ -35,7 +35,9 @@ from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.temporal import is_historical, use_analysis_context
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG, validate_outcome_holding_days
+from tradingagents.investor_deck import build_investor_deck
 from tradingagents.llm_clients import create_llm_client
+from tradingagents.llm_clients.prompt_cache import PromptCachePolicy
 from tradingagents.reporting import write_report_tree
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -46,6 +48,23 @@ from .setup import GraphSetup
 from .signal_processing import SignalProcessor
 
 logger = logging.getLogger(__name__)
+
+
+def _quick_prompt_cache_policy(config: dict[str, Any]) -> PromptCachePolicy:
+    provider = str(
+        config.get("quick_think_provider")
+        or config.get("llm_provider")
+        or DEFAULT_CONFIG["llm_provider"]
+    ).lower()
+    return PromptCachePolicy(
+        provider=provider,
+        model=str(config.get("quick_think_llm") or ""),
+        enabled=(
+            provider != "anthropic"
+            or config.get("anthropic_prompt_cache", True) is True
+        ),
+        base_url=config.get("quick_backend_url") or config.get("backend_url"),
+    )
 
 
 @dataclass(frozen=True)
@@ -139,6 +158,7 @@ class TradingAgentsGraph:
             self.deep_thinking_llm,
             self.tool_nodes,
             self.conditional_logic,
+            quick_cache_policy=_quick_prompt_cache_policy(self.config),
         )
 
         self.propagator = Propagator(
@@ -443,6 +463,7 @@ class TradingAgentsGraph:
             f"debate={self.config['max_debate_rounds']}",
             f"risk={self.config['max_risk_discuss_rounds']}",
             f"asset={asset_type}",
+            f"enrichment={bool(self.config.get('enrichment_enabled', True))}",
         ])
 
     @contextmanager
@@ -569,7 +590,14 @@ class TradingAgentsGraph:
                 / "reports"
                 / f"{safe_ticker_component(ticker)}_{stamp}"
             )
-        return write_report_tree(final_state, ticker, save_path)
+        analysis_date = str(final_state.get("trade_date") or "")
+        investor_llm = getattr(self, "final_report_llm", None) if analysis_date else None
+        try:
+            deck = build_investor_deck(final_state, ticker, analysis_date, investor_llm)
+        except Exception:  # noqa: BLE001 - optional deck failure cannot block the full report
+            logger.warning("Investor deck generation failed for %s", ticker)
+            deck = None
+        return write_report_tree(final_state, ticker, save_path, investor_deck=deck)
 
     def _run_graph(self, company_name, trade_date, asset_type: str = "stock"):
         """Execute the non-streaming graph lifecycle."""
@@ -615,6 +643,7 @@ class TradingAgentsGraph:
             "sentiment_report": final_state["sentiment_report"],
             "news_report": final_state["news_report"],
             "fundamentals_report": final_state["fundamentals_report"],
+            "shared_evidence": final_state.get("shared_evidence", []),
             "investment_debate_state": {
                 "bull_history": final_state["investment_debate_state"]["bull_history"],
                 "bear_history": final_state["investment_debate_state"]["bear_history"],

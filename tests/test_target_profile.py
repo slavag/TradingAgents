@@ -6,6 +6,7 @@ from cli.main import (
     estimate_target_profile,
     format_price_target,
 )
+from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating, TargetValidationStatus
 
 NO_POSITION_GUIDANCE = {
     "recommendation_confidence_score": None,
@@ -17,6 +18,15 @@ NO_POSITION_GUIDANCE = {
     "conditional_confirmation": None,
     "conditional_alternative": None,
     "conditional_invalidation": None,
+}
+
+NO_RANGE_TARGET = {
+    "target_low": None,
+    "target_high": None,
+    "supporting_quote_low": None,
+    "supporting_quote_high": None,
+    "target_method": None,
+    "target_risks": None,
 }
 
 
@@ -60,6 +70,47 @@ def test_explicit_structured_target_profile_is_extracted_without_fallback():
     assert profile["supporting_quote"] == "Resistance: 145.5"
     assert profile["target_validation_status"] == "Accepted"
     assert profile["target_rejection_reason"] is None
+
+
+def test_typed_range_profile_uses_validated_decision_without_fallback():
+    class FailingLlm:
+        def invoke(self, _messages):
+            raise AssertionError("typed PM decision must not trigger fallback")
+
+    decision = PortfolioDecision(
+        rating=PortfolioRating.HOLD,
+        executive_summary="Hold pending confirmation.",
+        investment_thesis="Evidence supports a conditional scenario.",
+        thesis="Neutral",
+        existing_position_action="Hold",
+        existing_position_summary="Maintain a measured holding.",
+        new_position_action="Avoid",
+        new_position_summary="Wait for a more attractive setup.",
+        recommendation_confidence_score=78,
+        target_low=72.83, target_high=77.10,
+        supporting_quote_low="| Low | 72.83 |",
+        supporting_quote_high="| High | 77.10 |",
+        time_horizon="3 months", confidence_score=18,
+        target_summary="Demand could revisit verified resistance.",
+        target_method="Technical scenario",
+        target_risks="Breakout may fail.",
+        target_validation_status=TargetValidationStatus.ACCEPTED,
+    )
+    state = {
+        "portfolio_decision": decision.model_dump(mode="json"),
+        "final_trade_decision": "**Decision Status**: Actionable\n\n**Rating**: Hold",
+        "market_report": "Verified close: 75.74.",
+    }
+
+    profile = estimate_target_profile(FailingLlm(), "PENG", "2026-10-09", state, "Hold")
+
+    assert profile["price_target"] is None
+    assert (profile["target_low"], profile["target_high"]) == (72.83, 77.10)
+    assert profile["target_horizon"] == "3 months"
+    assert profile["confidence_score"] == 18
+    assert profile["target_method"] == "Technical scenario"
+    assert profile["target_risks"] == "Breakout may fail."
+    assert profile["target_validation_status"] == "Accepted"
 
 
 def test_target_profile_uses_the_verified_evidence_price_without_refetching():
@@ -196,6 +247,7 @@ def test_missing_structured_metrics_are_estimated_from_existing_analysis():
         "target_rejection_reason": None,
         "reference_price": 1.95,
         **NO_POSITION_GUIDANCE,
+        **NO_RANGE_TARGET,
     }
 
     html = build_consolidated_report_html(
@@ -250,6 +302,7 @@ def test_uncited_fallback_target_is_rejected_as_unsupported():
         "target_rejection_reason": "supporting_quote_not_in_evidence",
         "reference_price": 100.0,
         **NO_POSITION_GUIDANCE,
+        **NO_RANGE_TARGET,
     }
 
 
@@ -285,6 +338,7 @@ def test_non_price_number_near_generic_price_word_is_rejected():
         "target_rejection_reason": "supporting_quote_not_price_context",
         "reference_price": 100.0,
         **NO_POSITION_GUIDANCE,
+        **NO_RANGE_TARGET,
     }
 
 
@@ -316,6 +370,7 @@ def test_confidence_horizon_and_outlook_are_cleared_without_a_target():
         "target_rejection_reason": "target_bundle_incomplete",
         "reference_price": 100.0,
         **NO_POSITION_GUIDANCE,
+        **NO_RANGE_TARGET,
     }
 
 
@@ -350,6 +405,7 @@ def test_direction_inconsistent_target_clears_the_entire_profile():
         "target_rejection_reason": "target_direction_conflict",
         "reference_price": 100.0,
         **NO_POSITION_GUIDANCE,
+        **NO_RANGE_TARGET,
     }
 
 

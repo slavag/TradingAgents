@@ -18,6 +18,7 @@ class TestProviderDefaultUrl(unittest.TestCase):
         from cli.utils import provider_default_url
         self.assertEqual(provider_default_url("openai"), "https://api.openai.com/v1")
         self.assertEqual(provider_default_url("DeepSeek"), "https://api.deepseek.com")
+        self.assertEqual(provider_default_url("meta"), "https://api.meta.ai/v1")
         self.assertIsNone(provider_default_url("google"))  # uses SDK default
 
     def test_unknown_provider_returns_none(self):
@@ -39,6 +40,7 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
             "TRADINGAGENTS_LLM_PROVIDER": "openai",
             "TRADINGAGENTS_DEEP_THINK_LLM": "kimi-k2.5",
             "TRADINGAGENTS_QUICK_THINK_LLM": "deepseek-v4-pro",
+            "TRADINGAGENTS_FINAL_REPORT_LLM": "gpt-6.1-sol",
             "TRADINGAGENTS_LLM_BACKEND_URL": "https://opencode.ai/zen/go/v1",
             "TRADINGAGENTS_OUTPUT_LANGUAGE": "Japanese",
         }
@@ -48,6 +50,7 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
             "backend_url": "https://opencode.ai/zen/go/v1",
             "quick_think_llm": "deepseek-v4-pro",
             "deep_think_llm": "kimi-k2.5",
+            "final_report_llm": "gpt-6.1-sol",
             "output_language": "Japanese",
         })
 
@@ -63,7 +66,8 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
              mock.patch.object(m, "select_llm_provider") as prompt_provider, \
              mock.patch.object(m, "ask_output_language") as prompt_lang, \
              mock.patch.object(m, "select_shallow_thinking_agent") as prompt_quick, \
-             mock.patch.object(m, "select_deep_thinking_agent") as prompt_deep:
+             mock.patch.object(m, "select_deep_thinking_agent") as prompt_deep, \
+             mock.patch.object(m, "select_verifier_model") as prompt_verifier:
             sel = m.get_user_selections()
 
         # None of the LLM selection prompts should have been shown.
@@ -71,6 +75,7 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
         prompt_lang.assert_not_called()
         prompt_quick.assert_not_called()
         prompt_deep.assert_not_called()
+        prompt_verifier.assert_not_called()
         # API key is still verified for the env-configured provider.
         ensure_key.assert_called_once()
 
@@ -79,6 +84,7 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
         self.assertEqual(sel["backend_url"], "https://opencode.ai/zen/go/v1")
         self.assertEqual(sel["shallow_thinker"], "deepseek-v4-pro")
         self.assertEqual(sel["deep_thinker"], "kimi-k2.5")
+        self.assertEqual(sel["final_report_model"], "gpt-6.1-sol")
         self.assertEqual(sel["output_language"], "Japanese")
 
 
@@ -107,12 +113,14 @@ class TestResearchDepthSkippedFromEnv(unittest.TestCase):
              mock.patch.object(m, "ask_output_language", return_value="English"), \
              mock.patch.object(m, "select_shallow_thinking_agent", return_value="gpt-5.4-mini"), \
              mock.patch.object(m, "select_deep_thinking_agent", return_value="gpt-5.5"), \
+             mock.patch.object(m, "select_verifier_model", return_value="gpt-6.1-sol"), \
              mock.patch.object(m, "ask_openai_reasoning_effort", return_value=None):
             sel = m.get_user_selections()
 
         # The research-depth prompt is skipped; the value comes from the env config.
         prompt_depth.assert_not_called()
         self.assertEqual(sel["research_depth"], 2)
+        self.assertEqual(sel["final_report_model"], "gpt-6.1-sol")
 
 
 @pytest.mark.unit
@@ -137,6 +145,7 @@ class TestReasoningEffortSkippedFromEnv(unittest.TestCase):
              mock.patch.object(m, "ask_output_language", return_value="English"), \
              mock.patch.object(m, "select_shallow_thinking_agent", return_value="gpt-5.4-mini"), \
              mock.patch.object(m, "select_deep_thinking_agent", return_value="gpt-5.5"), \
+             mock.patch.object(m, "select_verifier_model", return_value="gpt-6.1-sol"), \
              mock.patch.object(m, "ask_openai_reasoning_effort") as prompt_effort:
             sel = m.get_user_selections()
 

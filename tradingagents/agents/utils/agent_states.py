@@ -51,6 +51,10 @@ class AgentState(MessagesState):
     trade_date: Annotated[str, "What date we are trading at"]
     as_of_date: Annotated[str, "Date the analysis is evaluated as of"]
     analysis_mode: Annotated[str, "Whether analysis is live or historical"]
+    shared_evidence: Annotated[
+        list[dict], "Normalized source records available to every agent role"
+    ]
+    evidence_collected: Annotated[bool, "Whether optional enrichment ran for this state"]
 
     sender: Annotated[str, "Agent that sent this message"]
 

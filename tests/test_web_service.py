@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from cli.stats_handler import StatsCallbackHandler
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.investor_deck import DeckSlide, InvestorDeck
 from tradingagents.web import service as web_service
 from tradingagents.web.service import _build_source_only_speaking_records
 
@@ -71,13 +72,19 @@ class _EmptyUnderlyingStreamGraph(TradingAgentsGraph):
 
 
 class WebServiceTests(unittest.TestCase):
+    def test_web_ticker_input_resolves_trailing_sentence_period(self):
+        self.assertEqual(
+            web_service.normalize_tickers("AEHR, MXL, PENG."),
+            ["AEHR", "MXL", "PENG"],
+        )
+
     def test_serialize_result_preserves_target_validation_metadata(self):
         result = {
             "ticker": "TEST",
             "analysis_date": "2026-08-14",
             "decision": "Buy",
-            "price_target": None,
-            "confidence_score": None,
+            "price_target": 999.0,
+            "confidence_score": 88,
             "recommendation_confidence_score": 82,
             "run_id": "job-current",
             "snapshot_mode": "live_current_day",
@@ -99,6 +106,11 @@ class WebServiceTests(unittest.TestCase):
             "conditional_invalidation": "A break below 90 weakens the setup.",
             "results_dir": "/tmp/test",
             "report_path": "/tmp/test/report.md",
+            "llm_usage": {
+                "cache_read_tokens": 120, "cache_creation_tokens": 40,
+                "cache_usage_reported_calls": 2, "cache_usage_unreported_calls": 1,
+                "prompt": "private source text must not escape",
+            },
             "final_state": {},
         }
 
@@ -109,13 +121,16 @@ class WebServiceTests(unittest.TestCase):
             serialized["target_rejection_reason"],
             "supporting_quote_not_in_evidence",
         )
-        self.assertEqual(serialized["supporting_quote"], "Resistance: 120.")
+        self.assertIsNone(serialized["supporting_quote"])
         self.assertIsNone(serialized["price_target"])
+        self.assertIsNone(serialized["confidence_score"])
         self.assertEqual(serialized["price_target_label"], "No validated target")
         self.assertEqual(serialized["recommendation_confidence_score"], 82)
-        self.assertEqual(serialized["recommendation_confidence_label"], "82/100")
+        self.assertEqual(serialized["recommendation_confidence_label"], "82/100 (uncalibrated)")
         self.assertEqual(serialized["comparison_status"], "evidence_changed")
         self.assertEqual(serialized["previous_run_id"], "job-prior")
+        self.assertEqual(serialized["llm_usage"]["cache_read_tokens"], 120)
+        self.assertNotIn("prompt", str(serialized["llm_usage"]))
         self.assertEqual(
             serialized["target_status_label"],
             "Rejected: supporting quote not in evidence",
@@ -124,6 +139,31 @@ class WebServiceTests(unittest.TestCase):
         self.assertEqual(serialized["existing_position_action"], "Hold")
         self.assertEqual(serialized["new_position_action"], "Conditional Buy")
         self.assertEqual(serialized["conditional_confirmation"], "Buy above 120.")
+
+    def test_serialize_result_preserves_validated_range_context(self):
+        result = {
+            "ticker": "PENG", "analysis_date": "2026-10-09",
+            "decision": "Hold", "final_state": {}, "results_dir": "/tmp/test",
+            "report_path": "/tmp/test/report.md",
+            "price_target": None, "target_low": 72.83, "target_high": 77.10,
+            "confidence_score": 18, "target_horizon": "3 months",
+            "target_summary": "Demand could revisit resistance.",
+            "target_method": "Technical scenario",
+            "target_risks": "Breakout may fail.",
+            "supporting_quote_low": "| Low | 72.83 |",
+            "supporting_quote_high": "| High | 77.10 |",
+            "target_validation_status": "Accepted",
+        }
+
+        serialized = web_service.serialize_result(result)
+
+        self.assertEqual((serialized["target_low"], serialized["target_high"]), (72.83, 77.10))
+        self.assertEqual(serialized["target_method"], "Technical scenario")
+        self.assertEqual(serialized["target_risks"], "Breakout may fail.")
+        self.assertEqual(serialized["target_horizon"], "3 months")
+        self.assertEqual(serialized["confidence_score"], 18)
+        self.assertIn("72.83", serialized["price_target_label"])
+        self.assertIn("77.10", serialized["price_target_label"])
 
     def test_web_graph_config_defaults_to_repeatable_temperature(self):
         config = web_service.build_graph_config({})
@@ -168,9 +208,9 @@ class WebServiceTests(unittest.TestCase):
     def test_job_enters_final_report_state_before_consolidated_generation(self):
         with TemporaryDirectory() as tmpdir:
             _FakeGraph.instances.clear()
-            job_id = "job-final-report-state"
+            job_id = "c" * 32
             payload = {
-                "tickers": "AAA",
+                "tickers": "AAA, BBB",
                 "analysis_date": "2026-07-05",
                 "analysts": ["market"],
                 "research_depth": 1,
@@ -184,7 +224,26 @@ class WebServiceTests(unittest.TestCase):
             }
             observed = {}
             tmp_path = Path(tmpdir)
-            save_report = MagicMock(return_value=tmp_path / "ticker.md")
+            payload["save_reports"] = True
+            payload["export_path"] = str(tmp_path / "export")
+            save_report = MagicMock(wraps=web_service.save_report_to_disk)
+            deck = InvestorDeck(
+                ticker="AAA", analysis_date="2026-07-05", headline="AAA company research",
+                synthesis_status="source_only", synthesis_reason="unsupported_interpretation",
+                sources={}, slides=[DeckSlide(
+                    topic="business", title="Business model", takeaway="Source-backed view",
+                )],
+            )
+            def build_ticker_deck(_state, ticker, _date, _llm):
+                if ticker == "BBB":
+                    raise RuntimeError("optional deck synthesis failed")
+                return deck
+
+            build_deck = MagicMock(side_effect=build_ticker_deck)
+            save_consolidated = MagicMock(return_value={
+                "markdown": tmp_path / "consolidated.md",
+                "html": tmp_path / "consolidated.html",
+            })
 
             with web_service._JOB_LOCK:
                 web_service._JOBS[job_id] = {
@@ -192,9 +251,9 @@ class WebServiceTests(unittest.TestCase):
                     "status": "queued",
                     "created_at": "2026-07-05T00:00:00",
                     "updated_at": "2026-07-05T00:00:00",
-                    "total": 1,
+                    "total": 2,
                     "completed": 0,
-                    "tickers": ["AAA"],
+                    "tickers": ["AAA", "BBB"],
                     "analysis_date": "2026-07-05",
                     "current_ticker": None,
                     "progress_message": "Queued.",
@@ -217,6 +276,9 @@ class WebServiceTests(unittest.TestCase):
 
             with (
                 patch.object(web_service, "TradingAgentsGraph", _FakeGraph),
+                patch.object(web_service, "RESULTS_ROOT", tmp_path),
+                patch.object(web_service, "utc_report_timestamp", return_value="20261008T132500Z", create=True),
+                patch.object(web_service, "build_investor_deck", build_deck, create=True),
                 patch.object(
                     web_service,
                     "estimate_target_profile",
@@ -231,14 +293,7 @@ class WebServiceTests(unittest.TestCase):
                 patch.object(web_service, "save_report_to_disk", save_report),
                 patch.object(web_service, "build_consolidated_report", side_effect=build_markdown),
                 patch.object(web_service, "build_consolidated_report_html", return_value="html"),
-                patch.object(
-                    web_service,
-                    "save_consolidated_report",
-                    return_value={
-                        "markdown": tmp_path / "consolidated.md",
-                        "html": tmp_path / "consolidated.html",
-                    },
-                ),
+                patch.object(web_service, "save_consolidated_report", save_consolidated),
             ):
                 web_service._run_job(job_id, payload)
 
@@ -252,10 +307,17 @@ class WebServiceTests(unittest.TestCase):
             self.assertEqual(len(stream_call["callbacks"]), 1)
             self.assertIsInstance(stream_call["callbacks"][0], StatsCallbackHandler)
             self.assertFalse(hasattr(web_service, "_stream_graph_in_analysis_context"))
-            report_call = save_report.call_args
+            self.assertEqual(save_report.call_count, 4)
+            self.assertEqual(build_deck.call_count, 2)
+            self.assertEqual(save_consolidated.call_count, 2)
+            self.assertEqual(save_consolidated.call_args.kwargs["tickers"], ["AAA", "BBB"])
+            self.assertEqual(
+                save_consolidated.call_args.kwargs["report_timestamp"], "20261008T132500Z"
+            )
+            report_call = save_report.call_args_list[0]
             self.assertEqual(
                 report_call.args[2],
-                web_service.RESULTS_ROOT
+                tmp_path
                 / "AAA"
                 / "2026-07-05"
                 / "runs"
@@ -266,6 +328,46 @@ class WebServiceTests(unittest.TestCase):
             self.assertEqual(
                 report_call.kwargs["run_metadata"]["snapshot_mode"],
                 "historical_frozen",
+            )
+            self.assertEqual(
+                save_report.call_args_list[2].args[2],
+                tmp_path
+                / "BBB"
+                / "2026-07-05"
+                / "runs"
+                / job_id
+                / "web_report",
+            )
+            for ticker in ("AAA", "BBB"):
+                report_dir = tmp_path / ticker / "2026-07-05" / "runs" / job_id / "web_report"
+                self.assertTrue((report_dir / f"{ticker}_full_20261008T132500Z.md").is_file())
+                html_report = report_dir / f"{ticker}_full_20261008T132500Z.html"
+                self.assertIn(
+                    f'class="ticker">{ticker}</span>',
+                    html_report.read_text(encoding="utf-8"),
+                )
+                investor_report = report_dir / f"{ticker}_investor_20261008T132500Z.html"
+                investor_html = investor_report.read_text()
+                if ticker == "AAA":
+                    self.assertIn("AAA company research", investor_html)
+                else:
+                    self.assertIn("Research deck unavailable", investor_html)
+                    self.assertIn(
+                        f'/api/jobs/{job_id}/reports/BBB/full', investor_html,
+                    )
+                custom_dir = tmp_path / "export" / ticker
+                self.assertTrue((custom_dir / f"{ticker}_full_20261008T132500Z.md").is_file())
+                self.assertTrue((custom_dir / f"{ticker}_investor_20261008T132500Z.html").is_file())
+            results = web_service.get_job(job_id)["results"]
+            self.assertEqual(
+                [(item["investor_deck_synthesis_status"], item["investor_deck_synthesis_reason"])
+                 for item in results],
+                [("source_only", "unsupported_interpretation"), ("unavailable", None)],
+            )
+            self.assertTrue(all(result["investor_report_path"] for result in results))
+            self.assertTrue(all(result["custom_investor_report_path"] for result in results))
+            self.assertEqual(
+                web_service.get_job(job_id)["report_timestamp"], "20261008T132500Z"
             )
 
     def test_empty_graph_execution_is_reported_as_failure_not_decision(self):

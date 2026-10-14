@@ -140,6 +140,7 @@ export GOOGLE_API_KEY=...          # Google (Gemini)
 export ANTHROPIC_API_KEY=...       # Anthropic (Claude)
 export XAI_API_KEY=...             # xAI (Grok)
 export DEEPSEEK_API_KEY=...        # DeepSeek
+export MODEL_API_KEY=...           # Meta Model API (Muse Spark)
 export DASHSCOPE_API_KEY=...       # Qwen — International (dashscope-intl.aliyuncs.com)
 export DASHSCOPE_CN_API_KEY=...    # Qwen — China (dashscope.aliyuncs.com)
 export ZHIPU_API_KEY=...           # GLM via Z.AI (international)
@@ -147,6 +148,10 @@ export ZHIPU_CN_API_KEY=...        # GLM via BigModel (China, open.bigmodel.cn)
 export MINIMAX_API_KEY=...         # MiniMax — Global (api.minimax.io)
 export MINIMAX_CN_API_KEY=...      # MiniMax — China (api.minimaxi.com)
 export OPENROUTER_API_KEY=...      # OpenRouter
+export MISTRAL_API_KEY=...         # Mistral
+export MOONSHOT_API_KEY=...        # Kimi / Moonshot AI
+export GROQ_API_KEY=...            # GroqCloud
+export NVIDIA_API_KEY=...          # NVIDIA NIM
 export ALPHA_VANTAGE_API_KEY=...   # Alpha Vantage
 export ALPHAVANTAGE_API_KEY=...    # Alpha Vantage compatibility alias for the MyAgent chatter import
 ```
@@ -175,9 +180,21 @@ You will see a screen where you can select your desired tickers, analysis date, 
 
 Current CLI enhancements:
 - Step 1 accepts **multiple tickers** separated by commas or spaces
-- Batch mode preserves per-ticker default reports and also writes a **consolidated markdown + HTML report**
-- OpenAI GPT-5 Responses API models are normalized so report output does not break downstream file writes
-- Latest provider menus are updated for OpenAI, Anthropic, Google, and xAI
+- Batch mode saves timestamped full Markdown and HTML reports plus a source-linked investor research HTML deck for each successful ticker, and a ticker-named consolidated Markdown + HTML report. If optional generated interpretation fails validation, the deck keeps its verified figures and source excerpts with a clear notice. When source coverage itself is too thin, the investor file links to the full report instead of presenting a sparse brief.
+- OpenAI GPT-5/6 Responses API models are normalized so report output does not break downstream file writes
+- The CLI and web app offer separate curated suggestions for quick analysis, deep reasoning, and verifier/reflection. These are workflow-oriented suggestions, not measured investment-performance rankings. Your configured or promoted models remain selected even if they are no longer recommended.
+
+The **Refresh available models** action is optional and read-only: it lists account-visible model IDs without invoking a model or changing a saved selection. It never runs at page load or analysis start. A refreshed ID is labeled *available/unverified* until its tool and output capabilities are confirmed; curated recommendations remain above it. Missing credentials, provider errors, or unsupported listing APIs leave curated choices and an exact Custom model ID usable. Successful lists are cached in memory for five minutes per provider and credential; explicit refresh requests a new list. Credentials stay in the local CLI/server process and are never returned to the browser.
+
+| Model-list refresh | Providers |
+| --- | --- |
+| Fixed hosted listing API | OpenAI, Anthropic, Google, xAI, DeepSeek, Meta, OpenRouter, Mistral, Groq |
+| Local-only listing | Ollama at `localhost:11434` or `127.0.0.1:11434` |
+| Curated/custom choices only | Qwen (both regions), GLM (both regions), MiniMax (both regions), Kimi, NVIDIA NIM, Azure deployments, Bedrock, generic OpenAI-compatible endpoints, and remote Ollama |
+
+Preview models are labeled and never silently promoted. Meta Contributor-mode models are not recommended by default because their data-use terms differ from the standard tier; enter such an ID only after reviewing those terms. Older IDs remain valid for existing configurations but do not replace current role suggestions.
+
+Prompt-cache usage is reported as input tokens read from and written to provider caches in CLI statistics and each web job result's `llm_usage`. These are token counts, not estimated dollar savings. Eligible OpenAI, Azure OpenAI, and Gemini models use their provider's implicit prompt caching. For repeated research or risk debate rounds, native Anthropic models can cache a stable evidence prefix for five minutes; the default one-round debates do not add an Anthropic cache write. Set `TRADINGAGENTS_ANTHROPIC_PROMPT_CACHE=false` to disable the app-managed Anthropic breakpoint. This setting does not disable implicit caching controlled by other providers. Unsupported and OpenAI-compatible relay providers receive no caching-specific request fields, and TradingAgents never caches a completed recommendation for replay.
 
 ### Web App
 
@@ -279,7 +296,7 @@ An interface will appear showing results as they load, letting you track the age
 
 ### Implementation Details
 
-We built TradingAgents with LangGraph to ensure flexibility and modularity. The framework supports multiple LLM providers: OpenAI, Google, Anthropic, xAI, DeepSeek, Qwen (Alibaba DashScope, international and China endpoints), GLM (Zhipu), MiniMax (global + China), OpenRouter, Ollama for local models, and Azure OpenAI for enterprise.
+We built TradingAgents with LangGraph to ensure flexibility and modularity. The framework supports multiple LLM providers: OpenAI, Google, Anthropic, xAI, DeepSeek, Meta Model API (Muse Spark), Qwen (Alibaba DashScope, international and China endpoints), GLM (Zhipu), MiniMax (global + China), OpenRouter, Ollama for local models, and Azure OpenAI for enterprise.
 
 ### Python Usage
 

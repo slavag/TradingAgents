@@ -41,6 +41,8 @@ class Propagator:
             "trade_date": str(trade_date),
             "as_of_date": analysis_context.as_of_date.isoformat(),
             "analysis_mode": analysis_context.mode.value,
+            "shared_evidence": [],
+            "evidence_collected": False,
             "past_context": past_context,
             "investment_debate_state": InvestDebateState(
                 {

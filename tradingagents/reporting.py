@@ -8,11 +8,25 @@ run produces the same on-disk report tree a CLI run does.
 
 import hashlib
 import json
+import logging
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
 from tradingagents.forecasting.record_factory import forecast_record_from_state
+from tradingagents.investor_brief import (
+    InvestorBrief,
+    render_investor_brief,
+)
+from tradingagents.investor_deck import InvestorDeck
+from tradingagents.investor_deck_html import (
+    render_investor_deck,
+    render_unavailable_investor_deck,
+)
+from tradingagents.report_names import report_stem, utc_report_timestamp
+
+logger = logging.getLogger(__name__)
 
 _EVIDENCE_KEYS = (
     "market_report",
@@ -34,6 +48,20 @@ _DECISION_OUTCOME_LABELS = (
     "New Position",
     "Price Target",
     "Target Validation",
+)
+_SOURCE_FINGERPRINT_KEYS = (
+    "source",
+    "category",
+    "title",
+    "content",
+    "content_sha256",
+    "url",
+    "published_at",
+    "as_of_date",
+    "status",
+    "coverage",
+    "origin",
+    "truncated",
 )
 
 
@@ -70,6 +98,12 @@ def build_run_manifest(
     manifest = dict(run_metadata or {})
     risk_state = final_state.get("risk_debate_state") or {}
     evidence = {key: final_state.get(key) for key in _EVIDENCE_KEYS}
+    source_records = final_state.get("shared_evidence") or []
+    evidence["shared_evidence"] = [
+        {key: record.get(key) for key in _SOURCE_FINGERPRINT_KEYS}
+        for record in source_records
+        if isinstance(record, dict)
+    ]
     evidence["risk_debate_history"] = (
         risk_state.get("history") if isinstance(risk_state, dict) else None
     )
@@ -126,22 +160,82 @@ def _write_immutable_forecast_record(path: Path, record) -> None:
     )
 
 
+def write_source_evidence(final_state: dict, save_path: str | Path) -> Path | None:
+    """Persist source records separately from model-authored reports."""
+    records = final_state.get("shared_evidence") or []
+    if not records:
+        return None
+    sources_dir = Path(save_path) / "0_sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    evidence_path = sources_dir / "evidence.json"
+    payload = json.loads(json.dumps(records, default=str))
+    if evidence_path.exists():
+        try:
+            existing = json.loads(evidence_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise FileExistsError(
+                f"refusing to overwrite invalid immutable source evidence: {evidence_path}"
+            ) from exc
+        if existing != payload:
+            raise FileExistsError(
+                f"refusing to overwrite immutable source evidence: {evidence_path}"
+            )
+    else:
+        evidence_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    lines = [
+        "# Source Evidence",
+        "",
+        "These are provider and executed-tool records. Agent reports are stored separately.",
+        "",
+    ]
+    for record in records:
+        title = record.get("title", "Untitled source")
+        status = record.get("status", "unavailable")
+        source = record.get("source", "unknown")
+        published = record.get("published_at") or "publication time unknown"
+        line = f"- **{title}** [{status}] - {source}; published/available: {published}"
+        if record.get("url"):
+            line += f"; {record['url']}"
+        lines.append(line)
+    (sources_dir / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return evidence_path
+
+
 def write_report_tree(
     final_state: dict,
     ticker: str,
     save_path,
     *,
     run_metadata: dict | None = None,
+    report_timestamp: str | None = None,
+    investor_deck: InvestorDeck | None = None,
+    full_report_href: str | None = None,
+    investor_brief: InvestorBrief | None = None,
 ) -> Path:
     """Save a completed run's reports to ``save_path``; return the complete-report path."""
+    stamp = report_timestamp or utc_report_timestamp()
+    stem = report_stem("full", [ticker], stamp)
+    investor_stem = report_stem("investor", [ticker], stamp)
     save_path = Path(save_path)
     save_path.mkdir(parents=True, exist_ok=True)
+    write_source_evidence(final_state, save_path)
     sections = []
+    report_parts = []
     manifest = (
         build_run_manifest(final_state, ticker, run_metadata)
         if run_metadata is not None
         else None
     )
+    if manifest is not None:
+        manifest["investor_deck_synthesis_status"] = (
+            investor_deck.synthesis_status if investor_deck else "unavailable"
+        )
+        manifest["investor_deck_synthesis_reason"] = (
+            investor_deck.synthesis_reason if investor_deck else None
+        )
     forecast_record = forecast_record_from_state(
         final_state,
         ticker,
@@ -164,22 +258,23 @@ def write_report_tree(
     if final_state.get("market_report"):
         analysts_dir.mkdir(exist_ok=True)
         (analysts_dir / "market.md").write_text(final_state["market_report"], encoding="utf-8")
-        analyst_parts.append(("Market Analyst", final_state["market_report"]))
+        analyst_parts.append(("Market Analyst", "market.md", final_state["market_report"]))
     if final_state.get("sentiment_report"):
         analysts_dir.mkdir(exist_ok=True)
         (analysts_dir / "sentiment.md").write_text(final_state["sentiment_report"], encoding="utf-8")
-        analyst_parts.append(("Sentiment Analyst", final_state["sentiment_report"]))
+        analyst_parts.append(("Sentiment Analyst", "sentiment.md", final_state["sentiment_report"]))
     if final_state.get("news_report"):
         analysts_dir.mkdir(exist_ok=True)
         (analysts_dir / "news.md").write_text(final_state["news_report"], encoding="utf-8")
-        analyst_parts.append(("News Analyst", final_state["news_report"]))
+        analyst_parts.append(("News Analyst", "news.md", final_state["news_report"]))
     if final_state.get("fundamentals_report"):
         analysts_dir.mkdir(exist_ok=True)
         (analysts_dir / "fundamentals.md").write_text(final_state["fundamentals_report"], encoding="utf-8")
-        analyst_parts.append(("Fundamentals Analyst", final_state["fundamentals_report"]))
+        analyst_parts.append(("Fundamentals Analyst", "fundamentals.md", final_state["fundamentals_report"]))
     if analyst_parts:
-        content = "\n\n".join(f"### {name}\n{text}" for name, text in analyst_parts)
+        content = "\n\n".join(f"### {name}\n{text}" for name, _file, text in analyst_parts)
         sections.append(f"## I. Analyst Team Reports\n\n{content}")
+        report_parts.append(("I. Analyst Team Reports", "1_analysts", analyst_parts))
 
     # 2. Research
     if final_state.get("investment_debate_state"):
@@ -189,18 +284,19 @@ def write_report_tree(
         if debate.get("bull_history"):
             research_dir.mkdir(exist_ok=True)
             (research_dir / "bull.md").write_text(debate["bull_history"], encoding="utf-8")
-            research_parts.append(("Bull Researcher", debate["bull_history"]))
+            research_parts.append(("Bull Researcher", "bull.md", debate["bull_history"]))
         if debate.get("bear_history"):
             research_dir.mkdir(exist_ok=True)
             (research_dir / "bear.md").write_text(debate["bear_history"], encoding="utf-8")
-            research_parts.append(("Bear Researcher", debate["bear_history"]))
+            research_parts.append(("Bear Researcher", "bear.md", debate["bear_history"]))
         if debate.get("judge_decision"):
             research_dir.mkdir(exist_ok=True)
             (research_dir / "manager.md").write_text(debate["judge_decision"], encoding="utf-8")
-            research_parts.append(("Research Manager", debate["judge_decision"]))
+            research_parts.append(("Research Manager", "manager.md", debate["judge_decision"]))
         if research_parts:
-            content = "\n\n".join(f"### {name}\n{text}" for name, text in research_parts)
+            content = "\n\n".join(f"### {name}\n{text}" for name, _file, text in research_parts)
             sections.append(f"## II. Research Team Decision\n\n{content}")
+            report_parts.append(("II. Research Team Decision", "2_research", research_parts))
 
     # 3. Trading
     if final_state.get("trader_investment_plan"):
@@ -208,6 +304,9 @@ def write_report_tree(
         trading_dir.mkdir(exist_ok=True)
         (trading_dir / "trader.md").write_text(final_state["trader_investment_plan"], encoding="utf-8")
         sections.append(f"## III. Trading Team Plan\n\n### Trader\n{final_state['trader_investment_plan']}")
+        report_parts.append(("III. Trading Team Plan", "3_trading", [
+            ("Trader", "trader.md", final_state["trader_investment_plan"])
+        ]))
 
     # 4. Risk Management
     if final_state.get("risk_debate_state"):
@@ -217,18 +316,19 @@ def write_report_tree(
         if risk.get("aggressive_history"):
             risk_dir.mkdir(exist_ok=True)
             (risk_dir / "aggressive.md").write_text(risk["aggressive_history"], encoding="utf-8")
-            risk_parts.append(("Aggressive Analyst", risk["aggressive_history"]))
+            risk_parts.append(("Aggressive Analyst", "aggressive.md", risk["aggressive_history"]))
         if risk.get("conservative_history"):
             risk_dir.mkdir(exist_ok=True)
             (risk_dir / "conservative.md").write_text(risk["conservative_history"], encoding="utf-8")
-            risk_parts.append(("Conservative Analyst", risk["conservative_history"]))
+            risk_parts.append(("Conservative Analyst", "conservative.md", risk["conservative_history"]))
         if risk.get("neutral_history"):
             risk_dir.mkdir(exist_ok=True)
             (risk_dir / "neutral.md").write_text(risk["neutral_history"], encoding="utf-8")
-            risk_parts.append(("Neutral Analyst", risk["neutral_history"]))
+            risk_parts.append(("Neutral Analyst", "neutral.md", risk["neutral_history"]))
         if risk_parts:
-            content = "\n\n".join(f"### {name}\n{text}" for name, text in risk_parts)
+            content = "\n\n".join(f"### {name}\n{text}" for name, _file, text in risk_parts)
             sections.append(f"## IV. Risk Management Team Decision\n\n{content}")
+            report_parts.append(("IV. Risk Management Team Decision", "4_risk", risk_parts))
 
         # 5. Portfolio Manager
         if risk.get("judge_decision"):
@@ -236,8 +336,55 @@ def write_report_tree(
             portfolio_dir.mkdir(exist_ok=True)
             (portfolio_dir / "decision.md").write_text(risk["judge_decision"], encoding="utf-8")
             sections.append(f"## V. Portfolio Manager Decision\n\n### Portfolio Manager\n{risk['judge_decision']}")
+            report_parts.append(("V. Portfolio Manager Decision", "5_portfolio", [
+                ("Portfolio Manager", "decision.md", risk["judge_decision"])
+            ]))
 
     # Write consolidated report
     header = f"# Trading Analysis Report: {ticker}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-    (save_path / "complete_report.md").write_text(header + "\n\n".join(sections), encoding="utf-8")
-    return save_path / "complete_report.md"
+    markdown_path = save_path / f"{stem}.md"
+    markdown_path.write_text(header + "\n\n".join(sections), encoding="utf-8")
+    from tradingagents.report_html import render_report
+
+    (save_path / f"{stem}.html").write_text(
+        render_report(ticker, final_state, None, report_parts),
+        encoding="utf-8",
+    )
+    source_titles = {
+        str(record.get("evidence_id")): (
+            f"{record.get('title')} (metadata only)"
+            if record.get("coverage") == "metadata_only"
+            else str(record.get("title"))
+        )
+        for record in final_state.get("shared_evidence") or []
+        if isinstance(record, Mapping) and record.get("evidence_id")
+    }
+    source_titles.update({
+        "analysis:portfolio": "Portfolio manager assessment",
+        "analysis:research": "Research manager assessment",
+        "analysis:trader": "Trader proposal",
+        "analysis:market": "Market analyst assessment",
+        "analysis:sentiment": "Sentiment analyst assessment",
+        "analysis:news": "News analyst assessment",
+        "analysis:fundamentals": "Fundamentals analyst assessment",
+        "analysis:risk": "Risk team assessment",
+    })
+    analysis_date = str(final_state.get("trade_date") or (run_metadata or {}).get("analysis_date") or "")
+    if investor_deck is not None:
+        try:
+            investor_html = render_investor_deck(investor_deck, stamp)
+        except Exception:  # noqa: BLE001 - optional output cannot invalidate the full report
+            logger.warning("Validated investor deck could not be rendered for %s", ticker)
+            investor_html = render_unavailable_investor_deck(
+                ticker, analysis_date, full_report_href or f"{stem}.html", stamp,
+            )
+    elif investor_brief is not None:
+        investor_html = render_investor_brief(
+            investor_brief, ticker, analysis_date, stamp, source_titles,
+        )
+    else:
+        investor_html = render_unavailable_investor_deck(
+            ticker, analysis_date, full_report_href or f"{stem}.html", stamp,
+        )
+    (save_path / f"{investor_stem}.html").write_text(investor_html, encoding="utf-8")
+    return markdown_path

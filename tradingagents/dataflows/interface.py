@@ -17,8 +17,10 @@ from .errors import (
     VendorNotConfiguredError,
     VendorRateLimitError,
 )
+from .fmp import get_earnings_context as get_fmp_earnings_context
 from .fred import get_macro_data as get_fred_macro_data
 from .polymarket import get_prediction_markets as get_polymarket_prediction_markets
+from .sec import get_company_filings as get_sec_company_filings
 from .y_finance import (
     get_balance_sheet as get_yfinance_balance_sheet,
     get_cashflow as get_yfinance_cashflow,
@@ -74,6 +76,14 @@ TOOLS_CATEGORIES = {
         "tools": [
             "get_prediction_markets",
         ]
+    },
+    "regulatory_filings": {
+        "description": "Dated regulatory filings and reported financial facts",
+        "tools": ["get_company_filings"],
+    },
+    "earnings_data": {
+        "description": "Earnings estimates, results, calendars, and transcripts",
+        "tools": ["get_earnings_context"],
     }
 }
 
@@ -82,6 +92,8 @@ VENDOR_LIST = [
     "fred",
     "polymarket",
     "alpha_vantage",
+    "sec",
+    "fmp",
 ]
 
 # Optional enrichment categories. These add macro/event context to the news
@@ -89,7 +101,12 @@ VENDOR_LIST = [
 # sentinel instead of aborting the run (a bad LLM-supplied indicator, a missing
 # key, or a network blip should not crash an analysis over flavour data). Core
 # categories (prices, fundamentals, news) still raise so a broken primary is loud.
-OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets"}
+OPTIONAL_CATEGORIES = {
+    "macro_data",
+    "prediction_markets",
+    "regulatory_filings",
+    "earnings_data",
+}
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
@@ -140,6 +157,12 @@ VENDOR_METHODS = {
     # prediction_markets
     "get_prediction_markets": {
         "polymarket": get_polymarket_prediction_markets,
+    },
+    "get_company_filings": {
+        "sec": get_sec_company_filings,
+    },
+    "get_earnings_context": {
+        "fmp": get_fmp_earnings_context,
     },
 }
 

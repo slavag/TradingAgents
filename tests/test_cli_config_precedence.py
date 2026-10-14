@@ -61,6 +61,14 @@ def test_checkpoint_none_preserves_env_default():
     assert cfg["checkpoint_enabled"] is True  # not clobbered back to False
 
 
+def test_interactive_verifier_selection_sets_final_report_role():
+    selections = dict(SELECTIONS, final_report_provider="anthropic",
+                      final_report_model="claude-sonnet-5-5")
+    cfg = m._build_run_config(selections, checkpoint=None)
+    assert cfg["final_report_provider"] == "anthropic"
+    assert cfg["final_report_llm"] == "claude-sonnet-5-5"
+
+
 @pytest.mark.parametrize("flag", [True, False])
 def test_checkpoint_flag_overrides_env(flag):
     patched = dict(m.DEFAULT_CONFIG, checkpoint_enabled=not flag)

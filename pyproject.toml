@@ -20,6 +20,7 @@ dependencies = [
     "langchain-openai>=0.3.23",
     "langgraph>=0.4.8",
     "langgraph-checkpoint-sqlite>=2.0.0",
+    "markdown-it-py>=3.0.0",
     "numpy>=1.26.0",
     "pandas>=2.3.0",
     "parsel>=1.10.0",
@@ -59,6 +60,8 @@ include = ["tradingagents*", "cli*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
+tradingagents = ["assets/*.svg"]
+"tradingagents.web" = ["static/*.html", "static/*.css", "static/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

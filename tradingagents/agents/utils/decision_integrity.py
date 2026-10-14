@@ -33,7 +33,7 @@ _PRICE_LABEL = (
 )
 _CURRENCY_MARKER = r"(?:[$€£¥]|\b(?:USD|EUR|GBP|JPY|CAD|AUD|CHF|CNY|HKD)\b)"
 _CONNECTOR = (
-    r"(?:\s|[:=~≈@()\[\],-]|"
+    r"(?:\s|[:=~≈@()\[\],|_-]|"
     r"\b(?:is|at|near|around|of|about|approximately|approx|roughly|"
     r"estimate|estimated|to)\b)*"
 )
@@ -42,6 +42,14 @@ _NON_PRICE_SUFFIX = re.compile(
     r"thousand\b|million\b|billion\b|trillion\b|[KMBT]\b)",
     re.IGNORECASE,
 )
+_PORTFOLIO_WEIGHT = re.compile(
+    r"(?i)\b\d+(?:\.\d+)?\s*%\s*(?:of\s+)?(?:portfolio|NAV|account|capital)\b"
+)
+
+
+def has_numeric_portfolio_weight(text: str) -> bool:
+    """Detect an allocation percentage that requires missing account context."""
+    return bool(_PORTFOLIO_WEIGHT.search(text))
 
 
 def _normalize_whitespace(value: str) -> str:
@@ -61,7 +69,43 @@ def build_decision_evidence(state: Mapping[str, Any]) -> str:
         history = risk_state.get("history")
         if isinstance(history, str) and history.strip():
             sections.append(f"[risk_debate]\n{history.strip()}")
+    from tradingagents.agents.utils.evidence import render_admissible_evidence
+
+    source_evidence = render_admissible_evidence(state, max_chars=60_000)
+    if source_evidence:
+        sections.append(f"[source_evidence]\n{source_evidence.strip()}")
     return "\n\n".join(sections)
+
+
+def verified_target_candidates(state: Mapping[str, Any], limit: int = 12) -> list[str]:
+    """Offer verbatim, dated price levels from the verified market snapshot."""
+    from tradingagents.agents.utils.evidence import evidence_is_admissible
+
+    run_date = str(state.get("trade_date") or state.get("as_of_date") or "")
+    candidates = []
+    for record in state.get("shared_evidence", []):
+        if record.get("source") != "get_verified_market_snapshot" or not run_date:
+            continue
+        if not evidence_is_admissible(record, run_date):
+            continue
+        content = str(record.get("content") or "").split("### Recent verified closes", 1)[0]
+        for raw_line in content.splitlines():
+            quote = raw_line.strip()
+            cells = [cell.strip() for cell in quote.strip("|").split("|")]
+            if not quote.startswith("|") or len(cells) != 2 or len(quote) > 300:
+                continue
+            label, value = cells
+            normalized = label.casefold()
+            price_label = normalized in {"open", "high", "low", "close"} or any(
+                part in normalized for part in ("sma", "ema", "boll", "support", "resistance")
+            )
+            if not price_label or not re.fullmatch(r"\$?\s*\d[\d,]*(?:\.\d+)?", value):
+                continue
+            if quote not in candidates:
+                candidates.append(quote)
+                if len(candidates) >= limit:
+                    return candidates
+    return candidates
 
 
 def extract_verified_reference_price(text: str) -> float | None:
@@ -85,10 +129,16 @@ def extract_verified_reference_price(text: str) -> float | None:
 def _target_fields(draft: PortfolioDecisionDraft) -> tuple[Any, ...]:
     return (
         draft.price_target,
+        draft.target_low,
+        draft.target_high,
         draft.time_horizon,
         draft.confidence_score,
         draft.target_summary,
         draft.supporting_quote,
+        draft.supporting_quote_low,
+        draft.supporting_quote_high,
+        draft.target_method,
+        draft.target_risks,
     )
 
 
@@ -204,8 +254,9 @@ def _target_rejection_reason(
 def _find_exact_price_quote(
     price_target: float,
     evidence_text: str,
+    eligible_quotes: list[str] | None = None,
 ) -> str | None:
-    for raw_line in evidence_text.splitlines():
+    for raw_line in eligible_quotes if eligible_quotes is not None else evidence_text.splitlines():
         candidate = _normalize_whitespace(raw_line)
         if not candidate or len(candidate) > 300:
             continue
@@ -218,16 +269,115 @@ def finalize_portfolio_decision(
     draft: PortfolioDecisionDraft,
     evidence_text: str,
     reference_price: float | None = None,
+    *,
+    eligible_quotes: list[str] | None = None,
 ) -> PortfolioDecision:
-    """Finalize a provider draft through deterministic target validation."""
+    """Finalize a provider draft through deterministic price-level validation."""
     proposed = _target_fields(draft)
     if not any(value is not None for value in proposed):
         return _without_target(draft, TargetValidationStatus.NOT_PROPOSED, None)
-    if not all(value is not None for value in proposed):
+    point_proposed = draft.price_target is not None or draft.supporting_quote is not None
+    range_proposed = any(value is not None for value in (
+        draft.target_low, draft.target_high,
+        draft.supporting_quote_low, draft.supporting_quote_high,
+    ))
+    if point_proposed and range_proposed:
+        return _without_target(
+            draft, TargetValidationStatus.REJECTED, TargetValidationReason.TARGET_SHAPE_MIXED,
+        )
+    common = (draft.time_horizon, draft.confidence_score, draft.target_summary)
+    shape_fields = (
+        (draft.target_low, draft.target_high, draft.supporting_quote_low,
+         draft.supporting_quote_high) if range_proposed else
+        (draft.price_target, draft.supporting_quote) if point_proposed else ()
+    )
+    if not shape_fields or not all(value is not None for value in (*common, *shape_fields)):
         return _without_target(
             draft,
             TargetValidationStatus.REJECTED,
             TargetValidationReason.BUNDLE_INCOMPLETE,
+        )
+
+    if not isinstance(draft.time_horizon, str) or not draft.time_horizon.strip() or re.search(
+        r"(?i)\b(?:ago|past|historical|yesterday)\b|^\s*-", draft.time_horizon,
+    ):
+        return _without_target(
+            draft, TargetValidationStatus.REJECTED, TargetValidationReason.TARGET_HORIZON_INVALID,
+        )
+    if not isinstance(draft.target_summary, str) or not draft.target_summary.strip():
+        return _without_target(
+            draft, TargetValidationStatus.REJECTED,
+            TargetValidationReason.TARGET_RATIONALE_MISSING,
+        )
+
+    if range_proposed:
+        if not isinstance(draft.target_method, str) or not draft.target_method.strip():
+            return _without_target(
+                draft, TargetValidationStatus.REJECTED,
+                TargetValidationReason.TARGET_METHOD_MISSING,
+            )
+        if not isinstance(draft.target_risks, str) or not draft.target_risks.strip():
+            return _without_target(
+                draft, TargetValidationStatus.REJECTED,
+                TargetValidationReason.TARGET_RISKS_MISSING,
+            )
+        low, high = draft.target_low, draft.target_high
+        if not all(math.isfinite(value) and value > 0 for value in (low, high)):
+            return _without_target(
+                draft, TargetValidationStatus.REJECTED,
+                TargetValidationReason.TARGET_NOT_POSITIVE_FINITE,
+            )
+        if low > high:
+            return _without_target(
+                draft, TargetValidationStatus.REJECTED,
+                TargetValidationReason.TARGET_RANGE_REVERSED,
+            )
+        if (
+            reference_price is not None
+            and math.isfinite(reference_price)
+            and (
+                (draft.rating in {PortfolioRating.BUY, PortfolioRating.OVERWEIGHT}
+                 and low <= reference_price) or (
+                draft.rating in {PortfolioRating.SELL, PortfolioRating.UNDERWEIGHT}
+                and high >= reference_price
+                )
+            )
+        ):
+            return _without_target(
+                draft, TargetValidationStatus.REJECTED,
+                TargetValidationReason.TARGET_DIRECTION_CONFLICT,
+            )
+
+        quotes = [draft.supporting_quote_low, draft.supporting_quote_high]
+        for index, (value, quote) in enumerate(zip((low, high), quotes, strict=True)):
+            reason = _quote_rejection_reason(value, quote, evidence_text)
+            if reason is TargetValidationReason.SUPPORTING_QUOTE_NOT_IN_EVIDENCE:
+                replacement = _find_exact_price_quote(value, evidence_text, eligible_quotes)
+                if replacement is not None:
+                    quote = replacement
+                    reason = None
+            if reason is not None:
+                return _without_target(draft, TargetValidationStatus.REJECTED, reason)
+            if eligible_quotes is not None and _normalize_whitespace(quote) not in {
+                _normalize_whitespace(row) for row in eligible_quotes
+            }:
+                return _without_target(
+                    draft, TargetValidationStatus.REJECTED,
+                    TargetValidationReason.SUPPORTING_QUOTE_NOT_ELIGIBLE,
+                )
+            quotes[index] = quote
+        return PortfolioDecision(
+            **_base_fields(draft),
+            target_low=low,
+            target_high=high,
+            supporting_quote_low=quotes[0],
+            supporting_quote_high=quotes[1],
+            time_horizon=draft.time_horizon,
+            confidence_score=draft.confidence_score,
+            target_summary=draft.target_summary,
+            target_method=draft.target_method,
+            target_risks=draft.target_risks,
+            target_validation_status=TargetValidationStatus.ACCEPTED,
         )
 
     validated_draft = draft
@@ -237,7 +387,7 @@ def finalize_portfolio_decision(
         evidence_text,
     )
     if quote_reason is TargetValidationReason.SUPPORTING_QUOTE_NOT_IN_EVIDENCE:
-        exact_quote = _find_exact_price_quote(draft.price_target, evidence_text)
+        exact_quote = _find_exact_price_quote(draft.price_target, evidence_text, eligible_quotes)
         if exact_quote is not None:
             validated_draft = draft.model_copy(
                 update={"supporting_quote": exact_quote},
@@ -250,6 +400,13 @@ def finalize_portfolio_decision(
     )
     if reason is not None:
         return _without_target(draft, TargetValidationStatus.REJECTED, reason)
+    if eligible_quotes is not None and _normalize_whitespace(validated_draft.supporting_quote) not in {
+        _normalize_whitespace(row) for row in eligible_quotes
+    }:
+        return _without_target(
+            draft, TargetValidationStatus.REJECTED,
+            TargetValidationReason.SUPPORTING_QUOTE_NOT_ELIGIBLE,
+        )
 
     return PortfolioDecision(
         **_base_fields(validated_draft),
@@ -258,5 +415,7 @@ def finalize_portfolio_decision(
         confidence_score=validated_draft.confidence_score,
         target_summary=validated_draft.target_summary,
         supporting_quote=validated_draft.supporting_quote,
+        target_method=validated_draft.target_method,
+        target_risks=validated_draft.target_risks,
         target_validation_status=TargetValidationStatus.ACCEPTED,
     )
