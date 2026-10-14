@@ -9,7 +9,6 @@ from cli.models import AnalystType, AssetType
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 from tradingagents.llm_clients.model_catalog import (
     get_catalog_metadata,
-    get_model_options,
     get_role_model_options,
 )
 from tradingagents.llm_clients.model_discovery import DISCOVERY_ADAPTERS, discover_models
@@ -240,16 +239,19 @@ def merge_curated_and_available(
     provider: str, mode: str, models: tuple[str, ...]
 ) -> list[questionary.Choice]:
     """Keep curated ordering, then show every new account-visible model."""
-    curated = (
-        get_role_model_options()["verifier"][provider]
-        if mode == "verifier" else get_model_options(provider, mode)
-    )
+    curated = get_role_model_options()[mode][provider]
     seen = {model_id for _, model_id in curated}
     metadata = get_catalog_metadata().get(provider, {})
+    recommended_id = next((model_id for _, model_id in curated if model_id != "custom"), None)
     merged = []
     for label, model_id in curated:
         lifecycle = metadata.get(model_id, {}).get("lifecycle")
-        suffix = f" [{('preview' if lifecycle == 'preview' else 'recommended')}]" if lifecycle else ""
+        if lifecycle == "preview":
+            suffix = " [preview]"
+        elif lifecycle:
+            suffix = " [recommended]" if model_id == recommended_id else " [catalog]"
+        else:
+            suffix = ""
         merged.append(questionary.Choice(label + suffix, value=model_id))
     available = []
     for model_id in models:

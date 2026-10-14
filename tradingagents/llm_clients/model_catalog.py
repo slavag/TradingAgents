@@ -34,7 +34,7 @@ _VERIFIER_PREFERRED = {
     "anthropic": ("claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"),
     "google": ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.1-pro-preview"),
     "xai": ("grok-4.7", "grok-4.3"),
-    "meta": ("muse-spark-1.3", "muse-spark-1.2"),
+    "meta": ("muse-spark-1.3", "muse-wonder-1.0"),
 }
 
 
@@ -165,6 +165,7 @@ MODEL_OPTIONS: ProviderModeOptions = {
             ("Gemini 3.8 Flash - Quick reasoning and tools", "gemini-3.8-flash"),
             ("Gemini 3.6 Flash - Balanced alternative", "gemini-3.6-flash"),
             ("Gemini 3.5 Flash-Lite - Lower-cost alternative", "gemini-3.5-flash-lite"),
+            ("Gemini 3.1 Flash-Lite - Earlier stable low-cost model", "gemini-3.1-flash-lite"),
         ],
         "deep": [
             ("Gemini 3.8 Flash - Deep reasoning and tools", "gemini-3.8-flash"),
@@ -239,16 +240,33 @@ MODEL_OPTIONS: ProviderModeOptions = {
     "mistral": {
         "quick": [("Mistral Small 4 - Tool-enabled analysis", "mistral-small-2603")],
         "deep": [
-            ("Mistral Small 4 - Reasoning and tools", "mistral-small-2603"),
+            ("Mistral Medium 3.5 - Complex reasoning and structured output", "mistral-medium-3-5"),
+            ("Mistral Small 4 - Lower-cost reasoning and tools", "mistral-small-2603"),
             ("Mistral Large 4 - Preview", "mistral-large-4"),
         ],
     },
-    "kimi": _CUSTOM_ONLY,
+    "kimi": {
+        "quick": [
+            ("Kimi K2.6 - General-purpose agent analysis", "kimi-k2.6"),
+            ("Kimi K2.7 Code Highspeed - Coding-specialized", "kimi-k2.7-code-highspeed"),
+        ],
+        "deep": [
+            ("Kimi K3 - Long-context reasoning and knowledge work", "kimi-k3"),
+            ("Kimi K2.7 Code - Coding-specialized", "kimi-k2.7-code"),
+        ],
+    },
     "groq": {
         "quick": [("GPT-OSS 20B - Fast hosted reasoning", "openai/gpt-oss-20b")],
         "deep": [("GPT-OSS 120B - Hosted reasoning and tools", "openai/gpt-oss-120b")],
     },
-    "nvidia": _CUSTOM_ONLY,
+    "nvidia": {
+        "quick": [
+            ("Nemotron 3.5 Lightning - Fast text agent model", "nvidia/nemotron-3.5-lightning-30b-a3b"),
+        ],
+        "deep": [
+            ("Nemotron 3 Super - Long-context reasoning and tools", "nvidia/nemotron-3-super-120b-a12b"),
+        ],
+    },
     "bedrock": _CUSTOM_ONLY,
     "azure": _CUSTOM_ONLY,
 }
@@ -277,10 +295,13 @@ _OFFICIAL_CATALOG_SOURCES = {
     "openrouter": "https://openrouter.ai/docs/api/api-reference/models/get-models",
     "ollama": "https://docs.ollama.com/api/tags",
     "mistral": "https://docs.mistral.ai/inference",
+    "kimi": "https://platform.kimi.ai/docs/models",
     "groq": "https://console.groq.com/docs/models",
+    "nvidia": "https://build.nvidia.com/models",
 }
 
 _PREVIEW_MODEL_IDS = {"muse-wonder-1.0", "gemini-3.1-pro-preview", "mistral-large-4"}
+_RECENTLY_CHECKED_PROVIDERS = {"google", "meta", "mistral", "kimi", "nvidia"}
 
 
 def get_catalog_metadata() -> dict[str, dict[str, dict[str, str]]]:
@@ -290,7 +311,9 @@ def get_catalog_metadata() -> dict[str, dict[str, dict[str, str]]]:
             value: {
                 "lifecycle": "preview" if value in _PREVIEW_MODEL_IDS else "current",
                 "source_url": _OFFICIAL_CATALOG_SOURCES[provider],
-                "checked_at": "2026-10-13",
+                "checked_at": (
+                    "2026-10-14" if provider in _RECENTLY_CHECKED_PROVIDERS else "2026-10-13"
+                ),
                 "rationale": label.split(" - ", 1)[-1],
             }
             for label, value in get_web_model_options()[provider]
@@ -328,9 +351,22 @@ def get_web_model_options() -> WebProviderOptions:
 def get_role_model_options() -> RoleWebOptions:
     """Return provider options independently curated for each runtime role."""
     roles: RoleWebOptions = {"quick": {}, "deep": {}, "verifier": {}}
+    catalog_options = get_web_model_options()
+
+    def complete(provider: str, preferred: list[ModelOption]) -> list[ModelOption]:
+        seen: set[str] = set()
+        choices: list[ModelOption] = []
+        for label, model_id in (*preferred, *catalog_options[provider]):
+            if model_id == "custom" or model_id in seen:
+                continue
+            seen.add(model_id)
+            choices.append((label, model_id))
+        choices.append(("Custom model ID", "custom"))
+        return choices
+
     for provider, mode_options in MODEL_OPTIONS.items():
-        roles["quick"][provider] = list(mode_options["quick"])
-        roles["deep"][provider] = list(mode_options["deep"])
+        roles["quick"][provider] = complete(provider, mode_options["quick"])
+        roles["deep"][provider] = complete(provider, mode_options["deep"])
         merged = []
         seen = set()
         for option in (*mode_options["deep"], *mode_options["quick"]):
@@ -341,10 +377,9 @@ def get_role_model_options() -> RoleWebOptions:
         if preferred:
             by_id = {value: (label, value) for label, value in merged}
             verifier = [by_id[value] for value in preferred if value in by_id]
-            verifier.extend(option for option in merged if option[1] == "custom")
-            roles["verifier"][provider] = verifier
+            roles["verifier"][provider] = complete(provider, verifier)
         else:
-            roles["verifier"][provider] = list(mode_options["deep"])
+            roles["verifier"][provider] = complete(provider, mode_options["deep"])
     return roles
 
 

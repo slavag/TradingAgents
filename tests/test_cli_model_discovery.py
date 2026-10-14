@@ -100,7 +100,8 @@ def test_cli_labels_lifecycle_and_deduplicates_account_ids():
     mistral = utils.merge_curated_and_available("mistral", "deep", ())
     by_id = {choice.value: choice.title for choice in mistral}
     assert "preview" in by_id["mistral-large-4"].lower()
-    assert "recommended" in by_id["mistral-small-2603"].lower()
+    assert "recommended" in by_id["mistral-medium-3-5"].lower()
+    assert "catalog" in by_id["mistral-small-2603"].lower()
 
     choices = utils.merge_curated_and_available("openai", "quick", ("account/chat", "account/chat"))
     assert [choice.value for choice in choices].count("account/chat") == 1
@@ -118,3 +119,11 @@ def test_verifier_role_uses_its_own_ranked_suggestions(monkeypatch):
     assert utils.select_verifier_model("openai") == "gpt-6.1-sol"
     assert captured["values"][0] == "gpt-6.1-sol"
     assert "refresh_models" in captured["values"]
+
+
+def test_cli_keeps_meta_wonder_selectable_without_recommending_preview():
+    choices = utils.merge_curated_and_available("meta", "quick", ())
+    labels = {choice.value: choice.title for choice in choices}
+    assert "recommended" in labels["muse-spark-1.3"].lower()
+    assert "preview" in labels["muse-wonder-1.0"].lower()
+    assert "recommended" not in labels["muse-wonder-1.0"].lower()

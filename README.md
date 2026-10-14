@@ -186,6 +186,8 @@ Current CLI enhancements:
 
 The **Refresh available models** action is optional and read-only: it lists account-visible model IDs without invoking a model or changing a saved selection. It never runs at page load or analysis start. A refreshed ID is labeled *available/unverified* until its tool and output capabilities are confirmed; curated recommendations remain above it. Missing credentials, provider errors, or unsupported listing APIs leave curated choices and an exact Custom model ID usable. Successful lists are cached in memory for five minutes per provider and credential; explicit refresh requests a new list. Credentials stay in the local CLI/server process and are never returned to the browser.
 
+The first model in each role is the recommendation; other documented models remain selectable as catalog options across all three roles. For example, Meta's `muse-wonder-1.0` is available for any role but stays labeled **preview** and is not the default. Kimi K3/K2.6, NVIDIA Nemotron, and Mistral Medium 3.5 have curated choices; account-specific or regional model IDs can still be entered directly.
+
 | Model-list refresh | Providers |
 | --- | --- |
 | Fixed hosted listing API | OpenAI, Anthropic, Google, xAI, DeepSeek, Meta, OpenRouter, Mistral, Groq |

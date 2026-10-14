@@ -5,6 +5,7 @@ from unittest import mock
 import pytest
 
 from cli import utils
+from tradingagents.llm_clients.model_catalog import get_model_options
 
 
 def _asks(value):
@@ -46,7 +47,7 @@ def test_mainstream_models_are_first_but_niche_remain_selectable():
 
 @pytest.mark.unit
 def test_refresh_deduplicates_curated_model_id():
-    curated_id = utils.get_model_options("openrouter", "quick")[0][1]
+    curated_id = get_model_options("openrouter", "quick")[0][1]
     choices = utils.merge_curated_and_available("openrouter", "quick", (curated_id, curated_id))
     assert [choice.value for choice in choices].count(curated_id) == 1
 

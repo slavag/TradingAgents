@@ -30,7 +30,7 @@ const MODEL_CAPABILITIES = window.TRADINGAGENTS_MODEL_CAPABILITIES || {};
 const CATALOG_METADATA = window.TRADINGAGENTS_CATALOG_METADATA || {};
 const DISCOVERY_PROVIDERS = window.TRADINGAGENTS_DISCOVERY_PROVIDERS || [];
 const ROLE_DEFAULTS = window.TRADINGAGENTS_ROLE_DEFAULTS || {};
-const { mergeModelChoices, isCurrentRefresh, preferredModelForProvider, canRefreshProvider } = window.TradingAgentsModelPicker;
+const { mergeModelChoices, isCurrentRefresh, preferredModelForProvider, canRefreshProvider, catalogChoiceTag } = window.TradingAgentsModelPicker;
 
 const elements = {
   form: document.getElementById("analysis-form"),
@@ -160,11 +160,11 @@ function updateModelOptions(role, provider, selectElement, preferredValue = null
   const scopedOptions = { [role]: { [provider]: roleOptions[provider] || MODEL_OPTIONS[provider] || [["Custom model ID", "custom"]] } };
   const selectedValue = preferredValue ?? selectElement.value;
   const discovered = state.discoveredModels[role][provider] || [];
+  const recommendedId = scopedOptions[role][provider].find(([, value]) => value !== "custom")?.[1];
   const options = mergeModelChoices(role, provider, selectedValue, discovered, scopedOptions).map(([label, value]) => {
     const metadata = CATALOG_METADATA[provider]?.[value];
     if (!metadata) return [label, value];
-    const lifecycle = metadata.lifecycle === "preview" ? "Preview" : "Recommended";
-    return [`${label} · ${lifecycle}`, value];
+    return [`${label} · ${catalogChoiceTag(value, metadata, recommendedId)}`, value];
   });
   populateModelSelect(selectElement, options, selectedValue);
 }

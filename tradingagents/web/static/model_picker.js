@@ -33,10 +33,16 @@ function canRefreshProvider(provider, supportedProviders) {
   return supportedProviders.includes(provider);
 }
 
+function catalogChoiceTag(modelId, metadata, recommendedId) {
+  if (!metadata) return null;
+  if (metadata.lifecycle === "preview") return "Preview";
+  return modelId === recommendedId ? "Recommended" : "Catalog option";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { mergeModelChoices, isCurrentRefresh, preferredModelForProvider, canRefreshProvider };
+  module.exports = { mergeModelChoices, isCurrentRefresh, preferredModelForProvider, canRefreshProvider, catalogChoiceTag };
 }
 if (typeof window !== "undefined") {
-  window.TradingAgentsModelPicker = { mergeModelChoices, isCurrentRefresh, preferredModelForProvider, canRefreshProvider };
+  window.TradingAgentsModelPicker = { mergeModelChoices, isCurrentRefresh, preferredModelForProvider, canRefreshProvider, catalogChoiceTag };
 }
 })();

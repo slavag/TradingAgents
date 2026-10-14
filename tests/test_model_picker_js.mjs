@@ -11,6 +11,7 @@ const {
   isCurrentRefresh,
   preferredModelForProvider,
   canRefreshProvider,
+  catalogChoiceTag,
 } = require('../tradingagents/web/static/model_picker.js');
 
 const roleOptions = {
@@ -67,4 +68,10 @@ test('only providers with a verified listing API offer refresh', () => {
   assert.equal(canRefreshProvider('openai', supported), true);
   assert.equal(canRefreshProvider('azure', supported), false);
   assert.equal(canRefreshProvider('openai_compatible', supported), false);
+});
+
+test('preview and non-primary catalog choices are not labeled recommended', () => {
+  assert.equal(catalogChoiceTag('muse-spark-1.3', { lifecycle: 'current' }, 'muse-spark-1.3'), 'Recommended');
+  assert.equal(catalogChoiceTag('muse-wonder-1.0', { lifecycle: 'preview' }, 'muse-spark-1.3'), 'Preview');
+  assert.equal(catalogChoiceTag('kimi-k3', { lifecycle: 'current' }, 'kimi-k2.6'), 'Catalog option');
 });

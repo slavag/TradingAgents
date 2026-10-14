@@ -133,6 +133,10 @@ class DeepSeekChatOpenAI(NormalizedChatOpenAI):
         return chat_result
 
 
+class KimiChatOpenAI(DeepSeekChatOpenAI):
+    """Preserve Kimi's reasoning_content across multi-turn tool conversations."""
+
+
 class MinimaxChatOpenAI(NormalizedChatOpenAI):
     """MiniMax-specific overrides on top of the OpenAI-compatible client.
 
@@ -178,6 +182,9 @@ _PASSTHROUGH_KWARGS = (
 # "Unsupported parameter: 'reasoning.effort' is not supported with this model".
 # Drop the kwarg for those rather than crash the run.
 _OPENAI_REASONING_MODEL = re.compile(r"^(gpt-[56]|o[1-9])")
+_KIMI_FIXED_TEMPERATURE_MODELS = {
+    "kimi-k3", "kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed",
+}
 
 
 def _supports_reasoning_effort(model: str) -> bool:
@@ -227,7 +234,7 @@ OPENAI_COMPATIBLE_PROVIDERS: dict[str, ProviderSpec] = {
     "minimax-cn": ProviderSpec(base_url="https://api.minimaxi.com/v1", chat_class=MinimaxChatOpenAI),
     "openrouter": ProviderSpec(base_url="https://openrouter.ai/api/v1"),
     "mistral":    ProviderSpec(base_url="https://api.mistral.ai/v1"),
-    "kimi":       ProviderSpec(base_url="https://api.moonshot.ai/v1"),
+    "kimi":       ProviderSpec(base_url="https://api.moonshot.ai/v1", chat_class=KimiChatOpenAI),
     "groq":       ProviderSpec(base_url="https://api.groq.com/openai/v1"),
     "nvidia":     ProviderSpec(base_url="https://integrate.api.nvidia.com/v1"),
     "ollama":     ProviderSpec(base_url="http://localhost:11434/v1", base_url_env="OLLAMA_BASE_URL",
@@ -336,6 +343,12 @@ class OpenAIClient(BaseLLMClient):
             if key not in self.kwargs:
                 continue
             if key == "reasoning_effort" and not _supports_reasoning_effort(self.model):
+                continue
+            if (
+                key == "temperature"
+                and self.provider == "kimi"
+                and self.model.lower() in _KIMI_FIXED_TEMPERATURE_MODELS
+            ):
                 continue
             if (
                 key == "temperature"

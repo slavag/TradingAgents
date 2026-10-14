@@ -92,6 +92,22 @@ _MUSE_SPARK = ModelCapabilities(
     preferred_structured_method="json_schema",
 )
 
+_KIMI_K3 = ModelCapabilities(
+    supports_tool_choice=True,
+    supports_json_mode=True,
+    supports_json_schema=True,
+    preferred_structured_method="json_schema",
+    requires_reasoning_content_roundtrip=True,
+)
+
+_KIMI_K2 = ModelCapabilities(
+    supports_tool_choice=False,
+    supports_json_mode=True,
+    supports_json_schema=False,
+    preferred_structured_method="function_calling",
+    requires_reasoning_content_roundtrip=True,
+)
+
 _DEFAULT = ModelCapabilities(
     supports_tool_choice=True,
     supports_json_mode=True,
@@ -107,6 +123,10 @@ _BY_ID: dict[str, ModelCapabilities] = {
     "deepseek-v4-flash": _DEEPSEEK_THINKING,
     "deepseek-v4-pro": _DEEPSEEK_THINKING,
     "deepseek-flash": _DEEPSEEK_THINKING,
+    "kimi-k3": _KIMI_K3,
+    "kimi-k2.6": _KIMI_K2,
+    "kimi-k2.7-code": _KIMI_K2,
+    "kimi-k2.7-code-highspeed": _KIMI_K2,
     # MiniMax — full official model lineup per
     # platform.minimax.io/docs/api-reference/text-openai-api
     "MiniMax-M2.7": _MINIMAX_THINKING,
@@ -125,6 +145,7 @@ _BY_PATTERN: list[tuple[re.Pattern[str], ModelCapabilities]] = [
     (re.compile(r"^deepseek-reasoner"), _DEEPSEEK_THINKING),
     (re.compile(r"^MiniMax-M\d"), _MINIMAX_THINKING),
     (re.compile(r"^muse-spark-"), _MUSE_SPARK),
+    (re.compile(r"^muse-wonder-"), _MUSE_SPARK),
 ]
 
 
