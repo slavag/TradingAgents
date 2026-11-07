@@ -1,3 +1,5 @@
+from parsel import Selector
+
 from cli.main import (
     build_consolidated_report,
     build_consolidated_report_html,
@@ -33,7 +35,7 @@ def test_consolidated_reports_mark_uncalibrated_confidence_and_missing_target_un
     assert "Recommendation confidence (uncalibrated)" in markdown
     assert "| PENG | Hold | - | - | - |" in markdown
     assert "Recommendation confidence (uncalibrated)" in html
-    assert "Average validated target across 0 of 1 completed runs: -" in html
+    assert "Validated targets: 0 of 1 completed runs" in html
     assert "Average Price Target" not in html
     assert "<span class='metric-label'>Price Target</span>" in html
 
@@ -125,6 +127,123 @@ def test_fallback_summary_omits_tables_chatter_and_mid_sentence_ellipsis():
     assert "Convertible refinancing risk remains the main overhang." in summary
 
 
+def test_market_fallback_prefers_the_investment_read_to_indicator_definitions():
+    summary = fallback_bullet_summary(
+        """AMD — Technical trading report
+Indicator set selected
+I selected eight indicators to cover trend and momentum.
+- **close_200_sma:** strategic long-term trend benchmark.
+- **close_50_sma:** medium-term trend context. Market read **AMD’s longer-term trend remains positive by moving-average positioning, but short-term price action has weakened notably.** The verified October 15 close was **$550.45**.
+That is above the **50-day SMA of $536.11** and below the **10-day EMA of $595.59**.
+""",
+        section_name="Market",
+    )
+
+    assert "Indicator set selected" not in summary
+    assert "I selected" not in summary
+    assert "trend remains positive" in summary
+    assert "$536.11" in summary
+
+
+def test_fundamentals_fallback_skips_cover_page_before_executive_summary():
+    summary = fallback_bullet_summary(
+        "AMD — Fundamental research report **Analysis date: 2026-10-15** "
+        "**Company: Advanced Micro Devices, Inc. (AMD)** Executive summary "
+        "AMD’s reported fundamentals show revenue and profit growth. "
+        "Revenue reached $11.54 billion, up from $10.25 billion.",
+        section_name="Fundamentals",
+    )
+
+    assert "Fundamental research report" not in summary
+    assert "Revenue reached $11.54 billion" in summary
+
+
+def test_social_fallback_removes_report_header_but_keeps_caveated_sample():
+    summary = fallback_bullet_summary(
+        "**Overall Sentiment:** **Mixed** (Score: 5.0/10) **Confidence:** Low "
+        "AMD sentiment report — 2026-10-08 to 2026-10-15 1. "
+        "Source-by-source evidence **Yahoo Finance news — no headlines returned.** "
+        "The supplied feed says no news was found. "
+        "**StockTwits — 30 most-recent messages; retail tone is divided.** "
+        "Of those, 13 were tagged bullish, 3 bearish, and 14 unlabeled.",
+        section_name="Social",
+    )
+
+    assert "Mixed" in summary and "StockTwits" in summary
+    assert "AMD sentiment report" not in summary
+    assert "Source-by-source evidence" not in summary
+
+
+def test_news_fallback_keeps_executive_read_without_stitched_headline_list():
+    summary = fallback_bullet_summary(
+        "AMD — Weekly News Brief Executive read "
+        "The news feed returned no company-specific news for AMD. "
+        "The macro backdrop remains difficult for growth stocks. "
+        "News and market tone The global feed included headlines: - One headline - Another headline. "
+        "Those headlines are only context.",
+        section_name="News",
+    )
+
+    assert "no company-specific news" in summary
+    assert "Weekly News Brief" not in summary
+    assert "One headline" not in summary
+
+
+def test_amd_consolidated_report_shows_nonactionable_scenario_without_fake_confidence():
+    market_snapshot = (
+        "- Latest trading row used: 2026-10-15\n"
+        "### Latest verified OHLCV row\n| Close | 550.45 |\n"
+        "### Verified technical indicators (latest row)\n"
+        "| close_50_sma | 536.11 |\n| close_10_ema | 595.59 |"
+    )
+    result = {
+        "ticker": "AMD", "analysis_date": "2026-10-15", "decision": "Abstain",
+        "price_target": None, "reference_price": 550.45,
+        "target_validation_status": "Not Proposed", "target_horizon": None,
+        "recommendation_confidence_score": None, "confidence_score": None,
+        "results_dir": "/tmp/amd", "run_id": "amd-run",
+        "final_state": {
+            "trade_date": "2026-10-15",
+            "final_trade_decision": (
+                "**Decision Status**: Abstain\n\n**Executive Summary**: "
+                "No actionable recommendation: a defensible target was unavailable."
+            ),
+            "market_report": "Market read. The close was below the short-term average.",
+            "sentiment_report": "Sentiment is mixed.",
+            "news_report": "No company-specific news was found.",
+            "fundamentals_report": "Revenue and profit grew.",
+            "trader_investment_plan": "**Action**: Hold",
+            "shared_evidence": [{
+                "evidence_id": "ev-market", "source": "get_verified_market_snapshot",
+                "status": "available", "coverage": "full",
+                "published_at": "2026-10-15", "as_of_date": "2026-10-15",
+                "content": market_snapshot,
+            }],
+        },
+    }
+
+    markdown = build_consolidated_report([result], "2026-10-15")
+    html = build_consolidated_report_html([result], "2026-10-15")
+
+    assert "Observed technical scenario (not a validated target): 536.11–595.59" in markdown
+    assert "Observed technical scenario" in html
+    assert "536.11–595.59" in html
+    assert "Low confidence" in html
+    assert "50-day SMA to 10-day EMA" in html
+    assert "| close_50_sma |" not in html
+    assert "width:6%" not in html
+    assert "No target outlook generated." not in html
+    rendered = Selector(text=html)
+    headers = rendered.css(".summary-table th::text").getall()
+    assert headers == [
+        "Ticker", "Decision", "Already own", "New position", "Validated target",
+        "Non-actionable scenario", "Status",
+    ]
+    assert "/tmp/amd" not in rendered.css(".summary-table").get()
+    assert "/tmp/amd" not in rendered.css(".meta-line").get()
+    assert "/tmp/amd" in rendered.css("details.audit-details").get()
+
+
 def _position_aware_result(**overrides):
     result = {
         "ticker": "BE",
@@ -211,7 +330,7 @@ def test_consolidated_reports_label_accepted_range_method_risk_and_both_anchors(
     assert "A failed breakout would invalidate the range." in html
     assert "| Low | 72.83 |" in markdown and "| High | 77.10 |" in markdown
     assert "| Low | 72.83 |" in html and "| High | 77.10 |" in html
-    assert "Average validated target across 0 of 1 completed runs" in html
+    assert "Validated targets: 0 of 1 completed runs" in html
 
 
 def test_consolidated_report_hides_rejected_range_method_risk_and_anchors():
@@ -300,7 +419,8 @@ def test_batch_summary_counts_only_validated_targets_and_explains_rejections():
     assert "| Target Status |" in markdown
     assert "No validated target" in markdown
     assert "Rejected: supporting quote not in evidence" in markdown
-    assert "Average validated target across 2 of 3 completed runs: 296.08" in html
+    assert "Validated targets: 2 of 3 completed runs" in html
+    assert "296.08" not in html
     assert "Rejected: supporting quote not in evidence" in html
     assert "82/100" in html
 

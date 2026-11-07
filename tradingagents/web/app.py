@@ -37,6 +37,7 @@ from tradingagents.settings import (
 )
 from tradingagents.web import service as web_service
 from tradingagents.web.history import report_path
+from tradingagents.web.momentum_discovery import get_momentum_watchlist
 from tradingagents.web.service import (
     create_job,
     evaluate_saved_forecasts,
@@ -370,6 +371,20 @@ def speaking_stocks(
     except Exception as exc:
         logger.exception("Speaking stocks fetch failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/discover/stocks")
+def momentum_stocks(
+    request: Request,
+    limit: int = Query(default=20, ge=15, le=20),
+    refresh: bool = False,
+):
+    """Read-only, local-only momentum screen; never starts analysis."""
+    _require_local_settings_request(request)
+    if limit not in (15, 20):
+        raise HTTPException(status_code=422, detail="Limit must be 15 or 20.")
+    result = get_momentum_watchlist(limit=limit, force=refresh)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/market-tickers")

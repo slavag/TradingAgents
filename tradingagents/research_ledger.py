@@ -279,6 +279,47 @@ def _fundamentals_facts(row: Mapping[str, Any], key: str) -> list[ResearchFact]:
     return facts
 
 
+def _market_snapshot_facts(row: Mapping[str, Any], key: str, analysis_date: str) -> list[ResearchFact]:
+    """Extract only the latest dated row and named indicators from a verified snapshot."""
+    content = str(row.get("content") or "")
+    date_match = re.search(r"(?m)^- Latest trading row used: (20\d{2}-\d{2}-\d{2})$", content)
+    if date_match is None or date_match.group(1) > analysis_date:
+        return []
+    observed_on = date_match.group(1)
+    before_history, _, history = content.partition("### Recent verified closes")
+    wanted = {
+        "close": "price", "close_10_ema": "price",
+        "close_50_sma": "price", "close_200_sma": "price",
+        "boll": "price", "boll_lb": "price",
+        "boll_ub": "price", "atr": "price",
+        "rsi": "score", "macd": "price", "macds": "price",
+    }
+    facts = []
+    for label, raw in re.findall(
+        r"(?m)^\|\s*([A-Za-z][A-Za-z0-9_]*)\s*\|\s*([\d,.]+)\s*\|$",
+        before_history,
+    ):
+        metric = label.casefold()
+        value = _decimal_cell(raw)
+        if metric in wanted and value is not None and value > 0:
+            facts.append(ResearchFact(
+                metric, value, wanted[metric], observed_on, observed_on,
+                "instant", "market", (key,),
+            ))
+    for period, raw in re.findall(
+        r"(?m)^\|\s*(20\d{2}-\d{2}-\d{2})\s*\|\s*([\d,.]+)\s*\|$",
+        history,
+    ):
+        value = _decimal_cell(raw)
+        if period >= observed_on or value is None or value <= 0:
+            continue
+        facts.append(ResearchFact(
+            "close", value, "price", period, period,
+            "instant", "market", (key,),
+        ))
+    return facts
+
+
 def _record_fields(content: str) -> dict[str, str]:
     return dict(
         line.partition(": ")[::2] for line in content.splitlines() if ": " in line
@@ -368,15 +409,21 @@ def build_research_ledger(state: Mapping[str, Any], analysis_date: str) -> Resea
         fact_period = sec_fact_fields.get("Period", "").rsplit(" to ", 1)[-1]
         if not _DATE.fullmatch(fact_period):
             fact_period = ""
+        title = (
+            "Verified market snapshot" if source == "get_verified_market_snapshot"
+            else str(row.get("title") or "")
+        )
         sources[key] = ResearchSource(
-            key, source, str(row.get("title") or ""), row.get("url"),
+            key, source, title, row.get("url"),
             row.get("published_at"), row.get("section"), "available",
             accession=row.get("accession") or sec_fact_fields.get("Accession number"),
             form=row.get("form") or sec_fact_fields.get("Form"),
             document_type=row.get("document_type"),
             report_period=fact_period or row.get("report_period"), coverage=row.get("coverage"),
         )
-        if row.get("table_rows"):
+        if source == "get_verified_market_snapshot":
+            facts.extend(_market_snapshot_facts(row, key, analysis_date))
+        elif row.get("table_rows"):
             facts.extend(_sec_table_facts(row, key))
         elif source in {"get_income_statement", "get_cashflow", "get_balance_sheet"}:
             facts.extend(_vendor_csv_facts(row, key))

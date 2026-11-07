@@ -5,12 +5,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tradingagents.agents.schemas import DecisionStatus, PortfolioDecision
 from tradingagents.agents.utils.structured import StructuredOutputFailure
 from tradingagents.investor_deck import (
     DraftPoint,
+    InvestorDeck,
     NarrativeBatch,
     NarrativeDraft,
     TrendBlock,
+    _decision_slide,
     _source_packet,
     _team_case_point,
     _valid_point,
@@ -83,6 +86,53 @@ def peng_ledger_fixture():
     )
 
 
+def amd_ledger_fixture():
+    sources = {
+        key: ResearchSource(
+            key, "analysis" if key.startswith("analysis:") else
+            "sec" if key == "ev-sec" else "data provider",
+            key, None, "2026-10-15", "Governance" if key == "ev-governance" else None,
+            "available",
+        ) for key in (
+            "ev-market", "ev-sec", "ev-vendor", "ev-valuation", "ev-governance",
+            "analysis:bull", "analysis:bear",
+        )
+    }
+
+    def fact(metric, value, period, kind="quarterly", source="ev-sec", unit="USD", basis="gaap"):
+        end = period if period.startswith("20") else (
+            "2026-06-27" if period == "Q2-26" else "2026-03-28"
+        )
+        return ResearchFact(metric, Decimal(value), unit, period, end, kind, basis, (source,))
+
+    return ResearchLedger(
+        facts=(
+            fact("net_sales", "10250000000", "Q1-26"),
+            fact("net_sales", "11540000000", "Q2-26"),
+            fact("net_sales", "11540000000", "2026-06-30", source="ev-vendor"),
+            fact("net_income", "1380000000", "Q1-26"),
+            fact("net_income", "2300000000", "Q2-26"),
+            fact("close", "550.45", "2026-10-15", "instant", "ev-market", "USD_per_share", "market"),
+            fact("close_50_sma", "536.11", "2026-10-15", "instant", "ev-market", "USD_per_share", "market"),
+            fact("close_10_ema", "595.59", "2026-10-15", "instant", "ev-market", "USD_per_share", "market"),
+            fact("rsi", "42.06", "2026-10-15", "instant", "ev-market", "score", "market"),
+            fact("pe_ttm", "149.1", "TTM", "ttm", "ev-valuation", "multiple", "market"),
+            fact("pe_forward", "35.0", "2026-10-15", "instant", "ev-valuation", "multiple", "estimate"),
+        ),
+        sources=sources,
+        excerpts={
+            "governance": (ResearchExcerpt(
+                "governance", "ev-governance",
+                "McClure was appointed to the Nominating and Corporate Governance Committee.",
+            ),),
+            "analysis": (
+                ResearchExcerpt("analysis", "analysis:bull", "Revenue and net income improved."),
+                ResearchExcerpt("analysis", "analysis:bear", "Valuation is high and momentum weakened."),
+            ),
+        },
+    )
+
+
 def test_peng_outline_covers_company_and_financial_topics_not_just_portfolio():
     outline = build_deck_outline(peng_ledger_fixture(), {"trade_date": "2026-10-09"})
     topics = {slide.topic for slide in outline}
@@ -93,6 +143,111 @@ def test_peng_outline_covers_company_and_financial_topics_not_just_portfolio():
     } <= topics
     assert "bull_bear" not in topics
     assert "missing_sources" not in topics
+
+
+def test_amd_outline_explains_market_setup_and_both_cases_without_minor_governance():
+    outline = build_deck_outline(amd_ledger_fixture(), {"trade_date": "2026-10-15"})
+    by_topic = {slide.topic: slide for slide in outline}
+
+    assert {"market", "revenue", "earnings", "valuation", "bull_case", "bear_case"} <= set(by_topic)
+    assert "leadership" not in by_topic
+    market = by_topic["market"]
+    market_labels = [metric.label for block in market.blocks if block.kind == "metrics"
+                     for metric in block.metrics]
+    assert {"Close", "50-day SMA", "10-day EMA", "RSI"} <= set(market_labels)
+    market_text = " ".join(
+        point.text for block in market.blocks if block.kind == "text" for point in block.points
+    )
+    assert "550.45" in market_text and "536.11" in market_text and "595.59" in market_text
+    assert market.takeaway != market.title
+    assert "valuation" in by_topic["bear_case"].takeaway.lower()
+    assert "cash conversion" not in by_topic["bear_case"].takeaway.lower()
+    for topic in ("bull_case", "bear_case"):
+        points = [point for block in by_topic[topic].blocks if block.kind == "text"
+                  for point in block.points]
+        assert len([point for point in points if not point.text.startswith("Watch:")]) >= 3
+        assert all(point.source_ids for point in points)
+
+
+@pytest.mark.parametrize("heading", [
+    "Bear response: AMD’s growth is real—but the stock still requires a lot to go right",
+    "Bear case for AMD: AMD’s growth is real—but the stock still requires a lot to go right",
+])
+def test_bear_team_view_uses_its_thesis_not_an_opening_concession(heading):
+    item = ResearchExcerpt(
+        "analysis", "analysis:bear",
+        f"Bear Analyst: ## {heading}\n\nBull, I agree that AMD has delivered growth. "
+        "The valuation still embeds demanding future execution.",
+    )
+
+    point = _team_case_point([item], "bear")
+
+    assert point is not None
+    assert "AMD’s growth is real" in point.text
+    assert "Bull, I agree" not in point.text
+
+
+def test_same_quarter_sec_and_vendor_revenue_does_not_draw_duplicate_trend_point():
+    base = amd_ledger_fixture()
+    vendor_prior = ResearchFact(
+        "net_sales", Decimal("10250000000"), "USD", "2026-03-31", "2026-03-31",
+        "quarterly", "gaap", ("ev-vendor",),
+    )
+    ledger = ResearchLedger(
+        tuple(fact for fact in base.facts if not (
+            fact.metric == "net_sales" and fact.period_label == "Q1-26"
+        )) + (vendor_prior,), base.sources, base.excerpts,
+    )
+    slide = next(slide for slide in build_deck_outline(
+        ledger, {"trade_date": "2026-10-15"}
+    ) if slide.topic == "revenue")
+    trend = next(block for block in slide.blocks if isinstance(block, TrendBlock))
+
+    assert len(trend.points) == 2
+    assert [point.period for point in trend.points] == ["2026-03-31", "Q2-26"]
+    assert "12.6%" in slide.takeaway
+
+
+def test_abstained_amd_decision_shows_low_confidence_scenario_not_a_validated_target():
+    state = {
+        "trade_date": "2026-10-15",
+        "portfolio_decision": PortfolioDecision(
+            status=DecisionStatus.ABSTAIN,
+            executive_summary="No actionable recommendation: a defensible target was unavailable.",
+            investment_thesis="The team view remains unvalidated.",
+            status_reason="target_unavailable",
+        ).model_dump(mode="json"),
+        "shared_evidence": [{
+            "evidence_id": "ev-market", "source": "get_verified_market_snapshot",
+            "category": "market", "status": "available", "coverage": "full",
+            "published_at": "2026-10-15", "as_of_date": "2026-10-15",
+            "content": (
+                "- Latest trading row used: 2026-10-15\n"
+                "### Latest verified OHLCV row\n| Close | 550.45 |\n"
+                "### Verified technical indicators (latest row)\n"
+                "| close_50_sma | 536.11 |\n| close_10_ema | 595.59 |\n"
+            ),
+        }],
+    }
+    ledger = build_research_ledger(state, "2026-10-15")
+    slide = _decision_slide(state, ledger)
+    assert slide is not None
+    assert slide.title == "Decision and scenario"
+    deck = InvestorDeck(
+        ticker="AMD", analysis_date="2026-10-15", headline="AMD investor research",
+        slides=[slide], sources=dict(ledger.sources),
+    )
+
+    html = render_investor_deck(deck, "20261015T160425Z")
+
+    assert "No actionable recommendation" in html
+    assert "Observed technical scenario" in html
+    assert "536.11–595.59" in html
+    assert "Low confidence" in html
+    assert "50-day SMA to 10-day EMA" in html
+    assert "| close_50_sma |" not in html
+    assert 'href="#source-1"' in html
+    assert "Validated price target" not in html
 
 
 def test_revenue_trend_is_chronological_and_growth_uses_compatible_quarters():
@@ -186,6 +341,37 @@ def test_model_fact_point_rejects_uncited_customer_name():
         quote="Customer Lektra selected the platform.",
     )
     assert not _valid_point(point, peng_ledger_fixture())
+
+
+def test_one_invalid_optional_point_does_not_discard_other_valid_slide_context():
+    state = _supported_business_state()
+    topics = [slide.topic for slide in build_deck_outline(
+        build_research_ledger(state, "2026-10-09"), state,
+    )]
+    assert len(topics) >= 2
+    rows = [NarrativeDraft(
+        topic=topic, takeaway="The evidence is mixed.",
+        context="Operating results warrant attention.",
+        counterpoint="Further confirmation matters.",
+        source_ids=["ev-business"],
+        points=[DraftPoint(
+            text="An invented point.", source_id="ev-business",
+            quote="Penguin supplies advanced computing systems.",
+        )] if index == 0 else [],
+    ) for index, topic in enumerate(topics)]
+    llm = MagicMock()
+    llm.with_structured_output.return_value.invoke.return_value = NarrativeBatch(slides=rows)
+
+    deck = build_investor_deck(state, "PENG", "2026-10-09", llm)
+
+    assert deck is not None and deck.synthesis_status == "source_only"
+    assert deck.synthesis_reason == "unsupported_factual_point"
+    by_topic = {slide.topic: slide for slide in deck.slides}
+    assert not by_topic[topics[0]].narrative
+    assert by_topic[topics[1]].narrative == (
+        "Operating results warrant attention. Further confirmation matters."
+    )
+    assert "An invented point." not in render_investor_deck(deck, "20261009T154737Z")
 
 
 def test_model_prose_cannot_insert_an_unverified_number():

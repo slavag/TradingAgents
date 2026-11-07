@@ -104,6 +104,37 @@ def test_team_reports_are_interpretation_sources_not_facts():
     }
 
 
+def test_verified_market_snapshot_supplies_dated_price_facts_without_raw_tool_title():
+    state = {"shared_evidence": [{
+        "evidence_id": "ev-amd-market", "source": "get_verified_market_snapshot",
+        "category": "market", "title": "Executed tool response: get_verified_market_snapshot",
+        "content": (
+            "- Latest trading row used: 2026-10-15\n"
+            "### Latest verified OHLCV row\n| Close | 550.45 |\n"
+            "### Verified technical indicators (latest row)\n"
+            "| close_50_sma | 536.11 |\n| close_10_ema | 595.59 |\n"
+            "| rsi | 42.06 |\n| atr | 26.65 |\n"
+            "### Recent verified closes\n| 2026-10-14 | 570.82 |"
+        ),
+        "coverage": "full", "status": "available", "published_at": "2026-10-15",
+        "as_of_date": "2026-10-15",
+    }]}
+
+    ledger = build_research_ledger(state, "2026-10-15")
+
+    assert ledger.sources["ev-amd-market"].title == "Verified market snapshot"
+    assert ledger.facts_for("close")[0].value == Decimal("550.45")
+    assert ledger.facts_for("close")[0].unit == "price"
+    assert [(fact.period_end, fact.value) for fact in ledger.facts_for("close")] == [
+        ("2026-10-15", Decimal("550.45")),
+        ("2026-10-14", Decimal("570.82")),
+    ]
+    assert ledger.facts_for("close_50_sma")[0].value == Decimal("536.11")
+    assert ledger.facts_for("close_10_ema")[0].value == Decimal("595.59")
+    assert ledger.facts_for("rsi")[0].unit == "score"
+    assert all(fact.period_end <= "2026-10-15" for fact in ledger.facts)
+
+
 def test_vendor_dollar_unit_is_not_scaled_as_thousands():
     ledger = build_research_ledger({"shared_evidence": [vendor_row()]}, "2026-10-09")
     assert ledger.latest("net_sales").value == Decimal("478713000")

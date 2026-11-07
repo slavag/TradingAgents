@@ -15,6 +15,7 @@ from tradingagents.agents.schemas import (
     PortfolioDecision,
     PortfolioDecisionDraft,
     PortfolioTargetRepair,
+    TargetValidationReason,
     TargetValidationStatus,
     render_pm_decision,
 )
@@ -62,7 +63,8 @@ def _manager_result(risk_debate_state: dict, decision: PortfolioDecision) -> dic
     }
 
 
-def _target_unavailable() -> PortfolioDecision:
+def _target_unavailable(reason: str | None = None) -> PortfolioDecision:
+    safe_reason = reason if reason in {item.value for item in TargetValidationReason} else None
     return PortfolioDecision(
         status=DecisionStatus.ABSTAIN,
         rating=None,
@@ -75,6 +77,11 @@ def _target_unavailable() -> PortfolioDecision:
             "requirement was not met."
         ),
         status_reason="target_unavailable",
+        target_validation_status=(
+            TargetValidationStatus.REJECTED if safe_reason
+            else TargetValidationStatus.NOT_PROPOSED
+        ),
+        target_validation_reason=safe_reason,
     )
 
 
@@ -86,6 +93,17 @@ def _target_ready(decision: PortfolioDecision) -> bool:
         and isinstance(decision.target_risks, str)
         and bool(decision.target_risks.strip())
     )
+
+
+def _target_failure_reason(decision: PortfolioDecision) -> str | None:
+    if decision.target_validation_reason:
+        return decision.target_validation_reason
+    if decision.target_validation_status is TargetValidationStatus.ACCEPTED:
+        if not decision.target_method or not decision.target_method.strip():
+            return TargetValidationReason.TARGET_METHOD_MISSING.value
+        if not decision.target_risks or not decision.target_risks.strip():
+            return TargetValidationReason.TARGET_RISKS_MISSING.value
+    return None
 
 
 def create_portfolio_manager(llm):
@@ -194,7 +212,7 @@ Be decisive and ground every conclusion in specific evidence from the analysts.
             )
             if draft.status is DecisionStatus.ACTIONABLE and not _target_ready(decision):
                 if not target_candidates:
-                    decision = _target_unavailable()
+                    decision = _target_unavailable(_target_failure_reason(decision))
                 else:
                     repair_llm = bind_structured(
                         llm, PortfolioTargetRepair, "Target Repair",
@@ -225,9 +243,9 @@ Return a complete point target or range with horizon, exact supporting row(s), m
                             eligible_quotes=target_candidates,
                         )
                     except (StructuredOutputFailure, ValidationError, TypeError, ValueError):
-                        decision = _target_unavailable()
+                        decision = _target_unavailable(_target_failure_reason(decision))
                     if decision.status is DecisionStatus.ACTIONABLE and not _target_ready(decision):
-                        decision = _target_unavailable()
+                        decision = _target_unavailable(_target_failure_reason(decision))
         except StructuredOutputFailure as exc:
             decision = PortfolioDecision.unavailable(exc.code)
         except (ValidationError, TypeError, ValueError):

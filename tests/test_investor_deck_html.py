@@ -81,6 +81,26 @@ def test_deck_renders_dated_sources_tables_and_trends_without_external_assets():
     assert "<script" not in html and "<img" not in html
 
 
+def test_verified_price_trend_uses_price_scale_not_millions():
+    deck = peng_deck_fixture()
+    deck.slides = [DeckSlide(
+        topic="market", title="Price and trend setup", takeaway="Price weakened",
+        source_ids=["ev-q4"], blocks=[TrendBlock(points=[
+            DeckMetric(label="Close", value="649.42", raw_value=Decimal("649.42"),
+                       period="2026-10-06", basis="MARKET", source_ids=["ev-q4"]),
+            DeckMetric(label="Close", value="550.45", raw_value=Decimal("550.45"),
+                       period="2026-10-15", basis="MARKET", source_ids=["ev-q4"]),
+        ])],
+    )]
+
+    html = render_investor_deck(deck, "20261015T160425Z")
+    figure = Selector(text=html).css("figure.trend")
+
+    assert "Verified closing prices · quote currency not recorded" in figure.get()
+    assert figure.css(".trend-scale span::text").getall() == ["661.3", "538.6"]
+    assert "USD millions" not in figure.get()
+
+
 def test_source_only_deck_keeps_research_without_generator_banner():
     deck = peng_deck_fixture()
     deck.synthesis_status = "source_only"

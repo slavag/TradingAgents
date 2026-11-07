@@ -238,8 +238,8 @@ Web app highlights:
 - Report actions:
   - Open HTML report
   - Download markdown
-- Bottom **market chatter ticker tape**
-- Click any ticker in the tape to open a **floating detail modal** and optionally add it into the analysis ticker list
+- **Discover** momentum watchlist with dated, verified US-stock signals and new-to-you names first
+- Add a Discover ticker to the analysis form without starting a run, or open its company detail modal or saved research
 
 Web server logging:
 - Default log file:
@@ -252,23 +252,13 @@ Web server logging:
 python -m cli.main serve-web --log-level ERROR --log-file /tmp/tradingagents-web.log
 ```
 
-### Chatter Tape
+### Discover momentum watchlist
 
-The bottom chatter tape is intentionally optimized for speed:
-- It ranks symbols from the **ApeWisdom ∩ StockTwits** universe, merged with Stock Traders Daily latest analysis releases
-- It shows fast market data in the tape itself:
-  - ticker
-  - score
-  - price
-  - 5d return
-  - trend score
-- Richer company information is loaded **on demand** in the ticker modal to avoid slowing down the tape refresh
+Discover is a **research shortlist, not a buy/sell recommendation**. It shows up to 20 US-listed equities (or 15 with the count control) nominated by a market-movers feed or an investor-attention feed. Alpha Vantage, optional Financial Modeling Prep, ApeWisdom, and StockTwits supply candidates; multiple feeds can strengthen the rank, but one feed is enough to nominate a name. A bounded, balanced selection preserves both mover-only and attention-only nominations before market-data checks, and only price-eligible names spend the identity-lookup budget. When fewer than 15 qualify, Discover shows counts for each screening stage rather than filling the list with weaker names. Missing or inaccessible feeds produce a partial-data notice rather than filler stocks. The older `/api/speaking-stocks` endpoint remains available for compatibility, but does not drive Discover.
 
-The web integration also bridges:
-- `ALPHA_VANTAGE_API_KEY`
-- `ALPHAVANTAGE_API_KEY`
+A candidate must have a verified active US equity identity in USD, at least 50 completed daily sessions, an unadjusted close of at least $5, average 20-session unadjusted dollar volume of at least $10 million, a positive split-adjusted five-session return, and a quote no more than two NYSE sessions old. Its card shows the quote date, 1/5/20-session moves, relative volume, average dollar volume, moving-average checks, source labels, and any one-day spike risk. The score ranks measured momentum, trend, volume, and cross-feed corroboration with a spike penalty; it is neither a probability nor an expected return. Stocks not in **My Research** appear first; an analyzed stock links to its saved report.
 
-so the chatter import can use either name from `.env`.
+Market evidence is cached for 30 minutes. **Refresh watchlist** bypasses the cache, with a 60-second cooldown to limit provider traffic. If a refresh fails, the last good snapshot is labeled stale with its original retrieval and quote dates; if none exists, the watchlist is unavailable. Changing 15/20 only changes how many cached candidates are shown. **Tiles / Rows** changes the watchlist layout without fetching again; the choice lasts until the page reloads. Opening Discover or adding a ticker never calls an LLM or starts an analysis job. Analysis begins only when you launch it from the form.
 
 ### Markets and tickers
 

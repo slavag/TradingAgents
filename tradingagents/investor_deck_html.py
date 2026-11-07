@@ -149,15 +149,23 @@ def _render_trend(block: TrendBlock, numbers: dict[str, int]) -> str:
     if len(values) < 2:
         return f'<ol class="trend-values">{labels}</ol>'
     low, high = _trend_domain(values)
-    scale = Decimal("1000000000") if max(map(abs, values)) >= 1_000_000_000 else Decimal("1000000")
-    unit = "USD billions" if scale == 1_000_000_000 else "USD millions"
+    market_closes = all(item.basis == "MARKET" and item.label == "Close" for item in usable)
+    scale = (
+        Decimal(1) if market_closes else
+        Decimal("1000000000") if max(map(abs, values)) >= 1_000_000_000
+        else Decimal("1000000")
+    )
+    unit = (
+        "Verified closing prices · quote currency not recorded" if market_closes else
+        "Reported values over time · USD billions" if scale == 1_000_000_000
+        else "Reported values over time · USD millions"
+    )
     zero_label = ""
     if min(values) < 0 < max(values):
         position = (Decimal(18) + high / (high - low) * Decimal(184)) / Decimal(220) * 100
         zero_label = f'<span class="zero-label" style="top:{position:.1f}%">0</span>'
     return (
-        '<figure class="trend"><figcaption>Reported values over time · '
-        f'{unit}</figcaption><div class="trend-plot">'
+        f'<figure class="trend"><figcaption>{unit}</figcaption><div class="trend-plot">'
         f'<div class="trend-scale" aria-hidden="true"><span>{high / scale:.1f}</span>'
         f'{zero_label}<span>{low / scale:.1f}</span></div>'
         f'{_trend_svg(values, [item.period for item in usable], low, high, 720, "trend-desktop")}'
@@ -187,9 +195,22 @@ def _render_decision(block: DecisionBlock, numbers: dict[str, int]) -> str:
 
     if block.rating is None:
         reason = (block.status_reason or "").replace("_", " ")
+        scenario = ""
+        if block.scenario_low is not None and block.scenario_high is not None:
+            scenario = (
+                '<div class="decision-card decision-target decision-wide">'
+                '<h3>Observed technical scenario — not a price target</h3>'
+                f'<p class="decision-value">{block.scenario_low:.2f}–{block.scenario_high:.2f}</p>'
+                f'{line("Confidence:", (block.scenario_confidence or "Low") + " confidence")}'
+                f'{line("Verified close:", f"{block.scenario_reference:.2f}" if block.scenario_reference is not None else None)}'
+                f'{line("Observed anchors:", block.scenario_method)}'
+                '<p>These moving levels can change and are not a forecast, fair-value estimate, '
+                'or instruction to trade. The team did not validate a target or actionable rating.</p>'
+                f'{_references(block.source_ids, numbers)}</div>'
+            )
         return (
             '<div class="decision-card"><h3>No actionable recommendation</h3>'
-            f'{line("Reason:", reason)}</div>'
+            f'{line("Reason:", reason)}</div>{scenario}'
         )
 
     confidence = (

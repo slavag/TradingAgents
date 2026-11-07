@@ -16,6 +16,7 @@ from tradingagents.agents.schemas import (
     ThesisRating,
     render_pm_decision,
 )
+from tradingagents.agents.utils import decision_integrity
 from tradingagents.agents.utils.decision_integrity import (
     build_decision_evidence,
     extract_verified_reference_price,
@@ -322,6 +323,76 @@ def test_verified_target_candidates_exclude_postdate_snapshot():
     assert verified_target_candidates(state) == [
         "| Low | 72.83 |", "| Close | 75.74 |",
     ]
+
+
+def test_bollinger_candidate_is_valid_when_quoted_verbatim():
+    row = "| boll_lb | 559.22 |"
+    draft = actionable_draft(
+        rating=PortfolioRating.HOLD,
+        price_target=559.22,
+        supporting_quote=row,
+        time_horizon="Near-term technical scenario",
+        confidence_score=18,
+        target_summary="The observed band is a possible rebound reference, not fair value.",
+        target_method="Technical scenario",
+        target_risks="The band can move and price can keep falling.",
+    )
+
+    result = finalize_portfolio_decision(
+        draft, f"Verified close: 550.45.\n{row}",
+        reference_price=550.45, eligible_quotes=[row],
+    )
+
+    assert result.target_validation_status is TargetValidationStatus.ACCEPTED
+
+
+def test_observed_scenario_brackets_amd_close_without_becoming_a_target():
+    snapshot = """### Latest verified OHLCV row
+| Field | Value |
+|---|---:|
+| Close | 550.45 |
+### Verified technical indicators (latest row)
+| Indicator | Value |
+|---|---:|
+| close_50_sma | 536.11 |
+| close_10_ema | 595.59 |
+| boll_lb | 559.22 |
+"""
+    state = {
+        "trade_date": "2026-10-15",
+        "shared_evidence": [{
+            "evidence_id": "ev-amd-market", "source": "get_verified_market_snapshot",
+            "category": "market", "status": "available", "coverage": "full",
+            "as_of_date": "2026-10-15", "published_at": "2026-10-15",
+            "content": snapshot,
+        }],
+    }
+
+    scenario = decision_integrity.observed_technical_scenario(state)
+
+    assert scenario is not None
+    assert (scenario.low, scenario.high) == (536.11, 595.59)
+    assert scenario.source_id == "ev-amd-market"
+    assert scenario.method == "50-day SMA to 10-day EMA"
+    assert scenario.confidence == "Low"
+
+
+def test_observed_scenario_rejects_postdate_or_unbracketed_levels():
+    state = {
+        "trade_date": "2026-10-15",
+        "shared_evidence": [{
+            "evidence_id": "ev-future", "source": "get_verified_market_snapshot",
+            "status": "available", "coverage": "full",
+            "as_of_date": "2026-10-15", "published_at": "2026-10-16",
+            "content": "| Close | 550.45 |\n| close_50_sma | 536.11 |\n| close_10_ema | 595.59 |",
+        }],
+    }
+    assert decision_integrity.observed_technical_scenario(state) is None
+    state["shared_evidence"][0]["published_at"] = "2026-10-15"
+    state["shared_evidence"][0]["content"] = (
+        "| Close | 550.45 |\n| close_50_sma | 536.11 |\n| close_10_ema | 530.00 |"
+    )
+    assert decision_integrity.observed_technical_scenario(state) is None
 
 
 def test_equal_range_bounds_keep_the_corrected_high_quote():

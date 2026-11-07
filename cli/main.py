@@ -63,6 +63,7 @@ from tradingagents.agents.utils.decision_integrity import (
     build_decision_evidence,
     extract_verified_reference_price,
     finalize_portfolio_decision,
+    observed_technical_scenario,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.analyst_execution import (
@@ -1562,11 +1563,41 @@ def render_report_body_html(content, fallback: str) -> str:
     return "".join(paragraphs)
 
 
-def fallback_bullet_summary(content, max_bullets: int = 5) -> str:
+def fallback_bullet_summary(content, max_bullets: int = 5, section_name: str = "") -> str:
     """Build a concise markdown bullet summary when the LLM is unavailable."""
     cleaned = sanitize_report_language(content)
     if not cleaned:
         return "- No report generated."
+
+    if section_name == "Portfolio Management Decision":
+        fields = re.findall(r"(?m)^\*\*([^*]+)\*\*:\s*(.+)$", cleaned)
+        useful = [f"{label}: {value}" for label, value in fields
+                  if label in {"Executive Summary", "Investment Thesis", "Decision Reason"}]
+        if useful:
+            return "\n".join(f"- {line}" for line in useful[:max_bullets])
+    lead_markers = {
+        "Market": r"\bMarket read\b",
+        "News": r"\bExecutive read\b",
+        "Fundamentals": r"\bExecutive summary\b",
+    }
+    if section_name in lead_markers:
+        marker = re.search(lead_markers[section_name], cleaned[:5000], re.I)
+        if marker:
+            cleaned = cleaned[marker.end():].strip()
+    if section_name == "News":
+        detail_heading = re.search(r"\bNews and market tone\b", cleaned, re.I)
+        if detail_heading:
+            cleaned = cleaned[:detail_heading.start()].strip()
+    if section_name == "Social":
+        source_heading = re.search(r"\bSource-by-source evidence\b", cleaned, re.I)
+        sentiment = re.search(r"\*\*Overall Sentiment:\*\*\s*\*\*([^*]+)\*\*", cleaned)
+        confidence = re.search(r"\*\*Confidence:\*\*\s*(Low|Medium|High)\b", cleaned, re.I)
+        if source_heading and sentiment and confidence:
+            cleaned = (
+                f"Overall sentiment: {sentiment.group(1).strip()}; "
+                f"confidence: {confidence.group(1)}.\n"
+                + cleaned[source_heading.end():].strip()
+            )
 
     sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9(])", cleaned.replace("\n", " "))
     bullets = []
@@ -1588,7 +1619,7 @@ def summarize_consolidated_section(llm, ticker: str, section_name: str, content)
         return "- No report generated."
 
     if llm is None:
-        return fallback_bullet_summary(cleaned)
+        return fallback_bullet_summary(cleaned, section_name=section_name)
 
     messages = [
         (
@@ -1624,7 +1655,7 @@ Return only markdown bullet points.""",
     except Exception:
         pass
 
-    return fallback_bullet_summary(cleaned)
+    return fallback_bullet_summary(cleaned, section_name=section_name)
 
 
 def get_consolidated_section_summaries(result, summary_llm=None) -> dict[str, str]:
@@ -1673,6 +1704,15 @@ RUN_COMPARISON_LABELS = {
 }
 
 
+def nonactionable_scenario_for_result(result):
+    """Keep observed technical brackets distinct from PM-validated targets."""
+    if (result.get("error") or str(result.get("decision") or "").casefold() != "abstain"
+            or result.get("target_validation_status") == "Accepted"):
+        return None
+    state = result.get("final_state")
+    return observed_technical_scenario(state) if isinstance(state, dict) else None
+
+
 def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=None) -> str:
     """Build a consolidated markdown report for a batch of tickers."""
     lines = [
@@ -1690,8 +1730,8 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
         "",
         "## Batch Summary",
         "",
-        "| Ticker | Decision | Thesis | Existing Position | New Position | Price Target | Target Status | Target Gap | Recommendation confidence (uncalibrated) | Status | Default Results |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Ticker | Decision | Thesis | Existing Position | New Position | Price Target | Non-actionable scenario | Target Status | Target Gap | Recommendation confidence (uncalibrated) | Status | Default Results |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ])
 
     for result in analysis_results:
@@ -1701,6 +1741,8 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
         existing_action = result.get("existing_position_action") or "-"
         new_action = result.get("new_position_action") or "-"
         price_target = displayed_target(result)
+        scenario = nonactionable_scenario_for_result(result)
+        scenario_value = f"{scenario.low:.2f}–{scenario.high:.2f}" if scenario else "-"
         target_status = target_status_text(result)
         target_gap = format_target_gap_percent(
             result.get("reference_price"),
@@ -1713,10 +1755,11 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
         )
         default_results = result.get("results_dir", "-")
         lines.append(
-            f"| {result['ticker']} | {decision} | {thesis} | {existing_action} | {new_action} | {price_target} | {target_status} | {target_gap} | {confidence} | {status} | `{default_results}` |"
+            f"| {result['ticker']} | {decision} | {thesis} | {existing_action} | {new_action} | {price_target} | {scenario_value} | {target_status} | {target_gap} | {confidence} | {status} | `{default_results}` |"
         )
 
     for result in analysis_results:
+        scenario = nonactionable_scenario_for_result(result)
         lines.extend(
             [
                 "",
@@ -1730,6 +1773,11 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
                 f"Run comparison: {RUN_COMPARISON_LABELS.get(result.get('comparison_status'), '-')}",
                 f"Price Target: {displayed_target(result)}",
                 f"Target Status: {target_status_text(result)}",
+                *([f"Observed technical scenario (not a validated target): {scenario.low:.2f}–{scenario.high:.2f}",
+                   f"Scenario confidence: {scenario.confidence} (heuristic, not a probability)",
+                   f"Observed anchors: {scenario.method}",
+                   f"Lower source row: {scenario.low_quote}",
+                   f"Upper source row: {scenario.high_quote}"] if scenario else []),
                 f"Reference Price: {format_price_target(result.get('reference_price'))}",
                 f"Target Gap: {format_target_gap_percent(result.get('reference_price'), result.get('price_target'))}",
                 f"Recommendation confidence (uncalibrated): {result.get('recommendation_confidence_score', '-')}/100"
@@ -1792,7 +1840,9 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
                 ),
                 "",
                 "### Target Outlook",
-                sanitize_report_language(target_outlook_text(result)),
+                ("No Portfolio Manager target was validated. The observed technical scenario above "
+                 "is a monitoring bracket, not a forecast or trading instruction."
+                 if scenario else sanitize_report_language(target_outlook_text(result))),
                 *(
                     [
                         "",
@@ -1843,7 +1893,6 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             == TargetValidationStatus.ACCEPTED.value.casefold()
         )
     ]
-    avg_target = round(sum(targets) / len(targets), 2) if targets else None
     live_snapshot_notice = (
         f"<div class='snapshot-warning'><strong>Data snapshot</strong><span>{escape(LIVE_SNAPSHOT_WARNING)}</span></div>"
         if any(
@@ -1936,35 +1985,23 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     for result in analysis_results:
         status = "Failed" if result.get("error") else "Completed"
         decision = escape(result.get("decision") or "-")
-        thesis = escape(result.get("thesis") or "-")
         existing_action = escape(result.get("existing_position_action") or "-")
         new_action = escape(result.get("new_position_action") or "-")
-        price_target = escape(displayed_target(result))
+        price_target = displayed_target(result)
+        if price_target == "-":
+            price_target = "None validated"
+        scenario = nonactionable_scenario_for_result(result)
+        scenario_value = f"{scenario.low:.2f}–{scenario.high:.2f}" if scenario else "-"
         target_status = escape(target_status_text(result))
-        target_gap = escape(
-            format_target_gap_percent(
-                result.get("reference_price"),
-                result.get("price_target"),
-            )
-        )
-        confidence = (
-            f"{result['recommendation_confidence_score']}/100"
-            if result.get("recommendation_confidence_score") is not None
-            else "-"
-        )
         rows.append(
             "<tr>"
             f"<td>{escape(result['ticker'])}</td>"
             f"<td>{decision}</td>"
-            f"<td>{thesis}</td>"
             f"<td>{existing_action}</td>"
             f"<td>{new_action}</td>"
-            f"<td>{price_target}</td>"
-            f"<td>{target_status}</td>"
-            f"<td>{target_gap}</td>"
-            f"<td>{escape(confidence)}</td>"
+            f"<td>{escape(price_target)}<small>{target_status}</small></td>"
+            f"<td>{escape(scenario_value)}</td>"
             f"<td>{escape(status)}</td>"
-            f"<td><code>{escape(result.get('results_dir', '-'))}</code></td>"
             "</tr>"
         )
 
@@ -1972,7 +2009,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     for result in analysis_results:
         kind = decision_kind(result.get("decision"))
         confidence_value = result.get("recommendation_confidence_score")
-        confidence_width = max(6, min(100, confidence_value)) if confidence_value is not None else 6
+        confidence_width = max(0, min(100, confidence_value)) if confidence_value is not None else None
 
         if result.get("error"):
             sections.append(
@@ -1991,6 +2028,26 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             continue
 
         final_state = result["final_state"]
+        scenario = nonactionable_scenario_for_result(result)
+        scenario_html = (
+            "<div class='scenario-card'><h3>Observed technical scenario — not a validated target</h3>"
+            f"<strong>{scenario.low:.2f}–{scenario.high:.2f}</strong>"
+            f"<p>Low confidence · observed {escape(scenario.method)} bracket around "
+            f"the {scenario.reference_price:.2f} close.</p>"
+            f"<p>Source: dated verified market snapshot ({escape(result['analysis_date'])}).</p>"
+            "<p>These levels move with the market. This is not a forecast, fair-value "
+            "estimate, or trading instruction; the Portfolio Manager did not validate "
+            "an actionable target.</p></div>"
+            if scenario else ""
+        )
+        confidence_bar_html = (
+            f'<div class="confidence-bar"><span style="width:{confidence_width}%"></span></div>'
+            if confidence_width is not None else ""
+        )
+        outlook_copy = (
+            "No Portfolio Manager target was validated. The observed scenario above is for monitoring only."
+            if scenario else sanitize_report_language(target_outlook_text(result))
+        )
         section_summaries = get_consolidated_section_summaries(result, summary_llm=summary_llm)
         supporting_evidence = target_evidence_text(result)
         target_evidence_html = (
@@ -2063,7 +2120,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             f"<div class='stock-title'><span class='decision-glyph {kind}'>{decision_icon(kind)}</span><div><p class='stock-kicker'>Sequential Stock Brief</p><h2>{escape(result['ticker'])}</h2></div></div>"
             f"<div class='decision-pill {kind}'>{escape(result.get('decision') or 'Unknown')}</div>"
             "</div>"
-            f"<p class='meta-line'>Analysis Date: {escape(result['analysis_date'])} · Run: {escape(result.get('run_id') or '-')} · Comparison: {escape(RUN_COMPARISON_LABELS.get(result.get('comparison_status'), '-'))} · Horizon: {escape(result.get('target_horizon') or '-')} · Results: <code>{escape(result['results_dir'])}</code></p>"
+            f"<p class='meta-line'>Analysis Date: {escape(result['analysis_date'])} · Run: {escape(result.get('run_id') or '-')} · Comparison: {escape(RUN_COMPARISON_LABELS.get(result.get('comparison_status'), '-'))} · Horizon: {escape(result.get('target_horizon') or '-')}</p>"
             f"{position_compass}"
             "<div class='metric-ribbon'>"
             f"<article class='metric-card'><span class='metric-icon'>{metric_icon('target')}</span><div><span class='metric-label'>Price Target</span><strong>{escape(displayed_target(result))}</strong><small>{escape(target_detail)}</small></div></article>"
@@ -2071,9 +2128,10 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             f"<article class='metric-card'><span class='metric-icon'>{metric_icon('delta')}</span><div><span class='metric-label'>Target Gap</span><strong>{escape(delta_label)}</strong></div></article>"
             f"<article class='metric-card'><span class='metric-icon'>{metric_icon('confidence')}</span><div><span class='metric-label'>Recommendation confidence (uncalibrated)</span><strong>{escape(str(confidence_value) + '/100' if confidence_value is not None else '-')}</strong></div></article>"
             "</div>"
+            f"{scenario_html}"
             "<div class='confidence-strip'>"
-            f"<div class='confidence-bar'><span style='width:{confidence_width}%'></span></div>"
-            f"<div class='confidence-copy'>{escape(sanitize_report_language(target_outlook_text(result)))}</div>"
+            f"{confidence_bar_html}"
+            f"<div class='confidence-copy'>{escape(outlook_copy)}</div>"
             f"{target_evidence_html}"
             f"{target_context_html}"
             "</div>"
@@ -2091,6 +2149,8 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             "<h3>Trader Plan</h3>"
             f"<div class='report-body'>{render_report_body_html(final_state.get('trader_investment_plan'), 'No trader plan generated.')}</div>"
             "</div>"
+            "<details class='audit-details'><summary>Audit details</summary>"
+            f"<p>Saved report directory: <code>{escape(result['results_dir'])}</code></p></details>"
             "</section>"
         )
 
@@ -2132,10 +2192,12 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     }}
     .shell {{
       max-width: 1200px;
+      min-width: 0;
       margin: 0 auto;
       display: grid;
       gap: 24px;
     }}
+    .shell > * {{ min-width: 0; }}
     .hero {{
       background: linear-gradient(135deg, var(--hero-start), var(--hero-end));
       color: white;
@@ -2145,15 +2207,14 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     }}
     .hero h1 {{
       margin-bottom: 8px;
-      font-size: 44px;
-      line-height: 0.96;
-      max-width: 12ch;
+      font-size: clamp(2.3rem, 4vw, 2.75rem);
+      line-height: 1.05;
+      max-width: 28ch;
     }}
     .hero-grid {{
       display: grid;
-      grid-template-columns: 1.4fr 1fr;
+      grid-template-columns: minmax(0, 1fr);
       gap: 22px;
-      align-items: end;
     }}
     .hero p {{
       margin: 0;
@@ -2190,7 +2251,14 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     }}
     .summary-table {{
       padding: 24px;
+      min-width: 0;
     }}
+    .table-scroll {{ max-width: 100%; min-width: 0; overflow-x: auto; }}
+    .table-scroll table {{ min-width: 680px; }}
+    .summary-table td small {{ display: block; color: var(--muted); }}
+    .audit-details {{ margin-top: 14px; color: var(--muted); }}
+    .audit-details summary {{ cursor: pointer; font-weight: 700; }}
+    .audit-details code {{ overflow-wrap: anywhere; }}
     .snapshot-warning {{
       display: flex;
       gap: 10px;
@@ -2415,6 +2483,17 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
       font-size: 11px;
       line-height: 1.25;
     }}
+    .scenario-card {{
+      margin: 0 0 18px;
+      padding: 18px 20px;
+      border: 1px solid rgba(182, 138, 20, 0.35);
+      border-radius: 18px;
+      background: rgba(182, 138, 20, 0.08);
+    }}
+    .scenario-card h3 {{ margin: 0 0 8px; font-size: 19px; }}
+    .scenario-card strong {{ display: block; font-size: 26px; }}
+    .scenario-card p {{ margin: 8px 0 0; color: var(--slate); }}
+    .scenario-card code {{ overflow-wrap: anywhere; }}
     .confidence-strip {{
       display: grid;
       gap: 10px;
@@ -2530,6 +2609,12 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
       }}
       .condition-row {{ grid-template-columns: 1fr; gap: 4px; }}
     }}
+    @media (max-width: 650px) {{
+      .hero {{ padding: 22px; }}
+      .hero h1 {{ font-size: 2rem; overflow-wrap: anywhere; }}
+      .kpi-strip {{ grid-template-columns: 1fr; }}
+      .summary-table, .stock {{ padding: 18px; }}
+    }}
   </style>
 </head>
 <body>
@@ -2560,27 +2645,23 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     <section class="summary-table">
       <h2>Batch Summary</h2>
       {live_snapshot_notice}
-      <p style="margin:0 0 18px;color:var(--muted);">Average validated target across {len(targets)} of {len(completed_results)} completed runs: {escape(format_price_target(avg_target)) if avg_target is not None else '-'}</p>
-      <table>
+      <p style="margin:0 0 18px;color:var(--muted);">Validated targets: {len(targets)} of {len(completed_results)} completed runs</p>
+      <div class="table-scroll"><table>
         <thead>
           <tr>
             <th>Ticker</th>
             <th>Decision</th>
-            <th>Thesis</th>
-            <th>Existing Position</th>
-            <th>New Position</th>
-            <th>Price Target</th>
-            <th>Target Status</th>
-            <th>Target Gap</th>
-            <th>Recommendation confidence (uncalibrated)</th>
+            <th>Already own</th>
+            <th>New position</th>
+            <th>Validated target</th>
+            <th>Non-actionable scenario</th>
             <th>Status</th>
-            <th>Default Results</th>
           </tr>
         </thead>
         <tbody>
           {''.join(rows)}
         </tbody>
-      </table>
+      </table></div>
     </section>
     <section class="stack">
       {''.join(sections)}

@@ -323,6 +323,8 @@ def test_pm_abstains_after_one_invalid_target_repair():
     assert decision["existing_position_action"] is None
     assert decision["new_position_action"] is None
     assert decision["status_reason"] == "target_unavailable"
+    assert decision["target_validation_status"] == "Rejected"
+    assert decision["target_validation_reason"] == "supporting_quote_not_eligible"
     assert first_chain.invoke.call_count == 1
     assert repair_chain.invoke.call_count == 1
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from tradingagents.agents.schemas import (
@@ -28,7 +29,7 @@ _EVIDENCE_FIELDS = (
 _PRICE_LABEL = (
     r"(?:price(?:\s+target)?|target(?:\s+price)?|reference\s+price|"
     r"close|open|high|low|support|resistance|sma|ema|vwma|"
-    r"bollinger(?:\s+(?:middle|upper|lower))?(?:\s+band)?|"
+    r"boll(?:_(?:lb|ub))?|bollinger(?:\s+(?:middle|upper|lower))?(?:\s+band)?|"
     r"fair\s+value|valuation|price\s+level|level)"
 )
 _CURRENCY_MARKER = r"(?:[$€£¥]|\b(?:USD|EUR|GBP|JPY|CAD|AUD|CHF|CNY|HKD)\b)"
@@ -106,6 +107,64 @@ def verified_target_candidates(state: Mapping[str, Any], limit: int = 12) -> lis
                 if len(candidates) >= limit:
                     return candidates
     return candidates
+
+
+@dataclass(frozen=True)
+class ObservedTechnicalScenario:
+    """A non-actionable bracket of observed levels, never a forecast target."""
+
+    low: float
+    high: float
+    reference_price: float
+    low_quote: str
+    high_quote: str
+    method: str
+    source_id: str
+    confidence: str = "Low"
+
+
+def observed_technical_scenario(state: Mapping[str, Any]) -> ObservedTechnicalScenario | None:
+    """Bracket the verified close with trend levels from one admitted snapshot."""
+    from tradingagents.agents.utils.evidence import evidence_is_admissible
+
+    run_date = str(state.get("trade_date") or state.get("as_of_date") or "")
+    if not run_date:
+        return None
+    for record in reversed(state.get("shared_evidence") or []):
+        if (not isinstance(record, Mapping)
+                or record.get("source") != "get_verified_market_snapshot"
+                or not evidence_is_admissible(record, run_date)):
+            continue
+        source_id = record.get("evidence_id")
+        if not isinstance(source_id, str) or not source_id:
+            continue
+        content = str(record.get("content") or "").split("### Recent verified closes", 1)[0]
+        rows: dict[str, tuple[float, str]] = {}
+        for raw in content.splitlines():
+            match = re.fullmatch(
+                r"\|\s*([A-Za-z][A-Za-z0-9_]*)\s*\|\s*(\d[\d,]*(?:\.\d+)?)\s*\|",
+                raw.strip(),
+            )
+            if match is None:
+                continue
+            value = float(match.group(2).replace(",", ""))
+            if math.isfinite(value) and value > 0:
+                rows.setdefault(match.group(1).casefold(), (value, raw.strip()))
+        close = rows.get("close")
+        if close is None:
+            continue
+        for lower, upper, method in (
+            ("close_50_sma", "close_10_ema", "50-day SMA to 10-day EMA"),
+            ("boll_lb", "boll_ub", "Bollinger lower to upper band"),
+        ):
+            low, high = rows.get(lower), rows.get(upper)
+            if low and high and low[0] < close[0] < high[0]:
+                return ObservedTechnicalScenario(
+                    low=low[0], high=high[0], reference_price=close[0],
+                    low_quote=low[1], high_quote=high[1], method=method,
+                    source_id=source_id,
+                )
+    return None
 
 
 def extract_verified_reference_price(text: str) -> float | None:

@@ -11,6 +11,8 @@ const state = {
   markdownFilename: null,
   marketItems: [],
   speakingItems: [],
+  discoveryRequestToken: 0,
+  discoveryView: "tiles",
   activeTickerItem: null,
   currentResults: [],
   sourceSettings: [],
@@ -90,6 +92,9 @@ const elements = {
   resultsList: document.getElementById("results-list"),
   tickerTrack: document.getElementById("ticker-track"),
   tickerStatus: document.getElementById("ticker-status"),
+  discoveryCoverage: document.getElementById("discovery-coverage"),
+  discoveryViewTiles: document.getElementById("discovery-view-tiles"),
+  discoveryViewRows: document.getElementById("discovery-view-rows"),
   tickerModal: document.getElementById("ticker-modal"),
   closeTickerModal: document.getElementById("close-ticker-modal"),
   addTickerToAnalysis: document.getElementById("add-ticker-to-analysis"),
@@ -112,9 +117,8 @@ const elements = {
   modalEmployees: document.getElementById("modal-employees"),
   modalWebsite: document.getElementById("modal-website"),
   modalPe: document.getElementById("modal-pe"),
-  refreshSpeaking: document.getElementById("refresh-speaking"),
-  speakingTopn: document.getElementById("speaking-topn"),
-  speakingLookback: document.getElementById("speaking-lookback"),
+  refreshDiscovery: document.getElementById("refresh-discovery"),
+  discoveryLimit: document.getElementById("discovery-limit"),
   reportState: document.getElementById("report-state"),
   openHtmlReport: document.getElementById("open-html-report"),
   downloadMarkdownReport: document.getElementById("download-markdown-report"),
@@ -606,37 +610,159 @@ async function fetchMarketTickers() {
   }
 }
 
-async function fetchSpeakingStocks() {
-  elements.tickerStatus.textContent = "Refreshing chatter tape…";
-  elements.tickerTrack.innerHTML = '<div class="ticker-item placeholder">Refreshing chatter feed…</div>';
-  state.speakingItems = [];
+const MOMENTUM_SOURCE_LABELS = {
+  alpha_vantage_gainers: "Alpha Vantage gainers",
+  alpha_vantage_active: "Alpha Vantage most active",
+  fmp_gainers: "FMP gainers", fmp_active: "FMP most active",
+  apewisdom: "ApeWisdom attention", stocktwits: "StockTwits trend",
+};
+function setDiscoveryView(view) {
+  const selected = view === "rows" ? "rows" : "tiles";
+  state.discoveryView = selected;
+  elements.tickerTrack.dataset.view = selected;
+  elements.discoveryViewTiles.setAttribute("aria-pressed", String(selected === "tiles"));
+  elements.discoveryViewRows.setAttribute("aria-pressed", String(selected === "rows"));
+}
 
-  const topN = Number(elements.speakingTopn.value || 10);
-  const lookback = Number(elements.speakingLookback.value || 30);
+function discoveryVolume(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "—";
+  return num >= 1_000_000 ? `${(num / 1_000_000).toFixed(1)}M` : `${(num / 1_000).toFixed(1)}K`;
+}
 
-  try {
-    const response = await fetch(`/api/speaking-stocks?top_n=${topN}&lookback_days=${lookback}`);
-    const payload = await response.json();
-    const items = payload.items || [];
+function safeResearchUrl(value) {
+  const text = String(value || "");
+  return /^\/api\/jobs\/[a-f0-9]{32}\/reports\/[A-Z][A-Z0-9.-]{0,5}\/(investor|full)$/.test(text)
+    ? text : null;
+}
 
-    if (!items.length) {
-      elements.tickerStatus.textContent = "No speaking stocks available right now.";
-      elements.tickerTrack.innerHTML = '<div class="ticker-item placeholder">No speaking stocks available right now.</div>';
-      return;
+function renderMomentumCandidate(item) {
+  const symbol = String(item.ticker || "");
+  const sources = Array.isArray(item.sources)
+    ? [...new Set(item.sources.map(source => MOMENTUM_SOURCE_LABELS[source]).filter(Boolean))]
+    : [];
+  const sourceText = sources.length ? sources.join(" · ") : "Source not available";
+  const riskText = Array.isArray(item.risk_flags) && item.risk_flags.includes("high_volatility_spike")
+    ? "Risk: one-day spike above 25%; momentum may reverse sharply." : "";
+  const researchUrl = safeResearchUrl(item.research_url);
+  const badge = item.already_analyzed ? "Already analyzed" : "New to your research";
+  return `<article class="momentum-card">
+    <div class="momentum-card-head">
+      <div><h4>${escapeHtml(symbol)}</h4><p>${escapeHtml(item.company_name)}</p></div>
+      <span class="momentum-badge ${item.already_analyzed ? "analyzed" : "new"}">${badge}</span>
+    </div>
+    <p class="momentum-quote"><strong>${escapeHtml(formatPrice(item.close))}</strong> ${escapeHtml(item.currency)} · Completed quote ${escapeHtml(item.quote_date)}</p>
+    <p class="momentum-basis">Price basis: ${escapeHtml(item.price_basis || "unadjusted close; split-adjusted returns")}</p>
+    <div class="momentum-metrics" aria-label="Measured price and volume trend">
+      <span class="${metricTone(item.ret_1d_pct)}">1D ${escapeHtml(formatSignedPercent(item.ret_1d_pct))}</span>
+      <span class="${metricTone(item.ret_5d_pct)}">5D ${escapeHtml(formatSignedPercent(item.ret_5d_pct))}</span>
+      <span class="${metricTone(item.ret_20d_pct)}">20D ${escapeHtml(formatSignedPercent(item.ret_20d_pct))}</span>
+      <span>Relative volume ${escapeHtml(Number(item.relative_volume).toFixed(1))}×</span>
+      <span>20D avg dollar volume $${escapeHtml(discoveryVolume(item.avg_dollar_volume))}</span>
+      <span>Trend checks ${escapeHtml(item.trend_checks)}/2</span>
+    </div>
+    <p class="momentum-reason">${escapeHtml(item.reason)}</p>
+    ${riskText ? `<p class="momentum-risk">${escapeHtml(riskText)}</p>` : ""}
+    <p class="momentum-sources">Sources: ${escapeHtml(sourceText)} · Research-priority score ${escapeHtml(item.score)} (not a probability)</p>
+    <div class="momentum-actions">
+      <button type="button" class="secondary-button" data-discover-add="${escapeHtml(symbol)}">Add to analysis</button>
+      <button type="button" class="text-button" data-ticker-symbol="${escapeHtml(symbol)}">Company details</button>
+      ${researchUrl ? `<a href="${escapeHtml(researchUrl)}" class="text-button">Open saved research</a>` : ""}
+    </div>
+  </article>`;
+}
+
+function renderMomentumWatchlist(items, status = "fresh", screening = null) {
+  if (!Array.isArray(items) || !items.length) {
+    if (status === "unavailable") {
+      return '<p class="empty-state">Stocks could not be verified because market or identity data is unavailable. Try Refresh later.</p>';
     }
+    if (status === "stale") {
+      return '<p class="empty-state">The saved shortlist is empty and its data is stale. Refresh when market data is available.</p>';
+    }
+    if (status === "partial") {
+      return '<p class="empty-state">No stocks met the screen using the available feeds; some sources could not be checked.</p>';
+    }
+    if (screening && screening.nominated === 0) {
+      return '<p class="empty-state">No discovery feed nominated stocks in this snapshot. Try Refresh later.</p>';
+    }
+    if (screening && screening.with_history === 0) {
+      return '<p class="empty-state">Candidates were nominated, but no usable completed price history was available. Try Refresh later.</p>';
+    }
+    if (screening && screening.price_eligible === 0) {
+      return '<p class="empty-state">Candidates had price history, but none passed the price, liquidity, or five-day momentum checks. Try Refresh later.</p>';
+    }
+    if (screening && screening.verified_equities === 0) {
+      return '<p class="empty-state">Candidates had price history, but none passed US-equity identity verification. This is a coverage gap, not proof that no stocks have momentum.</p>';
+    }
+    if (screening && screening.verified_equities > 0) {
+      const count = screening.verified_equities;
+      return `<p class="empty-state">${count} verified ${count === 1 ? "equity" : "equities"} were checked; none passed the momentum or liquidity thresholds. Try Refresh later.</p>`;
+    }
+    return '<p class="empty-state">No stocks met the verified momentum and liquidity screen. Refresh later.</p>';
+  }
+  const fresh = items.filter(item => !item.already_analyzed);
+  const analyzed = items.filter(item => item.already_analyzed);
+  return [
+    fresh.length ? `<section class="momentum-group"><h3>New to your research</h3><div class="momentum-grid">${fresh.map(renderMomentumCandidate).join("")}</div></section>` : "",
+    analyzed.length ? `<section class="momentum-group"><h3>Already analyzed</h3><div class="momentum-grid">${analyzed.map(renderMomentumCandidate).join("")}</div></section>` : "",
+  ].join("");
+}
 
-    state.speakingItems = items;
-    renderTape(
-      elements.tickerTrack,
-      items,
-      tickerItem,
-      topN,
-      "No speaking stocks available right now.",
-    );
-    elements.tickerStatus.textContent = `Top chatter candidates: ${items.length} unique tickers | Rank score = ${RANK_HELP_TEXT} | Avg checks = ${AVG_CHECK_HELP_TEXT}`;
-  } catch (error) {
-    elements.tickerStatus.textContent = `Unable to load chatter feed: ${error.message}`;
-    elements.tickerTrack.innerHTML = `<div class="ticker-item placeholder">${escapeHtml(error.message)}</div>`;
+function formatDiscoveryTimestamp(value, options = {}) {
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return "retrieval time unavailable";
+  return new Intl.DateTimeFormat(options.locale, {
+    year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    hourCycle: "h23", timeZoneName: "short",
+    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+  }).format(parsed);
+}
+
+function momentumStatusCopy(payload, limit) {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  if (payload.status === "unavailable") return "Watchlist unavailable. No verified market snapshot is available; try Refresh later.";
+  const freshness = payload.status === "stale" ? "Stale saved snapshot" : payload.status === "partial" ? "Partial data" : "Current snapshot";
+  const retrieved = payload.retrieved_at ? `retrieved ${formatDiscoveryTimestamp(payload.retrieved_at)}` : "retrieval time unavailable";
+  const quote = payload.quote_as_of ? `quotes through ${payload.quote_as_of}` : "quote date unavailable";
+  const count = `${items.length} of up to ${limit} stocks`;
+  const warning = payload.status === "partial" ? " Some feeds could not be used." : payload.status === "stale" ? " Refresh failed; review dates before use." : "";
+  return `${freshness} · ${count} · ${quote} · ${retrieved}.${warning}`;
+}
+
+function momentumScreeningCopy(payload) {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const counts = payload.screening;
+  if (!counts || items.length >= 15 || !["fresh", "partial"].includes(payload.status)) return "";
+  return (
+    `${counts.nominated} nominated · ${counts.selected_for_prices} selected for prices · ` +
+    `${counts.with_history} with history · ` +
+    `${counts.price_eligible} passed price, liquidity, and momentum checks · ` +
+    `${counts.verified_equities} identity-verified from ${counts.identity_checked} checks · ` +
+    `${counts.qualified} qualified. The list is not padded with unverified stocks.`
+  );
+}
+
+async function loadMomentumDiscovery({ force = false } = {}) {
+  const token = ++state.discoveryRequestToken;
+  const limit = Number(elements.discoveryLimit.value) === 15 ? 15 : 20;
+  elements.tickerStatus.textContent = "Loading verified momentum candidates…";
+  try {
+    const response = await fetch(`/api/discover/stocks?limit=${limit}&refresh=${force}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) throw new Error("Watchlist request failed");
+    const payload = await response.json();
+    if (token !== state.discoveryRequestToken) return;
+    state.speakingItems = Array.isArray(payload.items) ? payload.items : [];
+    elements.tickerStatus.textContent = momentumStatusCopy(payload, limit);
+    elements.discoveryCoverage.textContent = momentumScreeningCopy(payload);
+    elements.tickerTrack.innerHTML = renderMomentumWatchlist(state.speakingItems, payload.status, payload.screening);
+  } catch (_) {
+    if (token !== state.discoveryRequestToken) return;
+    elements.tickerStatus.textContent = "Watchlist could not be loaded. Check the local app and retry.";
+    elements.discoveryCoverage.textContent = "";
+    elements.tickerTrack.innerHTML = '<p class="empty-state">No verified candidates available.</p>';
   }
 }
 
@@ -657,9 +783,9 @@ function openTickerModal(item) {
   elements.modalTitle.textContent = item.ticker;
   elements.modalCompanyName.textContent = item.ticker;
   elements.modalScore.textContent = String(item.score ?? "—");
-  elements.modalPrice.textContent = item.price != null ? `$${Number(item.price).toFixed(2)}` : "—";
+  elements.modalPrice.textContent = item.close != null ? `$${Number(item.close).toFixed(2)}` : item.price != null ? `$${Number(item.price).toFixed(2)}` : "—";
   elements.modalRet5.textContent = item.ret_5d_pct != null ? `${item.ret_5d_pct.toFixed(1)}%` : "—";
-  elements.modalTrend.textContent = item.trend_score != null ? `${item.trend_score}/2` : "—";
+  elements.modalTrend.textContent = item.trend_checks != null ? `${item.trend_checks}/2` : item.trend_score != null ? `${item.trend_score}/2` : "—";
   elements.modalLookback.textContent = item.lookback_days != null ? `${item.lookback_days} trading days` : "—";
   elements.modalZret5.textContent = item.z_ret5 != null ? String(item.z_ret5) : "—";
   elements.modalSector.textContent = "Loading…";
@@ -675,10 +801,10 @@ function openTickerModal(item) {
   const sources = sourceSummary(item);
   const trend = trendSummary(item.trend_score);
   const score = Number.isFinite(Number(item.score)) ? Number(item.score).toFixed(2) : "—";
-  elements.modalDescription.textContent =
+  elements.modalDescription.textContent = item.reason || (
     `${item.ticker} is a chatter candidate from ${sources.text}. ` +
-    `${rankScoreDetail(score)} ` +
-    `Avg checks means ${trend.detail}`;
+    `${rankScoreDetail(score)} Avg checks means ${trend.detail}`
+  );
 
   state.modalReturnFocus = document.activeElement;
   elements.tickerModal.classList.remove("hidden");
@@ -751,6 +877,15 @@ function closeTickerModal() {
 }
 
 function handleTickerTrackClick(event) {
+  const addButton = event.target.closest("[data-discover-add]");
+  if (addButton) {
+    const symbol = addButton.getAttribute("data-discover-add");
+    if (/^[A-Z][A-Z0-9.-]{0,5}$/.test(symbol)) {
+      appendTickerToTextarea(symbol);
+      window.dispatchEvent(new Event("tradingagents:ticker-added"));
+    }
+    return;
+  }
   const trigger = event.target.closest("[data-ticker-symbol]");
   if (!trigger) return;
   const symbol = trigger.getAttribute("data-ticker-symbol");
@@ -1211,6 +1346,7 @@ function toggleSecretInput(event) {
 
 function boot() {
   setToday();
+  setDiscoveryView("tiles");
   applyRoleDefaults();
   updateProviderFields();
   updateExportToggle();
@@ -1246,7 +1382,10 @@ function boot() {
   elements.deepModelRefresh.addEventListener("click", () => refreshRoleModels("deep"));
   elements.verifierModelRefresh.addEventListener("click", () => refreshRoleModels("verifier"));
   elements.saveReports.addEventListener("change", updateExportToggle);
-  elements.refreshSpeaking.addEventListener("click", fetchSpeakingStocks);
+  elements.refreshDiscovery.addEventListener("click", () => loadMomentumDiscovery({ force: true }));
+  elements.discoveryLimit.addEventListener("change", () => loadMomentumDiscovery());
+  elements.discoveryViewTiles.addEventListener("click", () => setDiscoveryView("tiles"));
+  elements.discoveryViewRows.addEventListener("click", () => setDiscoveryView("rows"));
   elements.tickerTrack.addEventListener("click", handleTickerTrackClick);
   elements.form.addEventListener("submit", submitAnalysis);
   elements.resetForm.addEventListener("click", resetForm);
@@ -1301,9 +1440,8 @@ window.TradingAgentsRuntime = {
   isSubmitting: () => state.submitting,
   loadDiscovery: () => {
     if (state.marketRefreshHandle) return;
-    fetchMarketTickers(); fetchSpeakingStocks();
+    fetchMarketTickers(); loadMomentumDiscovery();
     state.marketRefreshHandle = setInterval(fetchMarketTickers, MARKET_TAPE_REFRESH_MS);
-    state.speakingRefreshHandle = setInterval(fetchSpeakingStocks, SPEAKING_TAPE_REFRESH_MS);
   },
   modelSummary: () => Object.entries(roleBindings()).map(([role,[provider]]) => {
     try { return `${role}: ${provider.value} / ${selectedModelId(role)}`; }

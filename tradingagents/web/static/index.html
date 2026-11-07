@@ -648,38 +648,34 @@
           <section class="ticker-pane">
             <div class="section-head">
               <div>
-                <h2>Chatter Candidates</h2>
-                <p id="ticker-status" class="ticker-status">
+                <h2>Momentum watchlist</h2>
+                <p id="ticker-status" class="ticker-status" aria-live="polite">
                   Open Discover to load candidates.
                 </p>
+                <p id="discovery-coverage" class="discovery-coverage" aria-live="polite"></p>
               </div>
             </div>
             <div class="discovery-controls">
               <label class="field"
-                ><span>Number of candidates</span
-                ><input
-                  id="speaking-topn"
-                  type="number"
-                  min="1"
-                  max="50"
-                  value="20" /></label
-              ><label class="field"
-                ><span>Lookback days</span
-                ><input
-                  id="speaking-lookback"
-                  type="number"
-                  min="5"
-                  max="120"
-                  value="30" /></label
+                ><span>Maximum stocks</span
+                ><select id="discovery-limit">
+                  <option value="15">15</option>
+                  <option value="20" selected>20</option>
+                </select></label
               ><button
-                id="refresh-speaking"
+                id="refresh-discovery"
                 class="secondary-button"
                 type="button"
               >
-                Refresh candidates
+                Refresh watchlist
               </button>
+              <div class="discovery-view-toggle" role="group" aria-label="Watchlist layout">
+                <button id="discovery-view-tiles" type="button" aria-pressed="true">Tiles</button>
+                <button id="discovery-view-rows" type="button" aria-pressed="false">Rows</button>
+              </div>
             </div>
-            <div id="ticker-track" class="ticker-track"></div>
+            <p class="discovery-disclaimer">Research ideas only, not recommendations. Scores rank verified US-stock momentum and attention, not expected returns. No analysis run starts until you launch one.</p>
+            <div id="ticker-track" class="discovery-list"></div>
           </section>
         </section>
         <section

@@ -6,12 +6,14 @@ import json
 import logging
 import re
 from collections.abc import Iterator, Mapping
+from datetime import date
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from tradingagents.agents.schemas import DecisionStatus, PortfolioDecision, TargetValidationStatus
+from tradingagents.agents.utils.decision_integrity import observed_technical_scenario
 from tradingagents.agents.utils.structured import (
     NO_EXTERNAL_TOOLS,
     StructuredOutputFailure,
@@ -116,6 +118,13 @@ class DecisionBlock(BaseModel):
     quote_currency: str | None = None
     status_reason: str | None = None
     target_reason: str | None = None
+    scenario_low: Decimal | None = None
+    scenario_high: Decimal | None = None
+    scenario_reference: Decimal | None = None
+    scenario_method: str | None = None
+    scenario_confidence: str | None = None
+    scenario_low_quote: str | None = None
+    scenario_high_quote: str | None = None
     source_ids: list[str] = Field(default_factory=list)
 
 
@@ -171,6 +180,7 @@ class NarrativeBatch(BaseModel):
 
 
 _TOPIC_FACTS: dict[str, tuple[str, ...]] = {
+    "market": ("close", "rsi", "atr", "boll"),
     "segments": ("net_sales", "segment:"),
     "revenue": ("net_sales",),
     "earnings": ("operating_income", "net_income", "diluted_eps"),
@@ -179,6 +189,7 @@ _TOPIC_FACTS: dict[str, tuple[str, ...]] = {
     "valuation": ("market_cap", "pe_ttm", "pe_forward"),
 }
 _TOPIC_TITLES = {
+    "market": "Price and trend setup",
     "business": "How the business earns revenue",
     "products": "Products and differentiation",
     "segments": "Revenue by business",
@@ -229,7 +240,13 @@ def _excerpts_for_topic(ledger: ResearchLedger, topic: str) -> list[ResearchExce
             )
         return items
     if topic == "leadership":
-        return list(ledger.excerpts.get("governance", ()))
+        return [
+            item for item in ledger.excerpts.get("governance", ())
+            if re.search(
+                r"\b(?:CEO|CFO|COO|CTO|president|chief (?:executive|financial|"
+                r"operating|technology) officer)\b", item.text, re.I,
+            )
+        ]
     if topic in {"relationships", "guidance", "confirmed_catalysts"}:
         items = list(ledger.excerpts.get("earnings_release", ()))
         if topic == "guidance":
@@ -281,10 +298,20 @@ def _team_case_point(excerpts: list[ResearchExcerpt], role: str) -> DeckPoint | 
                          r"(?i)^\s*(?:the core question|my conclusion|bottom line|"
                          r"my view|here(?:'|’)s my (?:bull|bear) case)\b", line,
                      )), "")
+    thesis_heading = ""
+    if role == "bear":
+        heading = re.search(
+            r"(?im)^\s*Bear Analyst:\s*##\s*Bear (?:response|case)(?: for [^:\n]+)?:\s*(.+)$",
+            item.text,
+        )
+        if heading and 45 <= len(heading.group(1).strip()) <= 260:
+            thesis_heading = heading.group(1).strip()
     opening = next((row.strip() for row in item.text.split("\n\n")
                     if row.strip() and not row.lstrip().startswith("#")
                     and not re.match(r"(?i)^\s*(?:bull|bear) analyst:\s*#", row)), "")
-    passage = explicit or next((row for row in emphasized if 45 <= len(row) <= 260), "") or opening
+    passage = explicit or thesis_heading or next(
+        (row for row in emphasized if 45 <= len(row) <= 260), "",
+    ) or opening
     passage = " ".join(re.sub(r"[*_#]+", "", passage).split())
     passage = re.sub(r"(?i)^(?:bull|bear) analyst:\s*", "", passage)
     passage = re.sub(
@@ -297,6 +324,8 @@ def _team_case_point(excerpts: list[ResearchExcerpt], role: str) -> DeckPoint | 
         return None
     if passage[0].islower():
         passage = passage[0].upper() + passage[1:]
+    if thesis_heading and passage == thesis_heading and passage[-1] not in ".!?":
+        passage += "."
     if len(passage) > 650:
         return None
     return DeckPoint(text=f"Team interpretation: {passage}", source_ids=[item.evidence_id])
@@ -395,15 +424,29 @@ def _source_rank(fact: ResearchFact, ledger: ResearchLedger) -> int:
 
 
 def _deduplicate(facts: list[ResearchFact], ledger: ResearchLedger) -> list[ResearchFact]:
-    selected: dict[tuple[str, str, str, str, Decimal, str | None], ResearchFact] = {}
+    selected: list[ResearchFact] = []
     for fact in facts:
-        dated_label = bool(re.fullmatch(r"20\d{2}-\d{2}-\d{2}", fact.period_label))
-        key = (fact.metric, fact.period_label, fact.period_kind, fact.basis,
-               fact.value, fact.period_end if dated_label else None)
-        prior = selected.get(key)
-        if prior is None:
-            selected[key] = fact
+        match_index = None
+        for index, prior in enumerate(selected):
+            same_value = (
+                fact.metric == prior.metric and fact.period_kind == prior.period_kind
+                and fact.basis == prior.basis and fact.unit == prior.unit
+                and fact.value == prior.value
+            )
+            same_period = fact.period_label == prior.period_label
+            near_quarter_end = (
+                fact.period_kind == "quarterly" and fact.period_end is not None
+                and prior.period_end is not None
+                and abs((date.fromisoformat(fact.period_end)
+                         - date.fromisoformat(prior.period_end)).days) <= 7
+            )
+            if same_value and (same_period or near_quarter_end):
+                match_index = index
+                break
+        if match_index is None:
+            selected.append(fact)
             continue
+        prior = selected[match_index]
         preferred = max(
             (prior, fact),
             key=lambda item: (
@@ -412,17 +455,24 @@ def _deduplicate(facts: list[ResearchFact], ledger: ResearchLedger) -> list[Rese
                      for key in item.source_ids if key in ledger.sources), default=""),
             ),
         )
-        selected[key] = ResearchFact(
+        selected[match_index] = ResearchFact(
             preferred.metric, preferred.value, preferred.unit, preferred.period_label,
             preferred.period_end or prior.period_end or fact.period_end,
             preferred.period_kind, preferred.basis,
             tuple(dict.fromkeys([*prior.source_ids, *fact.source_ids])),
         )
-    return list(selected.values())
+    return selected
 
 
 def _metric(fact: ResearchFact) -> DeckMetric:
-    label = fact.metric.removeprefix("segment:").replace("_", " ").capitalize()
+    readable = {
+        "close": "Close", "close_10_ema": "10-day EMA",
+        "close_50_sma": "50-day SMA", "close_200_sma": "200-day SMA",
+        "rsi": "RSI", "atr": "ATR",
+    }
+    label = readable.get(
+        fact.metric, fact.metric.removeprefix("segment:").replace("_", " ").capitalize(),
+    )
     return DeckMetric(
         label=label, value=_format_fact(fact), raw_value=fact.value,
         period=fact.period_label, basis=fact.basis.replace("_", "-").upper(),
@@ -467,6 +517,34 @@ def _guidance_table(ledger: ResearchLedger) -> TableBlock | None:
 def _blocks_for_topic(
     topic: str, facts: list[ResearchFact], ledger: ResearchLedger
 ) -> list[DeckBlock]:
+    if topic == "market":
+        latest = {
+            metric: max((fact for fact in facts if fact.metric == metric),
+                        key=_period_sort_key, default=None)
+            for metric in ("close", "close_50_sma", "close_10_ema", "rsi", "atr")
+        }
+        metrics = [latest[key] for key in latest if latest[key] is not None]
+        if len(metrics) < 2 or latest["close"] is None:
+            return []
+        blocks: list[DeckBlock] = [MetricBlock(metrics=[_metric(fact) for fact in metrics])]
+        closes = sorted((fact for fact in facts if fact.metric == "close"),
+                        key=_period_sort_key)
+        if len(closes) >= 2:
+            blocks.append(TrendBlock(points=[_metric(fact) for fact in closes[-15:]]))
+        close, sma, ema = latest["close"], latest["close_50_sma"], latest["close_10_ema"]
+        if sma is not None and ema is not None:
+            above_sma = "above" if close.value > sma.value else "below"
+            above_ema = "above" if close.value > ema.value else "below"
+            blocks.append(TextBlock(points=[DeckPoint(
+                text=(f"Verified close {_format_fact(close)} was {above_sma} the 50-day "
+                      f"SMA ({_format_fact(sma)}) and {above_ema} the 10-day EMA "
+                      f"({_format_fact(ema)}) on {close.period_end}. These observed "
+                      "levels are trend references, not price forecasts."),
+                source_ids=list(dict.fromkeys([
+                    *close.source_ids, *sma.source_ids, *ema.source_ids,
+                ])),
+            )]))
+        return blocks
     if topic == "guidance":
         table = _guidance_table(ledger)
         if table is None:
@@ -527,14 +605,20 @@ def _blocks_for_topic(
                 )]))
         previous, latest = ordered[-2:]
         prior_ordinal, latest_ordinal = _quarter_ordinal(previous), _quarter_ordinal(latest)
-        if (prior_ordinal is not None and latest_ordinal == prior_ordinal + 1
+        adjacent_dates = (
+            previous.period_end is not None and latest.period_end is not None
+            and 55 <= (date.fromisoformat(latest.period_end)
+                       - date.fromisoformat(previous.period_end)).days <= 120
+        )
+        if ((prior_ordinal is not None and latest_ordinal == prior_ordinal + 1
+             or adjacent_dates)
                 and previous.value != 0 and previous.unit == latest.unit
                 and previous.basis == latest.basis):
             change = (latest.value - previous.value) / abs(previous.value) * 100
             direction = "rose" if change >= 0 else "fell"
             label = "Net sales" if topic == "revenue" else "Net income"
             sentence = (
-                f"Calculated from company-reported {latest.basis.upper()} figures: "
+                f"Calculated from sourced {latest.basis.upper()} figures: "
                 f"{label} {direction} {abs(change):.1f}% from "
                 f"{previous.period_label} to {latest.period_label}."
             )
@@ -646,8 +730,11 @@ def _outline_takeaway(topic: str, blocks: list[DeckBlock]) -> str:
     ]
     if points:
         takeaway = points[0]
-        if takeaway.startswith("Calculated from company-reported GAAP figures: "):
-            takeaway = takeaway.removeprefix("Calculated from company-reported GAAP figures: ")
+        for prefix in (
+            "Calculated from company-reported GAAP figures: ",
+            "Calculated from sourced GAAP figures: ",
+        ):
+            takeaway = takeaway.removeprefix(prefix)
         return takeaway
     metrics = next((block.metrics for block in blocks if isinstance(block, MetricBlock)), [])
     if metrics:
@@ -691,6 +778,14 @@ def _decision_slide(state: Mapping[str, Any], ledger: ResearchLedger) -> DeckSli
     source_ids = ["analysis:portfolio"] if "analysis:portfolio" in ledger.sources else []
     actionable = decision.status is DecisionStatus.ACTIONABLE
     accepted = actionable and decision.target_validation_status is TargetValidationStatus.ACCEPTED
+    scenario = (
+        observed_technical_scenario(state)
+        if not accepted and decision.status_reason == "target_unavailable" else None
+    )
+    if scenario and scenario.source_id in ledger.sources:
+        source_ids.append(scenario.source_id)
+    else:
+        scenario = None
     market = state.get("verified_market_snapshot")
     currency = market.get("quote_currency") if isinstance(market, Mapping) else None
     if not isinstance(currency, str) or not re.fullmatch(r"[A-Z]{3}", currency):
@@ -722,15 +817,27 @@ def _decision_slide(state: Mapping[str, Any], ledger: ResearchLedger) -> DeckSli
         quote_currency=currency if accepted else None,
         status_reason=decision.status_reason if not actionable else None,
         target_reason=decision.target_validation_reason if not accepted else None,
+        scenario_low=Decimal(str(scenario.low)) if scenario else None,
+        scenario_high=Decimal(str(scenario.high)) if scenario else None,
+        scenario_reference=Decimal(str(scenario.reference_price)) if scenario else None,
+        scenario_method=scenario.method if scenario else None,
+        scenario_confidence=scenario.confidence if scenario else None,
+        scenario_low_quote=scenario.low_quote if scenario else None,
+        scenario_high_quote=scenario.high_quote if scenario else None,
         source_ids=source_ids,
     )
     takeaway = (
         f"{block.rating}: {block.existing_action or 'Review'} existing holdings; "
         f"{block.new_action or 'Review'} for a new position."
-        if actionable else "No actionable recommendation was produced for this run."
+        if actionable else (
+            "No actionable recommendation was produced; the observed range is for monitoring, "
+            "not a forecast." if scenario else "No actionable recommendation was produced for this run."
+        )
     )
     return DeckSlide(
-        topic="decision", title="Final recommendation", takeaway=takeaway,
+        topic="decision", title=("Final recommendation" if actionable else
+                                 "Decision and scenario" if scenario else "Decision status"),
+        takeaway=takeaway,
         source_ids=source_ids, blocks=[block],
     )
 
@@ -755,8 +862,17 @@ def _case_growth_point(ledger: ResearchLedger, metric: str, label: str) -> DeckP
     if len(ordered) < 2:
         return None
     prior, latest = ordered[-2:]
+    adjacent_labels = (
+        _quarter_ordinal(prior) is not None
+        and _quarter_ordinal(latest) == _quarter_ordinal(prior) + 1
+    )
+    adjacent_dates = (
+        prior.period_end is not None and latest.period_end is not None
+        and 55 <= (date.fromisoformat(latest.period_end)
+                   - date.fromisoformat(prior.period_end)).days <= 120
+    )
     if (prior.value <= 0 or latest.value <= prior.value or prior.unit != latest.unit
-            or _quarter_ordinal(latest) != (_quarter_ordinal(prior) or -2) + 1):
+            or not (adjacent_labels or adjacent_dates)):
         return None
     growth = (latest.value - prior.value) / prior.value * 100
     return DeckPoint(
@@ -774,6 +890,14 @@ def _case_slide(topic: str, ledger: ResearchLedger, as_of: str) -> DeckSlide | N
         for metric, label in (("net_sales", "net sales"), ("net_income", "net income")):
             if point := _case_growth_point(ledger, metric, label):
                 facts.append(point)
+        close = _case_fact(ledger, "close")
+        sma = _case_fact(ledger, "close_50_sma")
+        if close and sma and close.period_end == sma.period_end and close.value > sma.value:
+            facts.append(DeckPoint(
+                text=(f"At {close.period_end}, the verified close {_format_fact(close)} "
+                      f"remained above the 50-day SMA {_format_fact(sma)}."),
+                source_ids=list(dict.fromkeys([*close.source_ids, *sma.source_ids])),
+            ))
         guidance = _guidance_table(ledger)
         if guidance is not None:
             sales = next((row for row in guidance.rows
@@ -828,13 +952,30 @@ def _case_slide(topic: str, ledger: ResearchLedger, as_of: str) -> DeckSlide | N
                 text += f" versus forward-estimate P/E {_format_fact(forward)}"
                 ids.extend(forward.source_ids)
             facts.append(DeckPoint(text=text + ".", source_ids=list(dict.fromkeys(ids))))
-        takeaway = "The downside case tests cash conversion, balance-sheet capacity and expectations."
+        close = _case_fact(ledger, "close")
+        ema = _case_fact(ledger, "close_10_ema")
+        if close and ema and close.period_end == ema.period_end and close.value < ema.value:
+            facts.append(DeckPoint(
+                text=(f"At {close.period_end}, the verified close {_format_fact(close)} "
+                      f"was below the 10-day EMA {_format_fact(ema)}."),
+                source_ids=list(dict.fromkeys([*close.source_ids, *ema.source_ids])),
+            ))
+        rsi = _case_fact(ledger, "rsi")
+        if rsi and close and rsi.period_end == close.period_end and rsi.value < 50:
+            facts.append(DeckPoint(
+                text=f"The verified RSI was {_format_fact(rsi)} at {rsi.period_end}, below its 50 midpoint.",
+                source_ids=list(rsi.source_ids),
+            ))
+        if trailing is not None and close is not None and ema is not None and close.value < ema.value:
+            takeaway = "The downside case combines demanding valuation with weak near-term momentum."
+        else:
+            takeaway = "The downside case tests cash conversion, balance-sheet capacity and expectations."
         if any(point.text.startswith("Free cash flow was") for point in facts):
             watch = ("Watch: A later reported quarter with positive operating and free cash flow "
                      "would weaken this case; repeated negative cash flow would strengthen it.")
         else:
-            watch = ("Watch: A later reported quarter with positive operating cash flow "
-                     "would weaken this case; repeated negative operating cash flow would strengthen it.")
+            watch = ("Watch: Recovery above the observed short-term trend reference "
+                     "would weaken the technical risk; further weakness would strengthen it.")
     if len(facts) < 3:
         return None
     watch_ids = list(dict.fromkeys(key for point in facts[:3] for key in point.source_ids))
@@ -1020,20 +1161,27 @@ def build_investor_deck(
     if llm is None or len(outline) > 16:
         return result("source_only", "model_unavailable" if llm is None else "topic_budget")
     validated: list[tuple[DeckSlide, NarrativeDraft]] = []
+    first_failure = ""
     try:
         structured = bind_structured(llm, NarrativeBatch, "Investor Deck", fallback_to_text=False)
         for group in _chunks(outline, 4):
             allowed = {slide.topic: slide for slide in group}
-            response = invoke_structured_required(
-                structured, _source_packet(group, ledger), "Investor Deck",
-            )
-            draft = NarrativeBatch.model_validate(response)
+            try:
+                response = invoke_structured_required(
+                    structured, _source_packet(group, ledger), "Investor Deck",
+                )
+                draft = NarrativeBatch.model_validate(response)
+            except (StructuredOutputFailure, ValidationError) as exc:
+                first_failure = first_failure or getattr(exc, "code", "invalid_structured_response")
+                continue
             if len(draft.slides) != len(allowed) or {row.topic for row in draft.slides} != set(allowed):
-                return result("source_only", "required_topics_missing")
+                first_failure = first_failure or "required_topics_missing"
+                continue
             for row in draft.slides:
                 slide = allowed[row.topic]
                 if not set(row.source_ids) <= set(slide.source_ids):
-                    return result("source_only", "source_id_mismatch")
+                    first_failure = first_failure or "source_id_mismatch"
+                    continue
                 prose = row.takeaway + row.context + row.counterpoint
                 cited = " ".join(
                     item.text for items in ledger.excerpts.values() for item in items
@@ -1044,10 +1192,12 @@ def build_investor_deck(
                     if key in ledger.sources
                 )
                 if not _safe_interpretation(prose, cited):
-                    return result("source_only", "unsupported_interpretation")
+                    first_failure = first_failure or "unsupported_interpretation"
+                    continue
                 if any(point.source_id not in slide.source_ids or not _valid_point(point, ledger)
                        for point in row.points):
-                    return result("source_only", "unsupported_factual_point")
+                    first_failure = first_failure or "unsupported_factual_point"
+                    continue
                 validated.append((slide, row))
     except (StructuredOutputFailure, ValidationError) as exc:
         return result("source_only", getattr(exc, "code", "invalid_structured_response"))
@@ -1058,4 +1208,4 @@ def build_investor_deck(
                 DeckPoint(text=point.text, source_ids=[point.source_id])
                 for point in row.points
             ]))
-    return result("complete")
+    return result("source_only" if first_failure else "complete", first_failure)
