@@ -178,11 +178,47 @@ python -m cli.main     # alternative: run directly from source
 ```
 You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
 
+This fork selectively integrates upstream fixes through v0.7.1 while retaining
+its own package version and report behavior. The [integration ledger](docs/upstream-v0.7.1-integration.md)
+records adopted and deferred changes.
+
 Current CLI enhancements:
 - Step 1 accepts **multiple tickers** separated by commas or spaces
 - Batch mode saves timestamped full Markdown and HTML reports plus a source-linked investor research HTML deck for each successful ticker, and a ticker-named consolidated Markdown + HTML report. If optional generated interpretation fails validation, the deck keeps its verified figures and source excerpts with a clear notice. When source coverage itself is too thin, the investor file links to the full report instead of presenting a sparse brief.
 - OpenAI GPT-5/6 Responses API models are normalized so report output does not break downstream file writes
 - The CLI and web app offer separate curated suggestions for quick analysis, deep reasoning, and verifier/reflection. These are workflow-oriented suggestions, not measured investment-performance rankings. Your configured or promoted models remain selected even if they are no longer recommended.
+
+For unattended CLI runs, set `TRADINGAGENTS_QUICK_THINK_PROVIDER`,
+`TRADINGAGENTS_DEEP_THINK_PROVIDER`, and `TRADINGAGENTS_FINAL_REPORT_PROVIDER`
+to use different providers per role. Set their matching model IDs and optional
+`TRADINGAGENTS_QUICK_BACKEND_URL`, `TRADINGAGENTS_DEEP_BACKEND_URL`, or
+`TRADINGAGENTS_FINAL_REPORT_BACKEND_URL` where a role needs a custom endpoint.
+The primary provider's endpoint is never reused for another provider.
+
+Supply a current book with `tradingagents analyze --portfolio portfolio.json`.
+The JSON accepts `cash`, optional `currency`, and `positions` with `ticker`,
+signed `quantity`, and optional `average_price`. An omitted portfolio is unknown;
+`{"positions": []}` explicitly means flat. Broker aliases are matched to the
+instrument being analyzed without changing the holding's listed spelling.
+The book has no current NAV or risk budget, so agents still cannot state a
+numeric NAV allocation from it.
+
+`tradingagents check-updates` explicitly checks GitHub for the latest upstream
+release, caching the result for one day; `--refresh` bypasses that cache.
+Ordinary CLI startup makes no release or announcement request. Set
+`TRADINGAGENTS_SHOW_ANNOUNCEMENTS=1` to opt into the older notice fetch.
+
+When `TYPESAFE_API_KEY` is configured, live sentiment analysis screens newly
+fetched StockTwits and Reddit posts with Jev before display. Historical runs do
+not export social posts. Jev failure leaves posts unscreened with a visible
+status. Set `TRADINGAGENTS_JEV_NEWS_TRIAGE=true` to separately opt into live
+ticker-news relevance triage for Yahoo and Alpha Vantage. Dated and ticker-tagged
+articles are checked before Jev sees a title or summary; uncertain articles and
+all articles on a Jev failure stay visible, with their publication dates and
+source links. Global news, historical runs, ratings, and price targets are not
+altered by this triage. See [the triage contract](docs/jev-news-triage.md).
+Jev endpoint overrides must use HTTPS; plain HTTP is accepted only for an
+explicit loopback test endpoint.
 
 The **Refresh available models** action is optional and read-only: it lists account-visible model IDs without invoking a model or changing a saved selection. It never runs at page load or analysis start. A refreshed ID is labeled *available/unverified* until its tool and output capabilities are confirmed; curated recommendations remain above it. Missing credentials, provider errors, or unsupported listing APIs leave curated choices and an exact Custom model ID usable. Successful lists are cached in memory for five minutes per provider and credential; explicit refresh requests a new list. Credentials stay in the local CLI/server process and are never returned to the browser.
 
@@ -340,6 +376,12 @@ The decision log is always on. Each completed run appends its decision to `~/.tr
 
 Override the path with `TRADINGAGENTS_MEMORY_LOG_PATH`.
 
+Set `TRADINGAGENTS_PARALLEL_ANALYSTS=true` to run analysts concurrently with
+private tool histories. `TRADINGAGENTS_BACKGROUND_SETTLEMENT=true` additionally
+settles pending decisions for every ticker alongside those analysts. Both are
+off by default. `TRADINGAGENTS_MAX_TOOL_ROUNDS` bounds each analyst's tool use
+(default 8).
+
 ### Checkpoint resume
 
 Checkpoint resume is opt-in via `--checkpoint`. When enabled, LangGraph saves state after each node so a crashed or interrupted run resumes from the last successful step instead of starting over. On a resume run you will see `Resuming from step N for <TICKER> on <date>` in the logs; on a new run you will see `Starting fresh`. Checkpoints are cleared automatically on successful completion.
@@ -364,7 +406,12 @@ When you supply an analysis date, dated news, OHLCV, technical indicators, and F
 
 StockTwits, Reddit, and Polymarket are unavailable historically because their integrations do not provide point-in-time archives. Current company overviews, insider feeds, and financial statements without public publication timestamps are also unavailable for historical analysis; a fiscal period alone is not proof that the information was public by the cutoff.
 
-Deferred outcomes model an executable signal: they enter at the next common trading session's adjusted open for the stock and benchmark, then exit at the adjusted close after the configured common-session horizon. Their benchmark difference is gross excess return before costs, not risk-adjusted alpha.
+New deferred memory outcomes enter at the first completed common close after
+the decision, then exit at the completed close after the configured number of
+subsequent common sessions. A still-trading daily bar cannot settle an outcome.
+Older settled records retain their original return basis, and historical
+lessons with no known outcome date are excluded from replay. The benchmark
+difference is gross excess return before costs, not risk-adjusted alpha.
 
 Every new Portfolio Manager result carries an explicit decision status:
 `Actionable`, `Abstain`, or `Unavailable`. The final decision requires provider
@@ -376,6 +423,20 @@ The displayed model confidence is an uncalibrated evidence-strength score, not a
 ## Reproducibility
 
 ### Forecast evaluation and advisory portfolio optimization
+
+For an explicit sweep of independent ticker/date decisions, run:
+
+```bash
+tradingagents backtest --tickers NVDA,AAPL --start 2026-08-01 --end 2026-09-01 --every 5
+```
+
+Each completed cell saves an immutable forecast record in its own report tree.
+The command resumes with `--run-id <id>` only for the same inputs and run
+settings, skips completed cells, and reports
+cell and settlement failures. Its summary uses the forecast evaluation registry;
+memory reflections use the separate first-close basis and are not pooled into
+that score. This is not a fill or portfolio simulation. Running it invokes
+configured models and data providers for each new cell.
 
 Every saved report tree now includes an immutable, content-addressed
 `forecast_record.json`. Once its trading-session horizon has matured, resolve

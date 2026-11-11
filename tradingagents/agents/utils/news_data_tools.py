@@ -1,15 +1,19 @@
 from typing import Annotated
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
+from tradingagents.dataflows.date_window import as_of, as_of_window
+from tradingagents.dataflows.errors import VendorUnavailableError
 from tradingagents.dataflows.interface import route_to_vendor
 
 
 @tool
 def get_news(
-    ticker: Annotated[str, "Ticker symbol"],
+    ticker: Annotated[str, InjectedState("company_of_interest")],
     start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
     end_date: Annotated[str, "End date in yyyy-mm-dd format"],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
 ) -> str:
     """
     Retrieve news data for a given ticker symbol.
@@ -21,13 +25,24 @@ def get_news(
     Returns:
         str: A formatted string containing news data
     """
-    return route_to_vendor("get_news", ticker, start_date, end_date)
+    try:
+        start_date, end_date = as_of_window(start_date, end_date, trade_date)
+    except ValueError as exc:
+        return str(exc)
+    try:
+        return route_to_vendor("get_news", ticker, start_date, end_date)
+    except VendorUnavailableError:
+        return (
+            f"DATA_UNAVAILABLE: news for {ticker} could not be verified from the "
+            "configured vendors. Do not infer an absence of news or fabricate headlines."
+        )
 
 @tool
 def get_global_news(
     curr_date: Annotated[str, "Current date in yyyy-mm-dd format"],
     look_back_days: Annotated[int | None, "Days to look back; omit to use the configured default"] = None,
     limit: Annotated[int | None, "Max articles to return; omit to use the configured default"] = None,
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
 ) -> str:
     """
     Retrieve global news data.
@@ -43,11 +58,15 @@ def get_global_news(
     Returns:
         str: A formatted string containing global news data
     """
-    return route_to_vendor("get_global_news", curr_date, look_back_days, limit)
+    try:
+        date = as_of(curr_date, trade_date)
+    except ValueError as exc:
+        return str(exc)
+    return route_to_vendor("get_global_news", date, look_back_days, limit)
 
 @tool
 def get_insider_transactions(
-    ticker: Annotated[str, "ticker symbol"],
+    ticker: Annotated[str, InjectedState("company_of_interest")],
 ) -> str:
     """
     Retrieve insider transaction information about a company.

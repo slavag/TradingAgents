@@ -378,7 +378,14 @@ def test_pm_with_no_verified_price_rows_abstains_without_paid_repair():
 
 
 @pytest.mark.unit
-def test_portfolio_manager_rejects_numeric_nav_size_without_portfolio_context():
+@pytest.mark.parametrize("portfolio_context", [
+    None,
+    "Portfolio at the analysis date:\n- No current position in NVDA",
+    "Portfolio at the analysis date:\n- Current position in NVDA: 10 units",
+])
+def test_portfolio_manager_rejects_numeric_nav_size_without_complete_sizing_inputs(
+    portfolio_context,
+):
     from tradingagents.agents.schemas import (
         ExistingPositionAction,
         NewPositionAction,
@@ -405,12 +412,15 @@ def test_portfolio_manager_rejects_numeric_nav_size_without_portfolio_context():
         "latest_speaker": "Neutral", "count": 1,
     }
 
-    result = create_portfolio_manager(llm)({
+    state = {
         "company_of_interest": "NVDA",
         "risk_debate_state": risk,
         "investment_plan": "plan",
         "trader_investment_plan": "trader plan",
-    })
+    }
+    if portfolio_context is not None:
+        state["portfolio_context"] = portfolio_context
+    result = create_portfolio_manager(llm)(state)
 
     assert result["portfolio_decision"]["status"] == "Unavailable"
     assert "unsupported_portfolio_sizing" in result["final_trade_decision"]
@@ -438,6 +448,40 @@ def test_sentiment_prompt_states_constraint(monkeypatch):
     assert NO_EXTERNAL_TOOLS in text
     # This agent binds no tools, so tool-range wording must not reappear.
     assert "tool-call date ranges" not in text
+
+
+@pytest.mark.unit
+def test_sentiment_agent_passes_opted_in_post_screen_to_both_social_sources(monkeypatch):
+    from tradingagents.agents.schemas import SentimentBand, SentimentReport
+
+    def screen(posts):
+        return [True] * len(posts), "Screened by Jev"
+    seen = {}
+    monkeypatch.setattr(sentiment, "jev_screen", lambda ticker, as_of_date: screen, raising=False)
+
+    def fake_stocktwits(*args, **kwargs):
+        seen["stocktwits"] = kwargs
+        return "st"
+
+    def fake_reddit(*args, **kwargs):
+        seen["reddit"] = kwargs
+        return "rd"
+
+    monkeypatch.setattr(sentiment, "fetch_stocktwits_messages", fake_stocktwits)
+    monkeypatch.setattr(sentiment, "fetch_reddit_posts", fake_reddit)
+    monkeypatch.setattr(sentiment.get_news, "func", lambda *args, **kwargs: "news", raising=False)
+    llm = _capturing_llm({}, SentimentReport(
+        overall_band=SentimentBand.BULLISH, overall_score=7.5,
+        confidence="high", narrative="n",
+    ))
+
+    sentiment.create_sentiment_analyst(llm)({
+        "company_of_interest": "NVDA", "trade_date": "2026-11-08",
+        "asset_type": "stock", "messages": [],
+    })
+
+    assert seen["stocktwits"]["screen"] is screen
+    assert seen["reddit"]["screen"] is screen
 
 
 @pytest.mark.unit

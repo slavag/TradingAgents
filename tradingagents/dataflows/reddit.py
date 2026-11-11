@@ -52,6 +52,17 @@ _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 # discussion. wallstreetbets has the most volume but most noise; stocks /
 # investing trend more measured. Caller can override.
 DEFAULT_SUBREDDITS = ("wallstreetbets", "stocks", "investing")
+CRYPTO_SUBREDDITS = ("CryptoCurrency", "CryptoMarkets")
+_COIN_SUBREDDITS = {"BTC": "Bitcoin", "ETH": "ethereum", "SOL": "solana"}
+
+
+def subreddits_for(ticker: str) -> tuple[str, ...]:
+    """Use crypto communities for a crypto pair and stock forums for equities."""
+    base = crypto_base(ticker)
+    if not base:
+        return DEFAULT_SUBREDDITS
+    coin = _COIN_SUBREDDITS.get(base)
+    return ((coin,) if coin else ()) + CRYPTO_SUBREDDITS
 
 _RETRY_DELAYS = (5.0, 15.0, 30.0)
 _BACKOFF_JITTER = 0.20
@@ -302,11 +313,12 @@ def _fetch_subreddit(
 
 def fetch_reddit_posts(
     ticker: str,
-    subreddits: Iterable[str] = DEFAULT_SUBREDDITS,
+    subreddits: Iterable[str] | None = None,
     limit_per_sub: int = 5,
     timeout: float = 10.0,
     inter_request_delay: float = 1.0,
     as_of_date: str | None = None,
+    screen=None,
 ) -> str:
     """Fetch recent Reddit posts mentioning ``ticker`` across finance
     subreddits and return them as a formatted plaintext block.
@@ -321,6 +333,7 @@ def fetch_reddit_posts(
 
     # Crypto reaches us as a Yahoo pair (BTC-USD); search Reddit for the base
     # ("BTC") so the query actually matches discussion instead of near-nothing.
+    subreddits = list(subreddits if subreddits is not None else subreddits_for(ticker))
     ticker = crypto_base(ticker) or ticker
     blocks = []
     total_posts = 0
@@ -337,15 +350,31 @@ def fetch_reddit_posts(
                 "remaining subreddits were not requested>"
             )
             break
+        screen_note = ""
+        if posts and screen is not None:
+            try:
+                keep, screen_note = screen([
+                    f"{post.get('title') or ''}\n{post.get('selftext') or ''}"[:1000]
+                    for post in posts
+                ])
+                if len(keep) != len(posts):
+                    raise ValueError("screen returned the wrong number of flags")
+                posts = [post for post, flag in zip(posts, keep, strict=True) if flag]
+            except Exception as exc:
+                logger.warning("Reddit screening failed for r/%s: %s", sub, type(exc).__name__)
+                screen_note = f"<Jev screening unavailable ({type(exc).__name__}); posts are unscreened>"
         total_posts += len(posts)
         if not posts:
-            blocks.append(f"r/{sub}: <no posts found mentioning {ticker.upper()} in the past 7 days>")
+            if screen_note:
+                blocks.append(f"{screen_note}\nr/{sub}: <no posts about {ticker.upper()} after screening>")
+            else:
+                blocks.append(f"r/{sub}: <no posts found mentioning {ticker.upper()} in the past 7 days>")
             continue
 
         via_rss = any(p.get("source") == "rss" for p in posts)
         header = f"r/{sub} — {len(posts)} recent posts mentioning {ticker.upper()}"
         header += " (via RSS feed; scores/comments unavailable):" if via_rss else ":"
-        lines = [header]
+        lines = ([screen_note] if screen_note else []) + [header]
         for p in posts:
             title = (p.get("title") or "").replace("\n", " ").strip()
             score = p.get("score")

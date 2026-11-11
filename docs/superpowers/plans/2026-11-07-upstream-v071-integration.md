@@ -48,16 +48,16 @@
 **Interfaces:** Produce a disposition ledger with source release/commit, fork target, status, test evidence, and reason. Use `v0.4.0..v0.7.1` and the completed `ee531c3` branch; distinguish a missing Git ancestor from missing behavior.
 
 - [ ] **Step 1: Inventory** every release-note change and material non-merge commit from v0.4.1–v0.7.1. Record upstream diff path/commit and the current fork equivalent or gap.
-- [ ] **Step 2: Verify v0.4.1–v0.6 behavior** against current fork tests and source: time windows, vendor/SEC, portfolio input, safe caches, CLI, parallel analysts, all-ticker settlement, report provenance/HTML, backtest, Jev default-off. Mark only observed equivalence “already present.”
+- [ ] **Step 2: Verify v0.4.1–v0.6 behavior** against current fork tests and source: time windows, vendor/SEC, portfolio input, safe caches, CLI, parallel analysts, all-ticker settlement, report provenance/HTML, backtest, and Jev's current key-gated behavior. Mark only observed equivalence “already present.”
 - [ ] **Step 3: Gate gaps.** Map missing v0.6 behavior to Tasks 3–10; for any uncovered gap, add a focused test/implementation step to the owning task before coding it. Record intentionally superseded architecture rather than cherry-picking it.
 
 ### Task 3: Canonical run dates and point-in-time SEC statements
 
-**Files:** Modify `tradingagents/dataflows/sec.py`, `tradingagents/dataflows/sec_documents.py`, applicable date/tool routing in `tradingagents/agents/tools.py` or `tradingagents/dataflows/`, and `tests/test_sec_evidence.py`, `tests/test_sec_documents.py`, `tests/test_date_boundaries.py`. Reference upstream `a5b0f21`, `2717033`, `50bf38e`, `bf7f4b5`, `ee06dcb` and earlier v0.6 equivalents.
+**Files:** Modify `tradingagents/dataflows/sec.py`, `sec_documents.py`, `fred.py`, `reddit.py`, `stocktwits.py`, applicable date/tool routing and `tradingagents/agents/analysts/sentiment_analyst.py`; create a small Jev adapter with upstream v0.7.1 key-gated live behavior and the fork's historical no-post safeguard. Extend `tests/test_sec_evidence.py`, `test_sec_documents.py`, `test_date_boundaries.py`, `test_fred.py`, `test_reddit_fallback.py`, and `test_stocktwits_resilience.py`. Reference upstream `a5b0f21`, `2717033`, `50bf38e`, `bf7f4b5`, `ee06dcb` and earlier v0.6 equivalents.
 
 **Interfaces:** Normalize any model-supplied date before comparing it with filing dates; select one statement row per report period and retain sub-million precision; reject impossible vendor frequencies and reversed date windows with a correction signal rather than false no-data.
 
-- [ ] **Step 1: Write regressions** for `2024-7-5` vs a later SEC filing, duplicate quarter/year-to-date statement columns, a 0.6-million figure, invalid frequency, and `end < start`. Run each targeted test and confirm the intended pre-change failure or record equivalent existing behavior in the ledger.
+- [ ] **Step 1: Write regressions** for `2024-7-5` vs a later SEC filing, duplicate quarter/year-to-date statement columns, a 0.6-million figure, invalid frequency, `end < start`, euro-area FRED series, crypto Reddit communities, and Jev's key-gated/live-only endpoint gate. Run each targeted test and confirm the intended pre-change failure or record equivalent existing behavior in the ledger.
 - [ ] **Step 2: Implement** only missing behavior at the fork's SEC/tool boundaries; keep existing as-filed and cutoff evidence semantics.
 - [ ] **Step 3: Verify** targeted SEC/date/vendor tests, then `pytest -q` and Ruff.
 
@@ -73,12 +73,12 @@
 
 ### Task 5: Completed-close memory and outcome settlement
 
-**Files:** Modify `tradingagents/agents/utils/memory.py`, `tradingagents/graph/trading_graph.py`, `tradingagents/evaluation/outcomes.py` or `runtime.py`; extend `tests/test_memory_log.py`, `tests/test_forecast_outcomes.py`. Reference upstream `f5e3eae`, `eb4a486`, `caf6792` and prior v0.6 settlement work.
+**Files:** Modify `tradingagents/agents/utils/memory.py`, `tradingagents/graph/trading_graph.py`, `setup.py`, `analyst_execution.py`, `default_config.py`, `tradingagents/evaluation/outcomes.py` or `runtime.py`; extend `tests/test_memory_log.py`, `tests/test_forecast_outcomes.py`, `tests/test_graph_execution_lifecycle.py`. Reference upstream `f5e3eae`, `eb4a486`, `caf6792` and prior v0.6 parallel/settlement work.
 
 **Interfaces:** A decision's entry price is the first completed close after its date; holding-window settlement finds the next completed close across long closures; a still-trading bar never resolves an outcome. Historical lessons sort by decision date but remain gated by outcome availability date. Already-settled legacy entries stay unchanged and are labeled if mixed with new-basis results.
 
-- [ ] **Step 1: Write regressions** for same-day/in-progress bars, a closure longer than seven days, cross-ticker lesson ordering, and legacy-settled records. Run RED or mark already covered with evidence.
-- [ ] **Step 2: Implement** missing close/session logic through the fork's outcome provider, without replacing the append-only memory log or disabling its lock/atomic writes.
+- [ ] **Step 1: Write regressions** for same-day/in-progress bars, a closure longer than seven days, cross-ticker lesson ordering, legacy-settled records, opt-in parallel analyst fan-out, bounded analyst tool rounds, and all-ticker settlement after the analyst phase. Run RED or mark already covered with evidence.
+- [ ] **Step 2: Implement** missing close/session and optional graph behavior through the fork's outcome provider, without replacing the append-only memory log or disabling its lock/atomic writes. Sequential execution stays the default and checkpoint identity separates graph shapes.
 - [ ] **Step 3: Verify** memory/outcome tests and full suite.
 
 ### Task 6: Independent backtest sweeps and failure reporting

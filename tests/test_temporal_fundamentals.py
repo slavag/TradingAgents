@@ -2,6 +2,11 @@
 
 import pytest
 
+from tradingagents.agents.utils.fundamental_data_tools import (
+    get_balance_sheet as balance_tool,
+    get_cashflow as cashflow_tool,
+    get_income_statement as income_tool,
+)
 from tradingagents.dataflows import (
     alpha_vantage_fundamentals,
     alpha_vantage_news,
@@ -13,6 +18,13 @@ from tradingagents.dataflows.temporal import use_analysis_context
 
 def _vendor_must_not_be_called(*_args, **_kwargs):
     raise AssertionError("vendor must not be called for historical fundamentals")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("tool", [balance_tool, cashflow_tool, income_tool])
+def test_statement_tools_offer_only_vendor_supported_frequencies(tool):
+    schema = tool.tool_call_schema.model_json_schema()["properties"]["freq"]
+    assert schema["enum"] == ["annual", "quarterly"]
 
 
 @pytest.mark.unit

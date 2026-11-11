@@ -6,6 +6,8 @@ from dotenv import find_dotenv, set_key
 from rich.console import Console
 
 from cli.models import AnalystType, AssetType
+from tradingagents.dataflows.symbol_utils import is_yahoo_safe, normalize_symbol
+from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 from tradingagents.llm_clients.model_catalog import (
     get_catalog_metadata,
@@ -28,14 +30,16 @@ CRYPTO_SUFFIXES = ("-USD", "-USDT", "-USDC", "-BTC", "-ETH")
 
 
 def is_valid_ticker_input(value: str) -> bool:
-    """Whether a ticker entry is acceptable (charset + length).
-
-    Allows the characters Yahoo symbols use, including ``=`` for futures/forex
-    like ``GC=F`` and ``EURUSD=X`` (#980), and ``^`` for indices. Empty input is
-    allowed (it defaults to SPY downstream).
-    """
+    """Accept only symbols the data path can canonicalize and safely price."""
     v = value.strip()
-    return not v or (all(ch.isalnum() or ch in "._-^=" for ch in v) and len(v) <= 32)
+    if not v:
+        return True
+    canonical = normalize_symbol(v)
+    try:
+        safe_ticker_component(canonical)
+    except ValueError:
+        return False
+    return is_yahoo_safe(canonical)
 
 
 def get_ticker() -> str:
@@ -71,15 +75,9 @@ def normalize_ticker_symbol(ticker: str) -> str:
 
     Delegates to the data layer's ``normalize_symbol`` so the symbol the CLI
     passes through the pipeline is exactly the one the data path will price
-    (e.g. ``BTCUSD`` -> ``BTC-USD``, ``XAUUSD`` -> ``GC=F``). Falls back to the
-    plain upper-case if the data layer is unavailable.
+    (e.g. ``BTCUSD`` -> ``BTC-USD``, ``XAUUSD`` -> ``GC=F``).
     """
-    try:
-        from tradingagents.dataflows.symbol_utils import normalize_symbol
-
-        return normalize_symbol(ticker)
-    except Exception:
-        return ticker.strip().upper()
+    return normalize_symbol(ticker)
 
 
 def detect_asset_type(ticker: str) -> AssetType:

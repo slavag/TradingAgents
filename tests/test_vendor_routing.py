@@ -15,6 +15,7 @@ import tradingagents.dataflows.config as config_module
 import tradingagents.default_config as default_config
 from tradingagents.dataflows import interface
 from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.errors import VendorNotConfiguredError, VendorUnavailableError
 from tradingagents.dataflows.symbol_utils import NoMarketDataError
 
 
@@ -72,16 +73,38 @@ class VendorRoutingTests(unittest.TestCase):
         self.assertEqual(result, "AV_DATA")
 
     def test_primary_error_is_logged_not_masked(self):
-        # #989: primary errors + fallback no-data -> NO_DATA, but the failure
-        # must be visible in logs (broken primary not hidden).
+        # A failed primary plus fallback no-data cannot prove all vendors saw no data.
         set_config({"data_vendors": {"core_stock_apis": "yfinance,alpha_vantage"}})
         with self._route({"yfinance": _raises(ValueError("boom")), "alpha_vantage": _no_data}), \
                 self.assertLogs("tradingagents.dataflows.interface", level="WARNING") as cm:
             result = interface.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
-        self.assertIn("NO_DATA_AVAILABLE", result)
+        self.assertIn("DATA_UNAVAILABLE", result)
+        self.assertNotIn("NO_DATA_AVAILABLE", result)
         joined = "\n".join(cm.output)
         self.assertIn("boom", joined)            # the real error surfaced in logs
         self.assertIn("yfinance", joined)
+
+    def test_no_data_and_unavailable_vendor_is_not_a_definitive_absence(self):
+        set_config({"data_vendors": {"core_stock_apis": "yfinance,alpha_vantage"}})
+        with self._route({
+            "yfinance": _no_data,
+            "alpha_vantage": _raises(VendorUnavailableError("network unavailable")),
+        }):
+            result = interface.route_to_vendor(
+                "get_stock_data", "AAPL", "2026-01-01", "2026-01-10"
+            )
+        self.assertTrue(result.startswith("DATA_UNAVAILABLE:"))
+        self.assertNotIn("NO_DATA_AVAILABLE", result)
+
+    def test_missing_optional_key_does_not_mask_unavailable_news_vendor(self):
+        set_config({"data_vendors": {"news_data": "alpha_vantage,yfinance"}})
+        with mock.patch.dict(interface.VENDOR_METHODS, {
+            "get_news": {
+                "alpha_vantage": _raises(VendorNotConfiguredError("Alpha key missing")),
+                "yfinance": _raises(VendorUnavailableError("Yahoo news unavailable")),
+            }
+        }, clear=False), self.assertRaises(VendorUnavailableError):
+            interface.route_to_vendor("get_news", "NVDA", "2025-05-01", "2025-05-09")
 
     def test_unknown_configured_vendor_raises(self):
         set_config({"data_vendors": {"core_stock_apis": "bogus_vendor"}})

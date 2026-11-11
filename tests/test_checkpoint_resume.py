@@ -212,6 +212,8 @@ class TestCheckpointSignature(unittest.TestCase):
         # Stable for identical inputs.
         g.config = {"max_debate_rounds": 1, "max_risk_discuss_rounds": 1}
         self.assertEqual(base, g._run_signature("stock"))
+        g.config["parallel_analysts"] = True
+        self.assertNotEqual(base, g._run_signature("stock"))
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ from tradingagents.llm_clients.model_catalog import (
     get_web_model_options,
 )
 from tradingagents.llm_clients.model_discovery import DISCOVERY_ADAPTERS, discover_models
+from tradingagents.portfolio.state import PortfolioContext
 from tradingagents.report_html import render_report
 from tradingagents.settings import (
     SettingsStorageError,
@@ -188,6 +189,7 @@ async def log_requests(request: Request, call_next):
 class AnalysisRequest(BaseModel):
     request_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
     tickers: list[str] | str
+    portfolio: PortfolioContext | None = None
     analysis_date: str
     analysts: list[str] = Field(
         default_factory=lambda: ["market", "social", "news", "fundamentals"]
@@ -418,7 +420,7 @@ def job_history(request: Request, q: str = Query(default="", max_length=100),
 @app.post("/api/jobs")
 def create_analysis_job(request: AnalysisRequest):
     try:
-        payload = request.model_dump()
+        payload = request.model_dump(mode="json")
         logger.info(
             "Creating analysis job (provider=%s, tickers=%s, date=%s)",
             payload.get("llm_provider"),

@@ -7,6 +7,7 @@ from .base_client import BaseLLMClient, normalize_content
 
 _PASSTHROUGH_KWARGS = (
     "timeout", "max_retries", "api_key", "reasoning_effort", "temperature",
+    "max_tokens",
     "callbacks", "http_client", "http_async_client",
 )
 
@@ -39,6 +40,17 @@ class AzureOpenAIClient(BaseLLMClient):
             "model": self.model,
             "azure_deployment": os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", self.model),
         }
+        endpoint = self.base_url or os.environ.get("AZURE_OPENAI_ENDPOINT")
+        if endpoint:
+            llm_kwargs["azure_endpoint"] = endpoint
+
+        max_tokens = self.kwargs.get("max_tokens")
+        if max_tokens is not None and (
+            isinstance(max_tokens, bool)
+            or not isinstance(max_tokens, int)
+            or max_tokens < 1
+        ):
+            raise ValueError("max_tokens must be a positive integer")
 
         for key in _PASSTHROUGH_KWARGS:
             if key in self.kwargs:

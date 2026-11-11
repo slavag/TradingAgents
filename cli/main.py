@@ -10,6 +10,7 @@ from functools import wraps
 from html import escape
 from pathlib import Path
 
+import requests
 import typer
 from rich import box
 from rich.align import Align
@@ -547,11 +548,14 @@ def get_user_selections():
     )
     console.print(Align.center(welcome_box))
     console.print()
-    console.print()  # Add vertical space before announcements
+    console.print()
 
-    # Fetch and display announcements (silent on failure)
-    announcements = fetch_announcements()
-    display_announcements(console, announcements)
+    # Release notices are an explicit opt-in; ordinary startup is offline.
+    if os.environ.get("TRADINGAGENTS_SHOW_ANNOUNCEMENTS", "").lower() in {
+        "1", "true", "yes", "on",
+    }:
+        announcements = fetch_announcements()
+        display_announcements(console, announcements)
 
     # Create a boxed questionnaire for each step
     def create_question_box(title, prompt, default=None):
@@ -699,13 +703,22 @@ def get_user_selections():
         # doesn't fail later at the first API call.
         ensure_api_key(selected_llm_provider)
 
+    selected_quick_provider = (
+        DEFAULT_CONFIG.get("quick_think_provider") or selected_llm_provider
+    ).lower()
+    selected_deep_provider = (
+        DEFAULT_CONFIG.get("deep_think_provider") or selected_llm_provider
+    ).lower()
+    for role_provider in dict.fromkeys((selected_quick_provider, selected_deep_provider)):
+        if role_provider != selected_llm_provider:
+            ensure_api_key(role_provider)
+
     # Step 7: Thinking agents (skipped when either model is set via environment)
-    if os.environ.get("TRADINGAGENTS_QUICK_THINK_LLM") or os.environ.get("TRADINGAGENTS_DEEP_THINK_LLM"):
+    if os.environ.get("TRADINGAGENTS_QUICK_THINK_LLM"):
         selected_shallow_thinker = DEFAULT_CONFIG["quick_think_llm"]
-        selected_deep_thinker = DEFAULT_CONFIG["deep_think_llm"]
         console.print(
             f"[green]✓ Thinking agents from environment:[/green] "
-            f"quick={selected_shallow_thinker}, deep={selected_deep_thinker}"
+            f"quick={selected_shallow_thinker}"
         )
     else:
         console.print(
@@ -713,8 +726,14 @@ def get_user_selections():
                 "Step 7: Thinking Agents", "Select your thinking agents for analysis"
             )
         )
-        selected_shallow_thinker = select_shallow_thinking_agent(selected_llm_provider)
-        selected_deep_thinker = select_deep_thinking_agent(selected_llm_provider)
+        selected_shallow_thinker = select_shallow_thinking_agent(selected_quick_provider)
+    if os.environ.get("TRADINGAGENTS_DEEP_THINK_LLM"):
+        selected_deep_thinker = DEFAULT_CONFIG["deep_think_llm"]
+        console.print(
+            f"[green]✓ Deep model from environment:[/green] {selected_deep_thinker}"
+        )
+    else:
+        selected_deep_thinker = select_deep_thinking_agent(selected_deep_provider)
 
     # The final-report/reflection role may use a different provider, but must
     # never inherit an OpenAI model ID when a non-OpenAI provider is selected.
@@ -722,7 +741,9 @@ def get_user_selections():
         DEFAULT_CONFIG.get("final_report_provider")
         if os.environ.get("TRADINGAGENTS_FINAL_REPORT_PROVIDER") else None
     ) or selected_llm_provider
-    if selected_final_provider != selected_llm_provider:
+    if selected_final_provider not in {
+        selected_llm_provider, selected_quick_provider, selected_deep_provider
+    }:
         ensure_api_key(selected_final_provider)
     if os.environ.get("TRADINGAGENTS_FINAL_REPORT_LLM"):
         selected_final_model = DEFAULT_CONFIG["final_report_llm"]
@@ -779,6 +800,8 @@ def get_user_selections():
         "analysts": selected_analysts,
         "research_depth": selected_research_depth,
         "llm_provider": selected_llm_provider.lower(),
+        "quick_provider": selected_quick_provider,
+        "deep_provider": selected_deep_provider,
         "backend_url": backend_url,
         "shallow_thinker": selected_shallow_thinker,
         "deep_thinker": selected_deep_thinker,
@@ -2865,10 +2888,16 @@ def _build_run_config(selections: dict, checkpoint: bool | None) -> dict:
         config["final_report_llm"] = selections["final_report_model"]
     config["backend_url"] = selections["backend_url"]
     config["llm_provider"] = selections["llm_provider"].lower()
+    if selections.get("quick_provider"):
+        config["quick_think_provider"] = selections["quick_provider"]
+    if selections.get("deep_provider"):
+        config["deep_think_provider"] = selections["deep_provider"]
     # Provider-specific thinking configuration
-    config["google_thinking_level"] = selections.get("google_thinking_level")
-    config["openai_reasoning_effort"] = selections.get("openai_reasoning_effort")
-    config["anthropic_effort"] = selections.get("anthropic_effort")
+    for key in (
+        "google_thinking_level", "openai_reasoning_effort", "anthropic_effort"
+    ):
+        if selections.get(key) is not None:
+            config[key] = selections[key]
     config["output_language"] = selections.get("output_language", "English")
     # --checkpoint/--no-checkpoint overrides only when explicitly given; omitting
     # the flag preserves TRADINGAGENTS_CHECKPOINT_ENABLED / the default (#976).
@@ -2883,6 +2912,7 @@ def run_single_analysis(
     batch_index: int | None = None,
     batch_total: int | None = None,
     checkpoint: bool | None = None,
+    portfolio=None,
 ):
     """Run the full TradingAgents workflow for a single ticker."""
     asset_type = detect_asset_type(ticker)
@@ -3015,6 +3045,7 @@ def run_single_analysis(
             run_selections["analysis_date"],
             asset_type=run_selections["asset_type"],
             callbacks=[stats_handler],
+            portfolio=portfolio,
         ):
             # Process all messages in chunk, deduplicating by message ID
             for message in chunk.get("messages", []):
@@ -3162,7 +3193,7 @@ def run_single_analysis(
     }
 
 
-def run_analysis(checkpoint: bool | None = None):
+def run_analysis(checkpoint: bool | None = None, portfolio=None):
     # First get all user selections
     selections = get_user_selections()
     save_preferences = get_save_preferences(selections)
@@ -3192,6 +3223,7 @@ def run_analysis(checkpoint: bool | None = None):
                     batch_index=index if len(tickers) > 1 else None,
                     batch_total=len(tickers) if len(tickers) > 1 else None,
                     checkpoint=checkpoint,
+                    portfolio=portfolio,
                 )
             )
         except Exception as exc:
@@ -3314,6 +3346,13 @@ def run_analysis(checkpoint: bool | None = None):
             display_consolidated_report(analysis_results, selections["analysis_date"])
 
 
+_ANALYSIS_PORTFOLIO_OPTION = typer.Option(
+    None,
+    "--portfolio",
+    help="JSON file with current holdings and cash for this analysis.",
+)
+
+
 @app.command()
 def analyze(
     checkpoint: bool | None = typer.Option(
@@ -3327,13 +3366,21 @@ def analyze(
         "--clear-checkpoints",
         help="Delete all saved checkpoints before running (force fresh start).",
     ),
+    portfolio: Path | None = _ANALYSIS_PORTFOLIO_OPTION,
 ):
     if clear_checkpoints:
         from tradingagents.graph.checkpointer import clear_all_checkpoints
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
     try:
-        run_analysis(checkpoint=checkpoint)
+        from tradingagents.portfolio.state import load_portfolio
+
+        book = load_portfolio(portfolio) if portfolio is not None else None
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+    try:
+        run_analysis(checkpoint=checkpoint, portfolio=book)
     except _NO_CONSOLE_ERRORS:
         # A terminal with no console buffer cannot host the interactive prompts.
         # Emit one actionable line on stderr instead of a prompt_toolkit
@@ -3395,6 +3442,20 @@ _PROMOTION_ROOT_OPTION = typer.Option(
     "--promotion-root",
     help="Append-only promoted leaderboard directory.",
 )
+_BACKTEST_TICKERS_OPTION = typer.Option(..., "--tickers", help="Comma-separated symbols to analyze.")
+_BACKTEST_START_OPTION = typer.Option(..., "--start", help="First analysis date, YYYY-MM-DD.")
+_BACKTEST_END_OPTION = typer.Option(..., "--end", help="Last analysis date, YYYY-MM-DD.")
+_BACKTEST_EVERY_OPTION = typer.Option(1, "--every", help="Calendar-day spacing between decisions.")
+_BACKTEST_ANALYSTS_OPTION = typer.Option(
+    "market,social,news,fundamentals", "--analysts",
+    help="Comma-separated analyst roles.",
+)
+_BACKTEST_ASSET_OPTION = typer.Option("stock", "--asset-type", help="stock or crypto.")
+_BACKTEST_PORTFOLIO_OPTION = typer.Option(None, "--portfolio", help="Optional holdings JSON file.")
+_BACKTEST_RUN_ID_OPTION = typer.Option(None, "--run-id", help="Resume an existing sweep ID.")
+_UPDATE_REFRESH_OPTION = typer.Option(
+    False, "--refresh", help="Bypass the one-day release cache."
+)
 
 
 @app.command("evaluate-forecasts")
@@ -3418,6 +3479,72 @@ def evaluate_forecasts_command(
         f"{summary.total} total · {summary.scored} scored · "
         f"{summary.not_mature} pending · {summary.retryable_errors} retryable errors · "
         f"{summary.invalid} invalid"
+    )
+
+
+@app.command("backtest")
+def backtest_command(
+    tickers: str = _BACKTEST_TICKERS_OPTION,
+    start: str = _BACKTEST_START_OPTION,
+    end: str = _BACKTEST_END_OPTION,
+    every: int = _BACKTEST_EVERY_OPTION,
+    analysts: str = _BACKTEST_ANALYSTS_OPTION,
+    asset_type: str = _BACKTEST_ASSET_OPTION,
+    portfolio: Path | None = _BACKTEST_PORTFOLIO_OPTION,
+    run_id: str | None = _BACKTEST_RUN_ID_OPTION,
+):
+    """Evaluate independent historical decisions; no simulated fills or cash ledger."""
+    from tradingagents.backtest import iter_grid, run_backtest, summarize
+    from tradingagents.portfolio.state import load_portfolio
+
+    try:
+        symbols = [value.strip() for value in tickers.split(",") if value.strip()]
+        if not symbols:
+            raise ValueError("at least one ticker is required")
+        days = iter_grid(start, end, every)
+        if not days:
+            raise ValueError("the date grid has no dates through today")
+        selected = tuple(value.strip().lower() for value in analysts.split(",") if value.strip())
+        if not selected or any(value not in ANALYST_ORDER for value in selected):
+            raise ValueError("analysts must use market, social, news or fundamentals")
+        kind = asset_type.strip().lower()
+        if kind not in {"stock", "crypto"}:
+            raise ValueError("asset-type must be stock or crypto")
+        book = load_portfolio(portfolio) if portfolio is not None else None
+        result = run_backtest(
+            symbols, days, DEFAULT_CONFIG, run_id=run_id, portfolio=book,
+            asset_type=kind, selected_analysts=selected,
+        )
+        summary = summarize(result)
+    except (ValueError, FileExistsError, FileNotFoundError) as exc:
+        console.print(f"[red]Backtest unavailable: {exc}[/red]")
+        raise typer.Exit(code=1) from None
+    console.print(
+        f"Backtest {result.run_id}: {result.cells_run} new cells, "
+        f"{result.skipped} skipped, {len(result.failures)} failures, "
+        f"{len(result.settlement_failures)} settlement failures, "
+        f"{getattr(getattr(result, 'evaluation', None), 'retryable_errors', 0)} "
+        "evaluation provider errors."
+    )
+    console.print(summary.render())
+    console.print(f"Saved under: {result.run_dir}")
+
+
+@app.command("check-updates")
+def check_updates_command(refresh: bool = _UPDATE_REFRESH_OPTION):
+    """Check the latest upstream tag only when explicitly requested."""
+    from cli.updates import UPSTREAM_INTEGRATION_TARGET, latest_upstream_release
+
+    try:
+        latest = latest_upstream_release(refresh=refresh)
+    except (OSError, ValueError, requests.RequestException) as exc:
+        console.print(
+            f"[yellow]Could not check upstream releases ({type(exc).__name__}).[/yellow]"
+        )
+        raise typer.Exit(code=1) from None
+    console.print(
+        f"Latest upstream release: {latest}. This fork is selectively integrated "
+        f"through {UPSTREAM_INTEGRATION_TARGET}; see docs/upstream-v0.7.1-integration.md."
     )
 
 

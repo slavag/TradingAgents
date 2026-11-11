@@ -29,6 +29,7 @@ from datetime import datetime, timedelta
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+from tradingagents.agents.post_screen import jev_screen
 from tradingagents.agents.schemas import SentimentReport, render_sentiment_report
 from tradingagents.agents.utils.agent_utils import (
     get_agent_context_from_state,
@@ -69,10 +70,12 @@ def create_sentiment_analyst(llm):
         # returns a string (no exceptions surface from here), so the LLM
         # always sees something — either real data or a clear placeholder.
         news_block = get_news.func(ticker, start_date, end_date)
+        screen = jev_screen(ticker, as_of_date=end_date)
+        screen_kwargs = {"screen": screen} if screen is not None else {}
         stocktwits_block = fetch_stocktwits_messages(
-            ticker, limit=30, as_of_date=end_date
+            ticker, limit=30, as_of_date=end_date, **screen_kwargs
         )
-        reddit_block = fetch_reddit_posts(ticker, as_of_date=end_date)
+        reddit_block = fetch_reddit_posts(ticker, as_of_date=end_date, **screen_kwargs)
 
         system_message = _build_system_message(
             ticker=ticker,

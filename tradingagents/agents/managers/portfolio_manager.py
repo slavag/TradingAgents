@@ -168,8 +168,8 @@ Verified target candidates:
 - Determine the thesis from evidence before choosing position actions. Treat upstream recommendations as arguments, not independent votes.
 - Compare the independent thesis with the Research Manager and Trader conclusions, and explain material disagreements from the underlying evidence rather than resolving them by vote count.
 - Do not move more than one tier away from a well-supported Research Manager rating unless the evidence identifies a factual thesis invalidation or a materially different horizon.
-- Do not assume whether the user already owns the instrument. The rating expresses the forward risk/reward view; describe separate actions for existing and prospective positions when relevant.
-- Do not invent a numeric portfolio weight or NAV percentage without supplied holdings, portfolio value, and risk budget. Give conditional sizing guidance instead.
+- Use the supplied portfolio context when present. Do not assume whether the user already owns the instrument when no portfolio context was supplied. The rating expresses the forward risk/reward view; describe separate actions for existing and prospective positions when relevant.
+- The optional holdings context does not establish current portfolio NAV or a risk budget. Do not invent a numeric portfolio weight or NAV percentage; give conditional sizing guidance instead.
 - Existing Position must choose Add, Hold, Trim, or Exit for a reader who already owns the instrument, with concise sizing and execution guidance.
 - New Position must choose Buy, Conditional Buy, Wait, Avoid, Conditional Sell, or Sell for a reader considering a new long or short position.
 - Conditional Buy requires a confirmation trigger, an optional pullback entry, and a downside invalidation grounded in the supplied evidence.
@@ -198,7 +198,7 @@ Be decisive and ground every conclusion in specific evidence from the analysts.
             )
             if not isinstance(draft, PortfolioDecisionDraft):
                 raise StructuredOutputFailure("structured_response_invalid")
-            if not state.get("portfolio_context") and has_numeric_portfolio_weight(
+            if has_numeric_portfolio_weight(
                 str(draft.model_dump())
             ):
                 raise StructuredOutputFailure("unsupported_portfolio_sizing")

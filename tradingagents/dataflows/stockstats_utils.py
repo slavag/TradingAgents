@@ -1,5 +1,6 @@
 import logging
 import os
+import tempfile
 import time
 from typing import Annotated
 
@@ -129,21 +130,13 @@ def _assert_ohlcv_not_stale(
         )
 
 
-def _needs_same_day_refresh(data_file, curr_date_dt, today_date) -> bool:
-    """Whether a cached frame must be refetched to reflect the requested day.
-
-    The cache file is keyed per day, so without this a run started before the
-    day's bar was final keeps serving that snapshot to every later run (#1150).
-    Two distinct staleness cases exist for a current-day request: the bar may be
-    missing entirely, or present but still in progress — Yahoo publishes a
-    partial daily candle during market hours, whose ``Close`` is not the closing
-    price. Row inspection cannot tell a partial bar from a final one, so the TTL
-    governs every current-day cache. Historical requests always reuse the cache,
-    since those rows are immutable.
-    """
-    if curr_date_dt.date() < today_date.date():
+def _cache_is_fresh(data_file, curr_date_dt, now) -> bool:
+    """Reuse the symbol file only on its download day, with a live-bar TTL."""
+    written = pd.Timestamp.fromtimestamp(os.path.getmtime(data_file))
+    if written.date() != now.date():
         return False
-    return time.time() - os.path.getmtime(data_file) > OHLCV_CACHE_TTL_SECONDS
+    age = (now - written).total_seconds()
+    return curr_date_dt.date() < now.date() or 0 <= age <= OHLCV_CACHE_TTL_SECONDS
 
 
 def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
@@ -162,7 +155,7 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     config = get_config()
     curr_date_dt = pd.to_datetime(curr_date)
 
-    # Cache uses a fixed window (5y to today) so one file per symbol.
+    # One file per symbol holds the latest five-year download.
     today_date = pd.Timestamp.today()
     start_date = today_date - pd.DateOffset(years=5)
     start_str = start_date.strftime("%Y-%m-%d")
@@ -174,7 +167,7 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     os.makedirs(config["data_cache_dir"], exist_ok=True)
     data_file = os.path.join(
         config["data_cache_dir"],
-        f"{safe_symbol}-YFin-data-{start_str}-{end_str}.csv",
+        f"{safe_symbol}-YFin-data.csv",
     )
 
     # A cached file may be empty if a prior fetch failed (unknown symbol,
@@ -188,7 +181,7 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
         if (
             not cached.empty
             and "Close" in cached.columns
-            and not _needs_same_day_refresh(data_file, curr_date_dt, today_date)
+            and _cache_is_fresh(data_file, curr_date_dt, today_date)
         ):
             data = cached
 
@@ -207,7 +200,18 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
             raise NoMarketDataError(
                 symbol, canonical, "Yahoo Finance returned no rows"
             )
-        downloaded.to_csv(data_file, index=False, encoding="utf-8")
+        fd, temporary = tempfile.mkstemp(
+            dir=config["data_cache_dir"],
+            prefix=f".{safe_symbol}-YFin-data.",
+            suffix=".tmp",
+        )
+        os.close(fd)
+        try:
+            downloaded.to_csv(temporary, index=False, encoding="utf-8")
+            os.replace(temporary, data_file)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
         data = downloaded
 
     data = _clean_dataframe(data)

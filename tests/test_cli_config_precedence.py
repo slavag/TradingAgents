@@ -61,6 +61,35 @@ def test_checkpoint_none_preserves_env_default():
     assert cfg["checkpoint_enabled"] is True  # not clobbered back to False
 
 
+def test_unselected_thinking_knobs_preserve_configured_tier_values():
+    patched = dict(
+        m.DEFAULT_CONFIG,
+        google_thinking_level="high",
+        openai_reasoning_effort="medium",
+        anthropic_effort="low",
+    )
+    with mock.patch.object(m, "DEFAULT_CONFIG", patched):
+        cfg = m._build_run_config(SELECTIONS, checkpoint=None)
+    assert cfg["google_thinking_level"] == "high"
+    assert cfg["openai_reasoning_effort"] == "medium"
+    assert cfg["anthropic_effort"] == "low"
+
+
+def test_role_provider_choices_reach_graph_config():
+    selections = dict(
+        SELECTIONS,
+        quick_provider="anthropic",
+        deep_provider="google",
+        final_report_provider="azure",
+        final_report_model="custom-deployment",
+    )
+    cfg = m._build_run_config(selections, checkpoint=None)
+    assert cfg["quick_think_provider"] == "anthropic"
+    assert cfg["deep_think_provider"] == "google"
+    assert cfg["final_report_provider"] == "azure"
+    assert cfg["final_report_llm"] == "custom-deployment"
+
+
 def test_interactive_verifier_selection_sets_final_report_role():
     selections = dict(SELECTIONS, final_report_provider="anthropic",
                       final_report_model="claude-sonnet-5-5")

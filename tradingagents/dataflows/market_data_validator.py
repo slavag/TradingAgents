@@ -13,11 +13,13 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import date, datetime
 from decimal import Decimal
+from numbers import Real
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 from stockstats import wrap
 
+from tradingagents.dataflows.price_format import price_text
 from tradingagents.dataflows.stockstats_utils import load_ohlcv
 
 # A fixed, common indicator set so the snapshot is the same shape every run.
@@ -73,8 +75,8 @@ def _fmt(value) -> str:
         return str(value)
     if isinstance(value, (int,)):
         return str(value)
-    if isinstance(value, float):
-        return f"{value:.2f}"
+    if isinstance(value, Real):
+        return price_text(float(value))
     return str(value)
 
 

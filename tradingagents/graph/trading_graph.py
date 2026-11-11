@@ -4,8 +4,8 @@ import json
 import logging
 import os
 from contextlib import contextmanager
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -31,13 +31,15 @@ from tradingagents.agents.utils.agent_utils import (
     resolve_instrument_identity,
 )
 from tradingagents.agents.utils.memory import TradingMemoryLog
-from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.config import run_config
+from tradingagents.dataflows.errors import VendorUnavailableError
 from tradingagents.dataflows.temporal import is_historical, use_analysis_context
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG, validate_outcome_holding_days
 from tradingagents.investor_deck import build_investor_deck
 from tradingagents.llm_clients import create_llm_client
 from tradingagents.llm_clients.prompt_cache import PromptCachePolicy
+from tradingagents.portfolio.state import PortfolioContext
 from tradingagents.reporting import write_report_tree
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -50,12 +52,21 @@ from .signal_processing import SignalProcessor
 logger = logging.getLogger(__name__)
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _quick_prompt_cache_policy(config: dict[str, Any]) -> PromptCachePolicy:
     provider = str(
         config.get("quick_think_provider")
         or config.get("llm_provider")
         or DEFAULT_CONFIG["llm_provider"]
     ).lower()
+    primary_provider = str(config.get("llm_provider") or DEFAULT_CONFIG["llm_provider"]).lower()
+    role_base_url = config.get("quick_backend_url")
+    base_url = role_base_url or (
+        config.get("backend_url") if provider == primary_provider else None
+    )
     return PromptCachePolicy(
         provider=provider,
         model=str(config.get("quick_think_llm") or ""),
@@ -63,7 +74,7 @@ def _quick_prompt_cache_policy(config: dict[str, Any]) -> PromptCachePolicy:
             provider != "anthropic"
             or config.get("anthropic_prompt_cache", True) is True
         ),
-        base_url=config.get("quick_backend_url") or config.get("backend_url"),
+        base_url=base_url,
     )
 
 
@@ -77,7 +88,13 @@ class RealizedOutcome:
     holding_days: int
     entry_date: str
     exit_date: str
-    return_basis: str = "gross"
+    return_basis: str = "first_close_gross"
+
+
+@dataclass
+class Settlement:
+    settled: list[tuple[str, str]] = field(default_factory=list)
+    failed: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 def _coerce_max_retries(value):
@@ -119,9 +136,6 @@ class TradingAgentsGraph:
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
         self.callbacks = callbacks or []
-
-        # Update the interface's config
-        set_config(self.config)
 
         # Create necessary directories
         os.makedirs(self.config["data_cache_dir"], exist_ok=True)
@@ -174,9 +188,32 @@ class TradingAgentsGraph:
 
         # Graph-shape-affecting run choices, kept for the checkpoint signature.
         self.selected_analysts = tuple(selected_analysts)
+        parallel_analysts = self.config.get("parallel_analysts", False)
+        background_settlement = self.config.get("background_settlement", False)
+        max_tool_rounds = self.config.get("max_tool_rounds", 8)
+        max_recur_limit = self.config.get("max_recur_limit", 100)
+        if not isinstance(parallel_analysts, bool):
+            raise ValueError("parallel_analysts must be a boolean")
+        if not isinstance(background_settlement, bool):
+            raise ValueError("background_settlement must be a boolean")
+        if background_settlement and not parallel_analysts:
+            raise ValueError("background_settlement requires parallel_analysts")
+        if (
+            isinstance(max_tool_rounds, bool)
+            or not isinstance(max_tool_rounds, int)
+            or max_tool_rounds < 1
+            or 2 * max_tool_rounds + 2 >= max_recur_limit
+        ):
+            raise ValueError("max_tool_rounds must be positive and fit max_recur_limit")
 
         # Set up the graph: keep the workflow for recompilation with a checkpointer.
-        self.workflow = self.graph_setup.setup_graph(selected_analysts)
+        self.workflow = self.graph_setup.setup_graph(
+            selected_analysts,
+            parallel_analysts=parallel_analysts,
+            max_tool_rounds=max_tool_rounds,
+            background_settlement=background_settlement,
+            memory_node=self._memory_node if background_settlement else None,
+        )
         self.graph = self.workflow.compile()
 
     def _get_provider_kwargs(self, provider: str | None = None) -> dict[str, Any]:
@@ -226,7 +263,13 @@ class TradingAgentsGraph:
             or DEFAULT_CONFIG["llm_provider"]
         )
         model = self.config.get(model_key)
-        base_url = self.config.get(base_url_key) or self.config.get("backend_url")
+        primary_provider = (
+            self.config.get("llm_provider") or DEFAULT_CONFIG["llm_provider"]
+        )
+        base_url = self.config.get(base_url_key) or (
+            self.config.get("backend_url")
+            if provider.lower() == primary_provider.lower() else None
+        )
 
         llm_kwargs = self._get_provider_kwargs(provider)
         if self.callbacks:
@@ -293,11 +336,13 @@ class TradingAgentsGraph:
         entry, which is the right default because the excess-return calculation works
         in USD.
         """
+        from tradingagents.dataflows.symbol_utils import normalize_symbol
+
         explicit = self.config.get("benchmark_ticker")
         if explicit:
-            return explicit
+            return normalize_symbol(explicit)
         benchmark_map = self.config.get("benchmark_map", {})
-        ticker_upper = ticker.upper()
+        ticker_upper = normalize_symbol(ticker)
         for suffix, benchmark in benchmark_map.items():
             if suffix and ticker_upper.endswith(suffix.upper()):
                 return benchmark
@@ -310,64 +355,68 @@ class TradingAgentsGraph:
     ) -> RealizedOutcome | None:
         """Fetch an executable gross outcome over common trading sessions.
 
-        Entry is the next common session's adjusted open and exit is the
-        ``holding_days``-th common session's adjusted close. ``available_through``
-        caps both the vendor request and usable sessions for point-in-time runs.
+        Entry is the first completed common close after the decision and exit
+        is ``holding_days`` completed common sessions later. Current session
+        bars are excluded in each market's local date.
         """
         from tradingagents.dataflows.symbol_utils import normalize_symbol
 
         try:
             signal = datetime.strptime(trade_date, "%Y-%m-%d")
+            cutoff = (
+                datetime.strptime(available_through, "%Y-%m-%d")
+                if available_through is not None
+                else _utcnow().replace(tzinfo=None)
+            )
+            if (cutoff - signal).days < holding_days + 1:
+                return None
             fetch_start = (signal + timedelta(days=1)).strftime("%Y-%m-%d")
-            buffered_end = signal + timedelta(days=holding_days * 3 + 7)
-            if available_through is not None:
-                cutoff = datetime.strptime(available_through, "%Y-%m-%d")
-                # yfinance's end is exclusive, so include the cutoff session by
-                # requesting through the following calendar day.
-                buffered_end = min(buffered_end, cutoff + timedelta(days=1))
-            fetch_end = buffered_end.strftime("%Y-%m-%d")
+            cutoff_end = cutoff + timedelta(days=1)
+            buffered_end = min(
+                signal + timedelta(days=(holding_days + 1) * 3 + 7),
+                cutoff_end,
+            )
 
             # Normalize so the realized-return lookup hits the same instrument
             # the analysis priced (e.g. XAUUSD -> GC=F) (#984). The benchmark is
             # already a canonical Yahoo symbol from ``_resolve_benchmark``.
-            stock = yf.Ticker(normalize_symbol(ticker)).history(
-                start=fetch_start,
-                end=fetch_end,
-                auto_adjust=True,
-                actions=False,
-            )
-            bench = yf.Ticker(benchmark).history(
-                start=fetch_start,
-                end=fetch_end,
-                auto_adjust=True,
-                actions=False,
-            )
+            def completed_closes(frame: pd.DataFrame, name: str) -> pd.DataFrame:
+                prices = frame[["Close"]].rename(columns={"Close": name})
+                index = pd.to_datetime(prices.index)
+                now = pd.Timestamp(_utcnow())
+                market_today = now.tz_convert(index.tz).date() if index.tz else now.date()
+                prices = prices[index.date < market_today]
+                prices.index = pd.to_datetime(prices.index).tz_localize(None).normalize()
+                prices = prices[(prices[name] > 0) & (prices.index > pd.Timestamp(trade_date))]
+                return prices
 
-            stock_prices = stock[["Open", "Close"]].rename(
-                columns={"Open": "stock_open", "Close": "stock_close"}
-            )
-            benchmark_prices = bench[["Open", "Close"]].rename(
-                columns={"Open": "benchmark_open", "Close": "benchmark_close"}
-            )
-            stock_prices.index = (
-                pd.to_datetime(stock_prices.index).tz_localize(None).normalize()
-            )
-            benchmark_prices.index = (
-                pd.to_datetime(benchmark_prices.index).tz_localize(None).normalize()
-            )
-            common = stock_prices.join(benchmark_prices, how="inner").dropna()
-            common = common[common.index > pd.Timestamp(trade_date)]
-            if available_through is not None:
-                common = common[common.index <= pd.Timestamp(available_through)]
-            if len(common) < holding_days:
+            def common_closes(end: datetime) -> pd.DataFrame:
+                fetch_end = end.strftime("%Y-%m-%d")
+                stock = yf.Ticker(normalize_symbol(ticker)).history(
+                    start=fetch_start, end=fetch_end, auto_adjust=True,
+                    actions=False,
+                )
+                bench = yf.Ticker(benchmark).history(
+                    start=fetch_start, end=fetch_end, auto_adjust=True,
+                    actions=False,
+                )
+                stock_prices = completed_closes(stock, "stock_close")
+                benchmark_prices = completed_closes(bench, "benchmark_close")
+                common = stock_prices.join(benchmark_prices, how="inner").dropna()
+                return common[common.index <= pd.Timestamp(cutoff)]
+
+            common = common_closes(buffered_end)
+            if len(common) <= holding_days and buffered_end < cutoff_end:
+                common = common_closes(cutoff_end)
+            if len(common) <= holding_days:
                 return None
 
-            window = common.iloc[:holding_days]
+            window = common.iloc[: holding_days + 1]
             entry = window.iloc[0]
             exit_row = window.iloc[-1]
-            raw_return = float(exit_row["stock_close"] / entry["stock_open"] - 1)
+            raw_return = float(exit_row["stock_close"] / entry["stock_close"] - 1)
             benchmark_return = float(
-                exit_row["benchmark_close"] / entry["benchmark_open"] - 1
+                exit_row["benchmark_close"] / entry["benchmark_close"] - 1
             )
             return RealizedOutcome(
                 raw_return=raw_return,
@@ -379,14 +428,14 @@ class TradingAgentsGraph:
             )
         except Exception as e:
             logger.warning(
-                "Could not resolve outcome for %s on %s vs %s (will retry next run): %s",
-                ticker, trade_date, benchmark, e,
+                "Could not resolve outcome for %s on %s vs %s (%s)",
+                ticker, trade_date, benchmark, type(e).__name__,
             )
-            return None
+            raise VendorUnavailableError("Outcome price provider failed") from None
 
     def _resolve_pending_entries(
         self, ticker: str, as_of_date: str | None = None,
-    ) -> None:
+    ) -> Settlement:
         """Resolve pending log entries for ticker at the start of a new run.
 
         Fetches returns for each same-ticker pending entry, generates reflections,
@@ -396,9 +445,10 @@ class TradingAgentsGraph:
         Trade-off: only same-ticker entries are resolved per run.  Entries for
         other tickers accumulate until that ticker is run again.
         """
+        result = Settlement()
         pending = [e for e in self.memory_log.get_pending_entries() if e["ticker"] == ticker]
         if not pending:
-            return
+            return result
 
         benchmark = self._resolve_benchmark(ticker)
         holding_days = validate_outcome_holding_days(
@@ -406,21 +456,31 @@ class TradingAgentsGraph:
         )
         updates = []
         for entry in pending:
-            outcome = self._fetch_returns(
-                ticker,
-                entry["date"],
-                holding_days=holding_days,
-                benchmark=benchmark,
-                available_through=as_of_date,
-            )
+            try:
+                outcome = self._fetch_returns(
+                    ticker,
+                    entry["date"],
+                    holding_days=holding_days,
+                    benchmark=benchmark,
+                    available_through=as_of_date,
+                )
+            except Exception:
+                logger.warning("Outcome prices unavailable for %s on %s", ticker, entry["date"])
+                result.failed.append((ticker, entry["date"], "prices unavailable"))
+                continue
             if outcome is None:
                 continue  # price not available yet — try again next run
-            reflection = self.reflector.reflect_on_final_decision(
-                final_decision=entry.get("decision", ""),
-                raw_return=outcome.raw_return,
-                excess_return=outcome.excess_return,
-                benchmark_name=benchmark,
-            )
+            try:
+                reflection = self.reflector.reflect_on_final_decision(
+                    final_decision=entry.get("decision", ""),
+                    raw_return=outcome.raw_return,
+                    excess_return=outcome.excess_return,
+                    benchmark_name=benchmark,
+                )
+            except Exception:
+                logger.warning("Outcome reflection unavailable for %s on %s", ticker, entry["date"])
+                result.failed.append((ticker, entry["date"], "reflection unavailable"))
+                continue
             updates.append({
                 "ticker": ticker,
                 "trade_date": entry["date"],
@@ -435,7 +495,58 @@ class TradingAgentsGraph:
             })
 
         if updates:
-            self.memory_log.batch_update_with_outcomes(updates)
+            try:
+                self.memory_log.batch_update_with_outcomes(updates)
+            except Exception:
+                logger.warning("Outcome log write unavailable for %s", ticker)
+                result.failed.extend(
+                    (ticker, update["trade_date"], "memory write unavailable")
+                    for update in updates
+                )
+            else:
+                result.settled.extend((ticker, update["trade_date"]) for update in updates)
+        return result
+
+    def settle_all_pending(
+        self, *, as_of_date: str | None = None, wait: bool = True
+    ) -> Settlement:
+        """Attempt due outcomes for every ticker currently pending in the log."""
+        result = Settlement()
+        with self.memory_log.settling(wait=wait) as held:
+            if not held:
+                return result
+            pending = self.memory_log.get_pending_entries()
+            for ticker in dict.fromkeys(entry["ticker"] for entry in pending):
+                settled = self._resolve_pending_entries(ticker, as_of_date=as_of_date)
+                if settled is not None:
+                    result.settled.extend(settled.settled)
+                    result.failed.extend(settled.failed)
+        return result
+
+    def _memory_node(self, state: dict) -> dict[str, str]:
+        """Settle all due tickers while analysts work, then load cutoff-safe lessons."""
+        ticker = state["company_of_interest"]
+        trade_date = state["trade_date"]
+        note = ""
+        try:
+            settled = self.settle_all_pending(as_of_date=trade_date, wait=False)
+            if settled.failed:
+                note = (
+                    f"{len(settled.failed)} past decision(s) could not be "
+                    "settled this run and remain pending."
+                )
+        except Exception as exc:
+            logger.warning("Past-decision settlement failed: %s", type(exc).__name__)
+            note = f"Past decisions could not be settled ({type(exc).__name__})."
+        try:
+            past_context = self.memory_log.get_past_context(
+                ticker, as_of_date=trade_date
+            )
+        except Exception as exc:
+            logger.warning("Memory log read failed: %s", type(exc).__name__)
+            past_context = ""
+            note = note or f"Past decisions could not be read ({type(exc).__name__})."
+        return {"past_context": past_context, "memory_note": note}
 
     def resolve_instrument_context(self, ticker: str, asset_type: str = "stock") -> str:
         """Resolve ticker identity once and return the full instrument context.
@@ -451,7 +562,9 @@ class TradingAgentsGraph:
         identity = resolve_instrument_identity(ticker)
         return build_instrument_context(ticker, asset_type, identity)
 
-    def _run_signature(self, asset_type: str) -> str:
+    def _run_signature(
+        self, asset_type: str, portfolio: PortfolioContext | None = None
+    ) -> str:
         """Graph-shape inputs that must invalidate a checkpoint if changed.
 
         Keyed into the checkpoint thread ID so a resume under a different analyst
@@ -464,6 +577,10 @@ class TradingAgentsGraph:
             f"risk={self.config['max_risk_discuss_rounds']}",
             f"asset={asset_type}",
             f"enrichment={bool(self.config.get('enrichment_enabled', True))}",
+            f"portfolio={portfolio.fingerprint() if portfolio is not None else 'none'}",
+            f"parallel={self.config.get('parallel_analysts', False)}",
+            f"background_settlement={self.config.get('background_settlement', False)}",
+            f"max_tool_rounds={self.config.get('max_tool_rounds', 8)}",
         ])
 
     @contextmanager
@@ -473,11 +590,29 @@ class TradingAgentsGraph:
         trade_date,
         asset_type,
         callbacks=None,
+        portfolio: PortfolioContext | dict | None = None,
     ):
         """Prepare and clean up every graph execution entry point."""
-        with use_analysis_context(trade_date):
+        portfolio_context = (
+            PortfolioContext.model_validate(portfolio)
+            if portfolio is not None else None
+        )
+        with run_config(self.config), use_analysis_context(trade_date):
             self.ticker = company_name
-            self._resolve_pending_entries(company_name, as_of_date=str(trade_date))
+            background_settlement = self.config.get("background_settlement", False)
+            settlement_note = ""
+            if not background_settlement:
+                with self.memory_log.settling() as held:
+                    if held:
+                        settled = self._resolve_pending_entries(
+                            company_name, as_of_date=str(trade_date)
+                        )
+                        failures = getattr(settled, "failed", [])
+                        if failures:
+                            settlement_note = (
+                                f"{len(failures)} past decision(s) could not be "
+                                "settled this run and remain pending."
+                            )
             checkpoint_context = None
             try:
                 if self.config.get("checkpoint_enabled"):
@@ -491,7 +626,7 @@ class TradingAgentsGraph:
                         self.config["data_cache_dir"],
                         company_name,
                         str(trade_date),
-                        self._run_signature(asset_type),
+                        self._run_signature(asset_type, portfolio_context),
                     )
                     if step is not None:
                         logger.info(
@@ -505,8 +640,10 @@ class TradingAgentsGraph:
                             "Starting fresh for %s on %s", company_name, trade_date
                         )
 
-                past_context = self.memory_log.get_past_context(
-                    company_name, as_of_date=str(trade_date)
+                past_context = (
+                    "" if background_settlement else self.memory_log.get_past_context(
+                        company_name, as_of_date=str(trade_date)
+                    )
                 )
                 instrument_context = self.resolve_instrument_context(
                     company_name, asset_type
@@ -518,12 +655,16 @@ class TradingAgentsGraph:
                     past_context=past_context,
                     instrument_context=instrument_context,
                 )
+                if settlement_note:
+                    initial_state["memory_note"] = settlement_note
+                if portfolio_context is not None:
+                    initial_state["portfolio_context"] = portfolio_context.render(company_name)
                 args = self.propagator.get_graph_args(callbacks=callbacks)
                 if self.config.get("checkpoint_enabled"):
                     run_thread_id = thread_id(
                         company_name,
                         str(trade_date),
-                        self._run_signature(asset_type),
+                        self._run_signature(asset_type, portfolio_context),
                     )
                     args.setdefault("config", {}).setdefault("configurable", {})[
                         "thread_id"
@@ -534,7 +675,10 @@ class TradingAgentsGraph:
                     checkpoint_context.__exit__(None, None, None)
                     self.graph = self.workflow.compile()
 
-    def _complete_run(self, company_name, trade_date, asset_type, final_state):
+    def _complete_run(
+        self, company_name, trade_date, asset_type, final_state,
+        portfolio: PortfolioContext | None = None,
+    ):
         """Persist state and memory only after a graph run fully completes."""
         self.curr_state = final_state
         self._log_state(trade_date, final_state)
@@ -548,7 +692,7 @@ class TradingAgentsGraph:
                 self.config["data_cache_dir"],
                 company_name,
                 str(trade_date),
-                self._run_signature(asset_type),
+                self._run_signature(asset_type, portfolio),
             )
 
     def stream(
@@ -557,10 +701,15 @@ class TradingAgentsGraph:
         trade_date,
         asset_type: str = "stock",
         callbacks=None,
+        portfolio: PortfolioContext | dict | None = None,
     ):
         """Yield value chunks while owning the complete execution lifecycle."""
+        portfolio_context = (
+            PortfolioContext.model_validate(portfolio) if portfolio is not None else None
+        )
         with self._execution_scope(
-            company_name, trade_date, asset_type, callbacks=callbacks
+            company_name, trade_date, asset_type, callbacks=callbacks,
+            portfolio=portfolio_context,
         ) as (initial_state, args):
             final_state = None
             for chunk in self.graph.stream(initial_state, **args):
@@ -571,11 +720,18 @@ class TradingAgentsGraph:
                     "Graph execution produced no value chunks for "
                     f"{company_name} on {trade_date}."
                 )
-            self._complete_run(company_name, trade_date, asset_type, final_state)
+            self._complete_run(
+                company_name, trade_date, asset_type, final_state, portfolio_context
+            )
 
-    def propagate(self, company_name, trade_date, asset_type: str = "stock"):
+    def propagate(
+        self, company_name, trade_date, asset_type: str = "stock",
+        portfolio: PortfolioContext | dict | None = None,
+    ):
         """Run the graph to completion and return its state and processed signal."""
-        return self._run_graph(company_name, trade_date, asset_type=asset_type)
+        return self._run_graph(
+            company_name, trade_date, asset_type=asset_type, portfolio=portfolio
+        )
 
     def save_reports(self, final_state, ticker, save_path=None) -> Path:
         """Write the markdown report tree for a completed run, like the CLI does.
@@ -599,10 +755,16 @@ class TradingAgentsGraph:
             deck = None
         return write_report_tree(final_state, ticker, save_path, investor_deck=deck)
 
-    def _run_graph(self, company_name, trade_date, asset_type: str = "stock"):
+    def _run_graph(
+        self, company_name, trade_date, asset_type: str = "stock",
+        portfolio: PortfolioContext | dict | None = None,
+    ):
         """Execute the non-streaming graph lifecycle."""
+        portfolio_context = (
+            PortfolioContext.model_validate(portfolio) if portfolio is not None else None
+        )
         with TradingAgentsGraph._execution_scope(
-            self, company_name, trade_date, asset_type
+            self, company_name, trade_date, asset_type, portfolio=portfolio_context
         ) as (initial_state, args):
             if self.debug:
                 final_state = {}
@@ -629,7 +791,8 @@ class TradingAgentsGraph:
             else:
                 final_state = self.graph.invoke(initial_state, **args)
             TradingAgentsGraph._complete_run(
-                self, company_name, trade_date, asset_type, final_state
+                self, company_name, trade_date, asset_type, final_state,
+                portfolio_context,
             )
 
         return final_state, self.process_signal(final_state["final_trade_decision"])

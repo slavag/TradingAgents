@@ -1,7 +1,9 @@
 from typing import Annotated
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
+from tradingagents.dataflows.date_window import as_of
 from tradingagents.dataflows.interface import route_to_vendor
 
 
@@ -11,12 +13,15 @@ def get_macro_indicators(
         str,
         "Macro indicator: a friendly alias such as 'cpi', 'core_pce', "
         "'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve', "
-        "'real_gdp', 'vix', or a raw FRED series ID such as 'CPIAUCSL'.",
+        "'real_gdp', 'vix', euro-area aliases such as 'ecb_deposit_rate', "
+        "'euro_hicp', 'euro_core_hicp', 'euro_real_gdp', 'germany_10y', "
+        "'france_10y', 'eur_usd', or a raw FRED series ID such as 'CPIAUCSL'.",
     ],
     curr_date: Annotated[str, "Current date in yyyy-mm-dd format; the end of the window"],
     look_back_days: Annotated[
         int | None, "Trailing window length in days; omit for a 1-year window"
     ] = None,
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
 ) -> str:
     """
     Retrieve a macroeconomic indicator time series from FRED (Federal Reserve
@@ -33,4 +38,8 @@ def get_macro_indicators(
     Returns:
         str: A formatted markdown report of the macro series
     """
-    return route_to_vendor("get_macro_indicators", indicator, curr_date, look_back_days)
+    try:
+        date = as_of(curr_date, trade_date)
+    except ValueError as exc:
+        return str(exc)
+    return route_to_vendor("get_macro_indicators", indicator, date, look_back_days)

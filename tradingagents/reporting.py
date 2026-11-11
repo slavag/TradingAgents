@@ -37,6 +37,7 @@ _EVIDENCE_KEYS = (
     "trader_investment_plan",
     "past_context",
     "instrument_context",
+    "portfolio_context",
     "company_of_interest",
     "asset_type",
 )
@@ -63,6 +64,38 @@ _SOURCE_FINGERPRINT_KEYS = (
     "origin",
     "truncated",
 )
+_OWNED_SECTION_FILES = (
+    ("1_analysts", "market.md"),
+    ("1_analysts", "sentiment.md"),
+    ("1_analysts", "news.md"),
+    ("1_analysts", "fundamentals.md"),
+    ("2_research", "bull.md"),
+    ("2_research", "bear.md"),
+    ("2_research", "manager.md"),
+    ("3_trading", "trader.md"),
+    ("4_risk", "aggressive.md"),
+    ("4_risk", "conservative.md"),
+    ("4_risk", "neutral.md"),
+    ("5_portfolio", "decision.md"),
+)
+
+
+def _reject_report_symlinks(save_path: Path, stem: str, investor_stem: str) -> None:
+    """Prevent an owned report path from redirecting writes outside its run folder."""
+    paths = [
+        save_path / "0_sources",
+        save_path / "0_sources" / "evidence.json",
+        save_path / "0_sources" / "README.md",
+        save_path / "forecast_record.json",
+        save_path / "run_manifest.json",
+        save_path / f"{stem}.md",
+        save_path / f"{stem}.html",
+        save_path / f"{investor_stem}.html",
+    ]
+    paths.extend(save_path / dirname for dirname, _ in _OWNED_SECTION_FILES)
+    paths.extend(save_path / dirname / filename for dirname, filename in _OWNED_SECTION_FILES)
+    if any(path.is_symlink() for path in paths):
+        raise ValueError("report target cannot be a symlink")
 
 
 def _fingerprint(payload) -> str:
@@ -141,6 +174,8 @@ def _generated_at_from_manifest(manifest: dict | None) -> datetime | None:
 
 
 def _write_immutable_forecast_record(path: Path, record) -> None:
+    if path.is_symlink():
+        raise ValueError("forecast record target cannot be a symlink")
     payload = record.model_dump(mode="json")
     if path.exists():
         try:
@@ -166,8 +201,12 @@ def write_source_evidence(final_state: dict, save_path: str | Path) -> Path | No
     if not records:
         return None
     sources_dir = Path(save_path) / "0_sources"
+    if sources_dir.is_symlink():
+        raise ValueError("source evidence target cannot be a symlink")
     sources_dir.mkdir(parents=True, exist_ok=True)
     evidence_path = sources_dir / "evidence.json"
+    if evidence_path.is_symlink() or (sources_dir / "README.md").is_symlink():
+        raise ValueError("source evidence target cannot be a symlink")
     payload = json.loads(json.dumps(records, default=str))
     if evidence_path.exists():
         try:
@@ -221,6 +260,7 @@ def write_report_tree(
     investor_stem = report_stem("investor", [ticker], stamp)
     save_path = Path(save_path)
     save_path.mkdir(parents=True, exist_ok=True)
+    _reject_report_symlinks(save_path, stem, investor_stem)
     write_source_evidence(final_state, save_path)
     sections = []
     report_parts = []
@@ -387,4 +427,14 @@ def write_report_tree(
             ticker, analysis_date, full_report_href or f"{stem}.html", stamp,
         )
     (save_path / f"{investor_stem}.html").write_text(investor_html, encoding="utf-8")
+    written_sections = {
+        (dirname, filename)
+        for _title, dirname, parts in report_parts
+        for _label, filename, _content in parts
+    }
+    for dirname, filename in _OWNED_SECTION_FILES:
+        if (dirname, filename) not in written_sections:
+            stale = save_path / dirname / filename
+            if stale.is_file():
+                stale.unlink()
     return markdown_path

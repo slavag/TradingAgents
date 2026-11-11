@@ -103,6 +103,13 @@ _METRICS = (
             ("ifrs-full", "CashFlowsFromUsedInOperatingActivities"),
         ),
     ),
+    (
+        "Capital expenditures",
+        (
+            ("us-gaap", "PaymentsToAcquirePropertyPlantAndEquipment"),
+            ("us-gaap", "PaymentsToAcquireProductiveAssets"),
+        ),
+    ),
 )
 
 
@@ -623,12 +630,13 @@ def get_company_filings(ticker: str, curr_date: str) -> list[dict[str, Any]]:
     """
     as_of = curr_date if isinstance(curr_date, str) else ""
     try:
-        if not isinstance(curr_date, str) or not curr_date:
+        if not isinstance(curr_date, str) or not re.fullmatch(
+            r"[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}", curr_date
+        ):
             raise ValueError("missing date")
-        context = build_analysis_context(curr_date)
+        year, month, day = (int(part) for part in curr_date.split("-"))
+        context = build_analysis_context(date(year, month, day).isoformat())
         as_of = context.as_of_date.isoformat()
-        if curr_date != as_of:
-            raise ValueError("date is not canonical")
     except (TypeError, ValueError):
         return [
             _unavailable(

@@ -19,13 +19,14 @@ class _FakeGraph:
         self.stream_calls = []
         self.__class__.instances.append(self)
 
-    def stream(self, ticker, analysis_date, *, asset_type="stock", callbacks=None):
+    def stream(self, ticker, analysis_date, *, asset_type="stock", callbacks=None, portfolio=None):
         self.stream_calls.append(
             {
                 "ticker": ticker,
                 "analysis_date": analysis_date,
                 "asset_type": asset_type,
                 "callbacks": callbacks,
+                "portfolio": portfolio,
             }
         )
         yield {
@@ -212,6 +213,7 @@ class WebServiceTests(unittest.TestCase):
             payload = {
                 "tickers": "AAA, BBB",
                 "analysis_date": "2026-07-05",
+                "portfolio": {"cash": "1000", "positions": []},
                 "analysts": ["market"],
                 "research_depth": 1,
                 "quick_provider": "openai",
@@ -304,6 +306,7 @@ class WebServiceTests(unittest.TestCase):
             self.assertEqual(stream_call["ticker"], "AAA")
             self.assertEqual(stream_call["analysis_date"], "2026-07-05")
             self.assertEqual(stream_call["asset_type"], "stock")
+            self.assertEqual(stream_call["portfolio"].cash, 1000)
             self.assertEqual(len(stream_call["callbacks"]), 1)
             self.assertIsInstance(stream_call["callbacks"][0], StatsCallbackHandler)
             self.assertFalse(hasattr(web_service, "_stream_graph_in_analysis_context"))

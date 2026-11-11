@@ -20,6 +20,8 @@ Start an isolated `codex/` branch/worktree from the current committed fork tip. 
 
 The release's packaging/dependency changes are adopted only where required by an included feature and verified against the fork's supported Python/environment matrix. A release-note feature that is incompatible with the fork is documented as a deliberate omission, not silently marked complete.
 
+Jev follows upstream v0.7.1's key-gated behavior by the user's 2026-11-08 instruction: `TYPESAFE_API_KEY` alone enables screening of newly fetched live social posts; the older `TRADINGAGENTS_JEV_SCREENING` flag is not required. Preserve the fork's historical safety boundary: historical social feeds do not provide archived posts and never send current posts to Jev. No sign-in, vendor call, or post export occurs merely from app startup.
+
 ## Verification and handoff
 
 Before each stage, capture the isolated workspace baseline and an upstream-disposition ledger. The current dirty checkout's first `pytest -q` run on 2026-11-07 had seven pre-existing Discover market-evidence test failures because fixed October 15 quote fixtures are now stale under the live clock; freeze that test clock without weakening production freshness rules before judging integration regressions. For accepted changes, prove a regression fails before implementation and passes after it where feasible. Run focused tests, then full `pytest -q`, `ruff check .`, relevant Node/web tests, `git diff --check`, package/import smoke, and conflict-marker checks. Verify point-in-time and decision/output behavior on offline fixtures. Do not trigger live LLM, provider, or broker calls for QA. Report any optional dependency skip, warning, unsupported provider, and untested live path explicitly.

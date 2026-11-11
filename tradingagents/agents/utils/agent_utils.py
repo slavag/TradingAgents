@@ -232,6 +232,9 @@ def get_agent_context_from_state(
     )
 
     context = get_instrument_context_from_state(state)
+    portfolio_context = state.get("portfolio_context")
+    if isinstance(portfolio_context, str) and portfolio_context:
+        context += "\n\n" + portfolio_context
     context += render_shared_evidence(state, role)
     if include_reports:
         context += render_original_reports(state)

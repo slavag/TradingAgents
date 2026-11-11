@@ -47,6 +47,10 @@ class VendorRateLimitError(VendorError):
     """A vendor throttled the request; the router skips to the next vendor."""
 
 
+class VendorUnavailableError(VendorError):
+    """A vendor could not establish usable coverage; this is not an absence of data."""
+
+
 class VendorNotConfiguredError(VendorError, ValueError):
     """A vendor was selected but its API key/configuration is missing.
 

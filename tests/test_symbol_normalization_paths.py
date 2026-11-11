@@ -5,6 +5,8 @@ the news path: a broker symbol like XAUUSD must resolve to the same Yahoo symbol
 (GC=F) that the price path uses, so identity, realized-return, and news lookups
 hit the right instrument instead of failing/mismatching.
 """
+from datetime import datetime, timezone
+
 import pandas as pd
 
 import tradingagents.agents.utils.agent_utils as au
@@ -43,11 +45,11 @@ def test_fetch_returns_normalizes_symbol(monkeypatch):
         def history(self, *args, **kwargs):
             return pd.DataFrame(
                 {
-                    "Open": [100.0, 101.0, 102.0, 103.0, 104.0],
-                    "Close": [101.0, 102.0, 103.0, 104.0, 105.0],
+                        "Open": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+                        "Close": [101.0, 102.0, 103.0, 104.0, 105.0, 106.0],
                 },
                 index=pd.to_datetime(
-                    ["2025-01-03", "2025-01-06", "2025-01-07", "2025-01-08", "2025-01-09"]
+                        ["2025-01-03", "2025-01-06", "2025-01-07", "2025-01-08", "2025-01-09", "2025-01-10"]
                 ),
             )
 
@@ -60,7 +62,7 @@ def test_fetch_returns_normalizes_symbol(monkeypatch):
         "2025-01-02",
         holding_days=5,
         benchmark="SPY",
-        available_through="2025-01-09",
+            available_through="2025-01-10",
     )
 
     assert queried[0] == "GC=F"  # stock symbol normalized (#984)
@@ -79,11 +81,22 @@ def test_news_lookup_normalizes_symbol(monkeypatch):
         def get_news(self, count):
             return []
 
+    class FakeSearch:
+        def __init__(self, query, **kwargs):
+            seen["search_query"] = query
+            self.news = [{
+                "title": "Gold market report", "publisher": "Example",
+                "providerPublishTime": int(datetime(2025, 1, 5, tzinfo=timezone.utc).timestamp()),
+                "relatedTickers": ["GC=F"],
+            }]
+
     monkeypatch.setattr(ynews.yf, "Ticker", FakeTicker)
+    monkeypatch.setattr(ynews.yf, "Search", FakeSearch)
     monkeypatch.setattr(ynews, "yf_retry", lambda fn: fn())
 
     out = ynews.get_news_yfinance("XAUUSD", "2025-01-01", "2025-01-10")
 
     assert seen["symbol"] == "GC=F"   # news queried with the canonical symbol
+    assert seen["search_query"] == "GC=F"
     assert "XAUUSD" in out            # the user's ticker stays in the report
     assert "GC=F" in out              # provenance noted

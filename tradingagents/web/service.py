@@ -50,6 +50,7 @@ from tradingagents.portfolio.state import (
     InstrumentConstraint,
     InstrumentForecast,
     PortfolioConstraints,
+    PortfolioContext,
     PortfolioState,
 )
 from tradingagents.report_names import report_stem, utc_report_timestamp
@@ -1040,6 +1041,10 @@ def _latest_run_manifest(run_root: Path, current_run_id: str) -> dict | None:
 def _run_job(job_id: str, payload: dict[str, Any]):
     tickers = normalize_tickers(payload.get("tickers"))
     analysis_date = payload["analysis_date"]
+    portfolio = (
+        PortfolioContext.model_validate(payload["portfolio"])
+        if payload.get("portfolio") is not None else None
+    )
     report_timestamp = utc_report_timestamp()
     selected_analysts = payload.get("analysts") or [
         "market",
@@ -1093,11 +1098,13 @@ def _run_job(job_id: str, payload: dict[str, Any]):
                 )
                 asset_type = "stock"
                 trace = []
+                portfolio_arg = {"portfolio": portfolio} if portfolio is not None else {}
                 for chunk in graph.stream(
                     ticker,
                     analysis_date,
                     asset_type=asset_type,
                     callbacks=[stats_handler],
+                    **portfolio_arg,
                 ):
                     messages = chunk.get("messages") or []
                     if messages:
@@ -1416,6 +1423,9 @@ def _run_job(job_id: str, payload: dict[str, Any]):
 
 
 def create_job(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("portfolio") is not None:
+        book = PortfolioContext.model_validate(payload["portfolio"])
+        payload = {**payload, "portfolio": book.model_dump(mode="json")}
     tickers = normalize_tickers(payload.get("tickers"))
     if not tickers:
         raise ValueError("At least one ticker is required.")

@@ -1,6 +1,8 @@
 import unittest
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from tradingagents.llm_clients.model_catalog import (
     get_model_capabilities,
     get_role_model_options,
@@ -10,6 +12,13 @@ from tradingagents.web.app import AnalysisRequest, _render_index_response
 
 
 class WebModelCatalogTests(unittest.TestCase):
+    def test_analysis_request_rejects_nonfinite_portfolio_numbers(self):
+        with self.assertRaises(ValidationError):
+            AnalysisRequest(
+                tickers="NVDA", analysis_date="2026-10-16",
+                portfolio={"cash": "NaN", "positions": []},
+            )
+
     def test_role_catalog_has_distinct_quick_deep_and_verifier_options(self):
         roles = get_role_model_options()
 

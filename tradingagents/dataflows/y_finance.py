@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 from typing import Annotated
 
@@ -5,6 +6,7 @@ import pandas as pd
 import yfinance as yf
 from dateutil.relativedelta import relativedelta
 
+from .price_format import price_text
 from .stockstats_utils import (
     StockstatsUtils,
     _assert_ohlcv_not_stale,
@@ -14,6 +16,8 @@ from .stockstats_utils import (
 )
 from .symbol_utils import NoMarketDataError, normalize_symbol
 from .temporal import historical_unavailable
+
+_MAIN_CURRENCY_UNIT = {"GBp": "GBP", "GBX": "GBP", "ZAc": "ZAR", "ILA": "ILS"}
 
 
 def get_YFin_data_online(
@@ -52,11 +56,13 @@ def get_YFin_data_online(
     # turns into one clear unavailable signal (#1021).
     _assert_ohlcv_not_stale(data, end_date, symbol, canonical)
 
-    # Round numerical values to 2 decimal places for cleaner display
+    # Preserve the significant digits needed for sub-cent and FX prices.
     numeric_columns = ["Open", "High", "Low", "Close", "Adj Close"]
     for col in numeric_columns:
         if col in data.columns:
-            data[col] = data[col].round(2)
+            data[col] = data[col].map(
+                lambda value: price_text(float(value)) if pd.notna(value) else ""
+            )
 
     # Convert DataFrame to CSV string
     csv_string = data.to_csv()
@@ -288,35 +294,63 @@ def get_fundamentals(
         if not info:
             raise NoMarketDataError(ticker, canonical, "no fundamentals returned")
 
+        def finite_number(value):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            return number if math.isfinite(number) else None
+
+        dividend_yield = finite_number(info.get("dividendYield"))
+        debt_to_equity = finite_number(info.get("debtToEquity"))
+
+        def currency_code(value):
+            return (
+                value if isinstance(value, str) and len(value) == 3
+                and value.isascii() and value.isalpha() else None
+            )
+
+        quote_currency = currency_code(info.get("currency"))
+        main_currency = _MAIN_CURRENCY_UNIT.get(quote_currency, quote_currency)
+        reporting_currency = currency_code(info.get("financialCurrency"))
+
+        def money(key, currency):
+            value = info.get(key)
+            return None if value is None else f"{value} {currency}" if currency else value
+
         fields = [
             ("Name", info.get("longName")),
             ("Sector", info.get("sector")),
             ("Industry", info.get("industry")),
-            ("Market Cap", info.get("marketCap")),
+            ("Market Cap", money("marketCap", main_currency)),
             ("PE Ratio (TTM)", info.get("trailingPE")),
             ("Forward PE", info.get("forwardPE")),
             ("PEG Ratio", info.get("pegRatio")),
             ("Price to Book", info.get("priceToBook")),
-            ("EPS (TTM)", info.get("trailingEps")),
-            ("Forward EPS", info.get("forwardEps")),
-            ("Dividend Yield", info.get("dividendYield")),
+            ("EPS (TTM)", money("trailingEps", main_currency)),
+            ("Forward EPS", money("forwardEps", main_currency)),
+            ("Dividend Yield", None if dividend_yield is None else f"{dividend_yield:g}%"),
             ("Beta", info.get("beta")),
-            ("52 Week High", info.get("fiftyTwoWeekHigh")),
-            ("52 Week Low", info.get("fiftyTwoWeekLow")),
-            ("50 Day Average", info.get("fiftyDayAverage")),
-            ("200 Day Average", info.get("twoHundredDayAverage")),
-            ("Revenue (TTM)", info.get("totalRevenue")),
-            ("Gross Profit", info.get("grossProfits")),
-            ("EBITDA", info.get("ebitda")),
-            ("Net Income", info.get("netIncomeToCommon")),
+            ("52 Week High", money("fiftyTwoWeekHigh", quote_currency)),
+            ("52 Week Low", money("fiftyTwoWeekLow", quote_currency)),
+            ("50 Day Average", money("fiftyDayAverage", quote_currency)),
+            ("200 Day Average", money("twoHundredDayAverage", quote_currency)),
+            ("Revenue (TTM)", money("totalRevenue", reporting_currency)),
+            ("Gross Profit", money("grossProfits", reporting_currency)),
+            ("EBITDA", money("ebitda", reporting_currency)),
+            ("Net Income", money("netIncomeToCommon", reporting_currency)),
             ("Profit Margin", info.get("profitMargins")),
             ("Operating Margin", info.get("operatingMargins")),
             ("Return on Equity", info.get("returnOnEquity")),
             ("Return on Assets", info.get("returnOnAssets")),
-            ("Debt to Equity", info.get("debtToEquity")),
+            (
+                "Debt to Equity",
+                None if debt_to_equity is None
+                else f"{debt_to_equity:g}% ({debt_to_equity / 100:.2f}x)",
+            ),
             ("Current Ratio", info.get("currentRatio")),
-            ("Book Value", info.get("bookValue")),
-            ("Free Cash Flow", info.get("freeCashflow")),
+            ("Book Value", money("bookValue", main_currency)),
+            ("Free Cash Flow", money("freeCashflow", reporting_currency)),
         ]
 
         lines = []

@@ -8,6 +8,7 @@ transport error must degrade to a placeholder rather than raise.
 from __future__ import annotations
 
 import http.client
+import json
 from unittest.mock import patch
 from urllib.error import HTTPError
 
@@ -87,3 +88,21 @@ def test_historical_stocktwits_is_unavailable_without_network(monkeypatch):
     result = fetch_stocktwits_messages("NVDA", as_of_date="2020-01-02")
     assert result.startswith("DATA_UNAVAILABLE:")
     assert "StockTwits" in result
+
+
+@pytest.mark.unit
+def test_escaped_stocktwits_body_is_displayed_as_plain_text(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({"messages": [{"body": "Buy &amp; hold"}]}).encode()
+
+    monkeypatch.setattr(stocktwits, "urlopen", lambda *args, **kwargs: Response())
+    out = fetch_stocktwits_messages("NVDA")
+    assert "Buy & hold" in out
+    assert "&amp;" not in out

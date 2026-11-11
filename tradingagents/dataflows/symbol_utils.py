@@ -124,6 +124,14 @@ def normalize_symbol(raw: str) -> str:
     # Broker CFD/qualifier suffixes Yahoo never uses.
     s = s.rstrip("+.")
 
+    # Hong Kong equity codes are four digits on Yahoo, while brokers often
+    # omit the leading zero. Apply only to numeric .HK symbols.
+    hong_kong = re.fullmatch(r"(\d{1,5})\.HK", s)
+    if hong_kong and int(hong_kong.group(1)) <= 9999:
+        s = f"{int(hong_kong.group(1)):04d}.HK"
+    if re.fullmatch(r"\d{6}\.SH", s):
+        s = s[:-3] + ".SS"
+
     crypto = _normalize_crypto(s)
     if s in _ALIASES:
         canonical = _ALIASES[s]

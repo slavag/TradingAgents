@@ -16,6 +16,7 @@ from .errors import (
     NoMarketDataError,
     VendorNotConfiguredError,
     VendorRateLimitError,
+    VendorUnavailableError,
 )
 from .fmp import get_earnings_context as get_fmp_earnings_context
 from .fred import get_macro_data as get_fred_macro_data
@@ -216,6 +217,7 @@ def route_to_vendor(method: str, *args, **kwargs):
         vendor_chain = all_available_vendors
 
     last_no_data: NoMarketDataError | None = None
+    last_unavailable: Exception | None = None
     first_error: Exception | None = None
     for vendor in vendor_chain:
         vendor_impl = VENDOR_METHODS[method][vendor]
@@ -223,13 +225,21 @@ def route_to_vendor(method: str, *args, **kwargs):
 
         try:
             return impl_func(*args, **kwargs)
-        except VendorRateLimitError:
+        except VendorRateLimitError as e:
             logger.warning("Vendor %r rate-limited for %s; trying next vendor.", vendor, method)
+            last_unavailable = e
             continue
         except VendorNotConfiguredError as e:
             logger.warning("Vendor %r not configured for %s; trying next vendor.", vendor, method)
             if first_error is None:
                 first_error = e  # Surface it if no other vendor can serve the call.
+            last_unavailable = e
+            continue
+        except VendorUnavailableError as e:
+            logger.warning("Vendor %r unavailable for %s; trying next vendor.", vendor, method)
+            if first_error is None or isinstance(first_error, VendorNotConfiguredError):
+                first_error = e
+            last_unavailable = e
             continue
         except NoMarketDataError as e:
             last_no_data = e  # No data here; another configured vendor may have it
@@ -241,7 +251,15 @@ def route_to_vendor(method: str, *args, **kwargs):
             logger.warning("Vendor %r failed for %s: %s", vendor, method, e)
             if first_error is None:
                 first_error = e
+            last_unavailable = e
             continue
+
+    if last_no_data is not None and last_unavailable is not None:
+        return (
+            f"DATA_UNAVAILABLE: {method} could not be verified from every configured "
+            f"vendor ({type(last_unavailable).__name__}); another vendor returned no data, "
+            "which is not proof of absence. Do not fabricate values."
+        )
 
     # If any vendor reported "no data", the symbol is genuinely unavailable.
     # Return one explicit, instructive sentinel rather than a vendor-specific

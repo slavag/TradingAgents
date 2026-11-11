@@ -96,3 +96,14 @@ class TestEffortGate:
         assert captured["kwargs"]["max_tokens"] == 1024
         assert captured["kwargs"]["timeout"] == 30
         assert "effort" not in captured["kwargs"]
+
+    @pytest.mark.parametrize("model,expected", [
+        ("claude-sonnet-4-20250514", False),
+        ("claude-opus-4-5-20251101", True),
+        ("claude-sonnet-4-6-20261001", True),
+        ("claude-opus-4-20250514", False),
+    ])
+    def test_dated_model_uses_version_before_snapshot_date(self, monkeypatch, model, expected):
+        captured = _capture_kwargs(monkeypatch)
+        mod.AnthropicClient(model=model, effort="medium", api_key="x").get_llm()
+        assert ("effort" in captured["kwargs"]) is expected

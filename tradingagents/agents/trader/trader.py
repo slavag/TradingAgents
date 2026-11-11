@@ -62,8 +62,8 @@ def create_trader(llm):
                     "while Sell means exit it; neither implies opening a short. "
                     "Do not re-adjudicate or reverse the directional rating; use the analysts' reports "
                     "to set execution details, sizing, and risk controls. "
-                    "Do not invent a numeric portfolio weight or NAV percentage when no holdings, "
-                    "portfolio value, or risk budget were provided; use conditional sizing guidance. "
+                    "The optional holdings context does not establish portfolio NAV or a risk budget. "
+                    "Do not invent a numeric portfolio weight or NAV percentage; use conditional sizing guidance. "
                     + NO_EXTERNAL_TOOLS
                     + get_language_instruction()
                 ),
@@ -91,7 +91,7 @@ def create_trader(llm):
             "Trader",
         )
 
-        if not state.get("portfolio_context") and has_numeric_portfolio_weight(trader_plan):
+        if has_numeric_portfolio_weight(trader_plan):
             trader_plan = render_stage_unavailable(
                 "Trader Proposal", "unsupported_portfolio_sizing"
             )

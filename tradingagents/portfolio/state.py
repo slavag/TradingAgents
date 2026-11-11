@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from decimal import Decimal
 from enum import Enum
+from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+
+from tradingagents.dataflows.symbol_utils import normalize_symbol
 
 
 class _FrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
 
 class Holding(_FrozenModel):
@@ -64,6 +69,82 @@ class PortfolioState(_FrozenModel):
             Decimal("0"),
         )
         return value / self.total_value
+
+
+class Position(_FrozenModel):
+    """A broker holding supplied to an analysis run, separate from optimizer holdings."""
+
+    ticker: str = Field(pattern=r"^[A-Za-z0-9._/+=^\-]{1,40}$")
+    quantity: Decimal
+    average_price: Decimal | None = Field(default=None, gt=0)
+
+    @field_validator("ticker")
+    @classmethod
+    def _ticker(cls, value: str) -> str:
+        return value.upper()
+
+
+class PortfolioContext(_FrozenModel):
+    """Optional caller book; an empty instance means flat, while None means unknown."""
+
+    cash: Decimal | None = None
+    currency: str | None = Field(default=None, pattern=r"^[A-Za-z]{3}$")
+    positions: tuple[Position, ...] = ()
+
+    @field_validator("currency")
+    @classmethod
+    def _currency(cls, value: str | None) -> str | None:
+        return value.upper() if value is not None else None
+
+    def positions_in(self, ticker: str) -> tuple[Position, ...]:
+        canonical = normalize_symbol(ticker)
+        return tuple(
+            position for position in self.positions
+            if normalize_symbol(position.ticker) == canonical
+        )
+
+    def render(self, ticker: str) -> str:
+        canonical = normalize_symbol(ticker)
+        held = self.positions_in(ticker)
+        lines = []
+        for position in held:
+            basis = (
+                f", average price {position.average_price}"
+                if position.average_price is not None else ""
+            )
+            listed = (
+                f" (listed as {position.ticker})"
+                if position.ticker != canonical else ""
+            )
+            lines.append(
+                f"- Current position in {canonical}: {position.quantity} units{basis}{listed}"
+            )
+        if not held:
+            lines.append(f"- No current position in {canonical}")
+        if self.cash is not None:
+            lines.append(f"- Cash available: {self.cash}{' ' + self.currency if self.currency else ''}")
+        others = [p for p in self.positions if p not in held]
+        if others:
+            lines.append(
+                "- Other positions: "
+                + ", ".join(f"{p.ticker} {p.quantity}" for p in others)
+            )
+        return "Portfolio at the analysis date:\n" + "\n".join(lines)
+
+    def fingerprint(self) -> str:
+        payload = json.dumps(self.model_dump(mode="json"), sort_keys=True)
+        return hashlib.sha256(payload.encode()).hexdigest()[:12]
+
+
+def load_portfolio(path: str | Path) -> PortfolioContext:
+    """Load an optional caller book before starting any analysis work."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return PortfolioContext.model_validate(data)
+    except (OSError, json.JSONDecodeError, ValidationError) as exc:
+        raise ValueError(
+            f"portfolio file {path} is not usable ({type(exc).__name__})"
+        ) from exc
 
 
 class InstrumentForecast(_FrozenModel):

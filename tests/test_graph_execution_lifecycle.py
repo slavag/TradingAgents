@@ -14,7 +14,8 @@ from cli.models import AnalystType
 from tradingagents.agents.utils.agent_utils import build_instrument_context
 from tradingagents.dataflows.temporal import get_analysis_context
 from tradingagents.graph.checkpointer import thread_id
-from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.graph.trading_graph import Settlement, TradingAgentsGraph
+from tradingagents.portfolio.state import PortfolioContext, Position
 
 FINAL_STATE = {
     "company_of_interest": "NVDA",
@@ -102,6 +103,51 @@ def test_stream_injects_memory_and_instrument_context():
     assert initial["past_context"] == "chronological lesson"
     assert initial["instrument_context"] == "NVDA identity"
     graph.propagator.get_graph_args.assert_called_once_with(callbacks=[callback])
+
+
+def test_default_settlement_failure_is_visible_in_run_state():
+    graph = make_lifecycle_graph()
+    graph._resolve_pending_entries.side_effect = None
+    graph._resolve_pending_entries.return_value = Settlement(
+        failed=[("AAPL", "2026-01-05", "prices unavailable")]
+    )
+    list(graph.stream("NVDA", "2026-01-10"))
+    initial = graph.graph.stream.call_args.args[0]
+    assert "1 past decision" in initial["memory_note"]
+
+
+def test_portfolio_is_optional_but_explicit_flat_context_reaches_agents():
+    graph = make_lifecycle_graph()
+    list(graph.stream("NVDA", "2026-01-10"))
+    absent = graph.graph.stream.call_args.args[0]
+    assert absent.get("portfolio_context") is None
+
+    flat = PortfolioContext(positions=())
+    list(graph.stream("NVDA", "2026-01-10", portfolio=flat))
+    supplied = graph.graph.stream.call_args.args[0]
+    assert "No current position in NVDA" in supplied["portfolio_context"]
+    assert graph._run_signature("stock", flat) != graph._run_signature("stock")
+
+
+def test_portfolio_alias_context_reaches_graph_and_agent_prompt():
+    from tradingagents.agents.utils.agent_utils import get_agent_context_from_state
+
+    graph = make_lifecycle_graph()
+    portfolio = PortfolioContext(positions=(Position(ticker="BTCUSDT", quantity="2"),))
+    list(graph.stream("BTC-USD", "2026-01-10", asset_type="crypto", portfolio=portfolio))
+    initial = graph.graph.stream.call_args.args[0]
+    assert "Current position in BTC-USD" in initial["portfolio_context"]
+    assert "listed as BTCUSDT" in get_agent_context_from_state(initial, "trader")
+
+
+def test_invalid_portfolio_fails_before_graph_or_vendor_work():
+    from pydantic import ValidationError
+
+    graph = make_lifecycle_graph()
+    with pytest.raises(ValidationError):
+        list(graph.stream("NVDA", "2026-01-10", portfolio={"cash": "NaN"}))
+    graph.resolve_instrument_context.assert_not_called()
+    graph.graph.stream.assert_not_called()
 
 
 def test_historical_execution_uses_ticker_only_context_without_identity_lookup():
@@ -263,7 +309,7 @@ def test_debug_propagate_streams_deduplicates_messages_and_completes_once():
     final_message.pretty_print.assert_called_once_with()
     graph.graph.invoke.assert_not_called()
     complete.assert_called_once_with(
-        graph, "NVDA", "2026-01-10", "stock", final_state
+        graph, "NVDA", "2026-01-10", "stock", final_state, None
     )
     graph._log_state.assert_called_once_with("2026-01-10", final_state)
     graph.memory_log.store_decision.assert_called_once()

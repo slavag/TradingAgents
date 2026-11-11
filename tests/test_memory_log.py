@@ -5,7 +5,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import FrozenInstanceError
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_type_hints
@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
+from filelock import Timeout
 
 from tradingagents import default_config as default_config_module
 from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
@@ -26,6 +27,7 @@ from tradingagents.agents.schemas import (
 )
 from tradingagents.agents.utils import memory as memory_module
 from tradingagents.agents.utils.memory import TradingMemoryLog
+from tradingagents.dataflows.errors import VendorUnavailableError
 from tradingagents.graph.propagation import Propagator
 from tradingagents.graph.reflection import Reflector
 from tradingagents.graph.trading_graph import TradingAgentsGraph
@@ -54,10 +56,18 @@ def make_log(tmp_path, filename="trading_memory.md"):
     return TradingMemoryLog(config)
 
 
-def _seed_completed(tmp_path, ticker, date, decision_text, reflection_text, filename="trading_memory.md"):
-    """Write a completed entry directly to file, bypassing the API."""
+def _seed_completed(
+    tmp_path, ticker, date, decision_text, reflection_text,
+    filename="trading_memory.md", *, resolved_on=None, legacy=False,
+):
+    """Write a synthetic completed entry with an explicit outcome date by default."""
+    resolved = resolved_on or date
+    timing = (
+        "" if legacy or date == "unknown-date"
+        else f" | {date} | {resolved} | first_close_gross"
+    )
     entry = (
-        f"[{date} | {ticker} | Buy | +1.0% | +0.5% | 5d]\n\n"
+        f"[{date} | {ticker} | Buy | +1.0% | +0.5% | 5d{timing}]\n\n"
         f"DECISION:\n{decision_text}\n\n"
         f"REFLECTION:\n{reflection_text}"
         + _SEP
@@ -358,6 +368,7 @@ class TestTradingMemoryLogCore:
             "2026-01-05",
             DECISION_BUY,
             "Legacy outcome.",
+            legacy=True,
         )
 
         entry = make_log(tmp_path).load_entries()[0]
@@ -516,6 +527,24 @@ class TestTradingMemoryLogCore:
         assert "Same-day lesson" not in context
         assert "Future lesson" not in context
 
+    def test_past_context_waits_for_recorded_outcome_availability(self, tmp_path):
+        log = make_log(tmp_path)
+        _seed_completed(
+            tmp_path, "NVDA", "2026-01-05", "Early decision.",
+            "Future outcome.", resolved_on="2026-01-20",
+        )
+        assert "Future outcome." not in log.get_past_context("NVDA", as_of_date="2026-01-10")
+        assert "Future outcome." in log.get_past_context("NVDA", as_of_date="2026-01-21")
+
+    def test_historical_context_excludes_undated_legacy_outcome(self, tmp_path):
+        log = make_log(tmp_path)
+        _seed_completed(
+            tmp_path, "NVDA", "2026-01-05", "Legacy decision.",
+            "Legacy outcome.", legacy=True,
+        )
+        assert log.get_past_context("NVDA", as_of_date="2026-01-21") == ""
+        assert "Legacy outcome timing unverified" in log.get_past_context("NVDA")
+
     def test_historical_context_excludes_malformed_legacy_date(self, tmp_path):
         log = make_log(tmp_path)
         _seed_completed(tmp_path, "NVDA", "unknown-date", "Legacy decision.", "Legacy lesson.")
@@ -638,6 +667,18 @@ class TestTradingMemoryLogCore:
         dates = [e["date"] for e in entries]
         assert dates == ["2026-01-03", "2026-01-04", "2026-01-05"]
 
+    def test_rotation_uses_decision_date_not_append_order(self, tmp_path):
+        log = TradingMemoryLog({
+            "memory_log_path": str(tmp_path / "trading_memory.md"),
+            "memory_log_max_entries": 2,
+        })
+        for decision_date in ("2026-01-09", "2026-01-01", "2026-01-05"):
+            _resolve_entry(log, "NVDA", decision_date, DECISION_BUY)
+
+        assert [entry["date"] for entry in log.load_entries()] == [
+            "2026-01-09", "2026-01-05",
+        ]
+
     def test_rotation_never_prunes_pending(self, tmp_path):
         """Pending entries (unresolved) are kept regardless of the cap."""
         log = TradingMemoryLog({
@@ -666,6 +707,19 @@ class TestTradingMemoryLogCore:
         for i in range(3):
             _resolve_entry(log, "NVDA", f"2026-01-{i+1:02d}", DECISION_BUY, f"Lesson {i}.")
         assert len(log.load_entries()) == 3
+
+    def test_concurrent_settlement_pass_can_skip_held_log(self, tmp_path):
+        first = make_log(tmp_path)
+        second = make_log(tmp_path)
+        with first.settling() as acquired:
+            assert acquired is True
+            with second.settling(wait=False) as other_acquired:
+                assert other_acquired is False
+
+    def test_timeout_raised_inside_settlement_is_not_treated_as_lock_miss(self, tmp_path):
+        log = make_log(tmp_path)
+        with pytest.raises(Timeout), log.settling():
+            raise Timeout("nested operation")
 
     # Rating parsing: markdown bold and numbered list formats
 
@@ -707,6 +761,37 @@ class TestTradingMemoryLogCore:
 # ---------------------------------------------------------------------------
 
 class TestDeferredReflection:
+    def test_decision_outcome_becomes_cutoff_safe_portfolio_manager_context(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        graph = MagicMock(spec=TradingAgentsGraph)
+        graph.memory_log = log
+        graph.config = {"outcome_holding_days": 2}
+        graph._resolve_benchmark.return_value = "SPY"
+        graph._fetch_returns.return_value = SimpleNamespace(
+            raw_return=0.05, benchmark_return=0.03, excess_return=0.02, holding_days=2,
+            entry_date="2026-01-06", exit_date="2026-01-08",
+            return_basis="first_close_gross",
+        )
+        graph.reflector = MagicMock()
+        graph.reflector.reflect_on_final_decision.return_value = "Outcome lesson."
+
+        settled = TradingAgentsGraph._resolve_pending_entries(
+            graph, "NVDA", as_of_date="2026-01-20"
+        )
+        assert settled.settled == [("NVDA", "2026-01-05")]
+        assert log.get_pending_entries() == []
+        assert log.get_past_context("NVDA", as_of_date="2026-01-07") == ""
+
+        context = log.get_past_context("NVDA", as_of_date="2026-01-21")
+        assert "Outcome lesson." in context
+        assert "2026-01-08" in context
+        captured = {}
+        create_portfolio_manager(_structured_pm_llm(captured))(
+            _make_pm_state(past_context=context)
+        )
+        assert "Outcome lesson." in captured["prompt"]
+
 
     # update_with_outcome
 
@@ -809,15 +894,119 @@ class TestDeferredReflection:
 
     # TradingAgentsGraph._fetch_returns
 
-    def test_fetch_returns_enters_next_common_open_and_exits_fifth_close(self):
+    def test_fetch_returns_uses_first_completed_close_after_decision(self):
         stock = pd.DataFrame(
-            {"Open": [100, 101, 102, 103, 104], "Close": [101, 102, 103, 104, 110]},
+            {"Open": [10, 20, 30], "Close": [101, 105, 110]},
+            index=pd.to_datetime(["2026-01-06", "2026-01-07", "2026-01-08"]),
+        )
+        benchmark = pd.DataFrame(
+            {"Open": [10, 20, 30], "Close": [201, 205, 210]},
+            index=stock.index,
+        )
+        outcome = _fetch_with_frames(
+            stock, benchmark, signal_date="2026-01-05", holding_days=2,
+        )
+        assert outcome.entry_date == "2026-01-06"
+        assert outcome.exit_date == "2026-01-08"
+        assert outcome.raw_return == pytest.approx(110 / 101 - 1)
+        assert outcome.return_basis == "first_close_gross"
+
+    def test_fetch_returns_excludes_still_trading_session_bar(self):
+        stock = pd.DataFrame(
+            {"Open": [100, 100, 100], "Close": [101, 105, 110]},
+            index=pd.to_datetime(["2026-01-06", "2026-01-07", "2026-01-08"]).tz_localize("America/New_York"),
+        )
+        benchmark = stock.copy()
+        with patch(
+            "tradingagents.graph.trading_graph._utcnow",
+            return_value=datetime(2026, 1, 8, 16, 0, tzinfo=timezone.utc),
+        ):
+            outcome = _fetch_with_frames(
+                stock, benchmark, signal_date="2026-01-05", holding_days=2,
+                available_through="2026-01-08",
+            )
+        assert outcome is None
+
+    def test_fetch_returns_retries_through_cutoff_after_long_closure(self):
+        dates = ["2026-01-02", "2026-01-20", "2026-01-21"]
+        stock = _ohlc_frame(dates, 100)
+        benchmark = _ohlc_frame(dates, 200)
+        requested_ends = []
+
+        def ticker_for(symbol):
+            ticker = MagicMock()
+
+            def history(*, start, end, **_kwargs):
+                requested_ends.append(end)
+                frame = benchmark if symbol == "SPY" else stock
+                return frame[frame.index < pd.Timestamp(end)]
+
+            ticker.history.side_effect = history
+            return ticker
+
+        graph = MagicMock(spec=TradingAgentsGraph)
+        with patch("yfinance.Ticker", side_effect=ticker_for):
+            outcome = TradingAgentsGraph._fetch_returns(
+                graph, "NVDA", "2026-01-01", holding_days=2,
+                benchmark="SPY", available_through="2026-01-31",
+            )
+        assert outcome is not None
+        assert outcome.exit_date == "2026-01-21"
+        assert "2026-02-01" in requested_ends
+
+    def test_fetch_returns_skips_vendor_when_window_cannot_have_traded(self):
+        graph = MagicMock(spec=TradingAgentsGraph)
+        with patch("yfinance.Ticker") as ticker:
+            outcome = TradingAgentsGraph._fetch_returns(
+                graph, "NVDA", "2026-01-01", holding_days=5,
+                benchmark="SPY", available_through="2026-01-03",
+            )
+        assert outcome is None
+        ticker.assert_not_called()
+
+    def test_fetch_returns_reports_provider_failure_without_leaking_error_detail(self):
+        graph = MagicMock(spec=TradingAgentsGraph)
+        with (
+            patch("yfinance.Ticker", side_effect=RuntimeError("apikey=SECRET")),
+            pytest.raises(VendorUnavailableError) as failure,
+        ):
+            TradingAgentsGraph._fetch_returns(
+                graph, "NVDA", "2026-01-01", holding_days=2,
+                benchmark="SPY", available_through="2026-01-31",
+            )
+        assert "SECRET" not in str(failure.value)
+
+    def test_price_provider_failure_stays_pending_and_is_reported(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        graph = MagicMock(spec=TradingAgentsGraph)
+        graph.memory_log = log
+        graph.config = {"outcome_holding_days": 2}
+        graph._resolve_benchmark.return_value = "SPY"
+        graph._fetch_returns.side_effect = VendorUnavailableError("offline")
+        result = TradingAgentsGraph._resolve_pending_entries(
+            graph, "NVDA", as_of_date="2026-01-31"
+        )
+        assert log.get_pending_entries()
+        assert result.failed == [("NVDA", "2026-01-05", "prices unavailable")]
+
+    def test_shanghai_alias_and_b3_use_regional_benchmarks(self):
+        from tradingagents.default_config import DEFAULT_CONFIG
+
+        graph = MagicMock(spec=TradingAgentsGraph)
+        graph.config = DEFAULT_CONFIG.copy()
+        assert TradingAgentsGraph._resolve_benchmark(graph, "600519.SH") == "000001.SS"
+        assert TradingAgentsGraph._resolve_benchmark(graph, "PETR4.SA") == "^BVSP"
+
+    def test_fetch_returns_enters_first_close_and_exits_five_sessions_later(self):
+        stock = pd.DataFrame(
+            {"Open": [100, 101, 102, 103, 104, 105], "Close": [101, 102, 103, 104, 110, 112]},
             index=pd.to_datetime(
-                ["2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09", "2026-01-12"]
+                ["2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09", "2026-01-12", "2026-01-13"]
             ),
         )
         benchmark = pd.DataFrame(
-            {"Open": [200, 201, 202, 203, 204], "Close": [201, 202, 203, 204, 210]},
+            {"Open": [200, 201, 202, 203, 204, 205], "Close": [201, 202, 203, 204, 210, 212]},
             index=stock.index,
         )
 
@@ -827,18 +1016,31 @@ class TestDeferredReflection:
 
         assert type(outcome).__name__ == "RealizedOutcome"
         assert outcome.entry_date == "2026-01-06"
-        assert outcome.exit_date == "2026-01-12"
-        assert outcome.raw_return == pytest.approx(0.10)
-        assert outcome.benchmark_return == pytest.approx(0.05)
-        assert outcome.excess_return == pytest.approx(0.05)
+        assert outcome.exit_date == "2026-01-13"
+        assert outcome.raw_return == pytest.approx(112 / 101 - 1)
+        assert outcome.benchmark_return == pytest.approx(212 / 201 - 1)
+        assert outcome.excess_return == pytest.approx(112 / 101 - 212 / 201)
         assert outcome.holding_days == 5
-        assert outcome.return_basis == "gross"
+        assert outcome.return_basis == "first_close_gross"
         with pytest.raises(FrozenInstanceError):
             outcome.raw_return = 0.0
 
     def test_fetch_returns_inner_aligns_mismatched_calendars(self):
+        stock = _ohlc_frame(["2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"], 100)
+        benchmark = _ohlc_frame(["2026-01-06", "2026-01-08", "2026-01-09", "2026-01-10"], 200)
+
+        outcome = _fetch_with_frames(
+            stock, benchmark, signal_date="2026-01-05", holding_days=2
+        )
+
+        assert outcome.entry_date == "2026-01-06"
+        assert outcome.exit_date == "2026-01-09"
+
+    def test_fetch_returns_normalizes_timezone_aware_session_indexes(self):
         stock = _ohlc_frame(["2026-01-06", "2026-01-07", "2026-01-08"], 100)
-        benchmark = _ohlc_frame(["2026-01-06", "2026-01-08", "2026-01-09"], 200)
+        stock.index = stock.index.tz_localize("America/New_York")
+        benchmark = _ohlc_frame(["2026-01-06", "2026-01-07", "2026-01-08"], 200)
+        benchmark.index = benchmark.index.tz_localize("UTC")
 
         outcome = _fetch_with_frames(
             stock, benchmark, signal_date="2026-01-05", holding_days=2
@@ -847,28 +1049,15 @@ class TestDeferredReflection:
         assert outcome.entry_date == "2026-01-06"
         assert outcome.exit_date == "2026-01-08"
 
-    def test_fetch_returns_normalizes_timezone_aware_session_indexes(self):
-        stock = _ohlc_frame(["2026-01-06", "2026-01-07"], 100)
-        stock.index = stock.index.tz_localize("America/New_York")
-        benchmark = _ohlc_frame(["2026-01-06", "2026-01-07"], 200)
-        benchmark.index = benchmark.index.tz_localize("UTC")
-
-        outcome = _fetch_with_frames(
-            stock, benchmark, signal_date="2026-01-05", holding_days=2
-        )
-
-        assert outcome.entry_date == "2026-01-06"
-        assert outcome.exit_date == "2026-01-07"
-
     def test_fetch_returns_preserves_positive_offset_exchange_session_dates(self):
         stock = pd.DataFrame(
-            {"Open": [100, 105], "Close": [102, 110]},
-            index=pd.to_datetime(["2026-01-06", "2026-01-07"]).tz_localize(
+            {"Open": [100, 105, 110], "Close": [102, 110, 115]},
+            index=pd.to_datetime(["2026-01-06", "2026-01-07", "2026-01-08"]).tz_localize(
                 "Asia/Tokyo"
             ),
         )
         benchmark = pd.DataFrame(
-            {"Open": [200, 204], "Close": [202, 210]},
+            {"Open": [200, 204, 210], "Close": [202, 210, 215]},
             index=stock.index,
         )
 
@@ -877,10 +1066,10 @@ class TestDeferredReflection:
         )
 
         assert outcome.entry_date == "2026-01-06"
-        assert outcome.exit_date == "2026-01-07"
-        assert outcome.raw_return == pytest.approx(0.10)
-        assert outcome.benchmark_return == pytest.approx(0.05)
-        assert outcome.excess_return == pytest.approx(0.05)
+        assert outcome.exit_date == "2026-01-08"
+        assert outcome.raw_return == pytest.approx(115 / 102 - 1)
+        assert outcome.benchmark_return == pytest.approx(215 / 202 - 1)
+        assert outcome.excess_return == pytest.approx(115 / 102 - 215 / 202)
 
     def test_fetch_returns_too_recent(self):
         """An incomplete common-session window stays pending."""
@@ -1017,6 +1206,48 @@ class TestDeferredReflection:
         assert "Excess return vs SPY:" in human_content
 
     # TradingAgentsGraph._resolve_pending_entries
+
+    def test_settle_all_pending_visits_each_ticker_once(self):
+        graph = MagicMock(spec=TradingAgentsGraph)
+        graph.memory_log = MagicMock()
+        graph.memory_log.get_pending_entries.return_value = [
+            {"ticker": "NVDA"}, {"ticker": "AAPL"}, {"ticker": "NVDA"},
+        ]
+        graph._resolve_pending_entries.return_value = None
+
+        TradingAgentsGraph.settle_all_pending(
+            graph, as_of_date="2026-01-31"
+        )
+
+        assert [call.args[0] for call in graph._resolve_pending_entries.call_args_list] == [
+            "NVDA", "AAPL",
+        ]
+        assert all(
+            call.kwargs == {"as_of_date": "2026-01-31"}
+            for call in graph._resolve_pending_entries.call_args_list
+        )
+
+    def test_settlement_reflection_failure_keeps_pending_and_reports_failure(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        graph = MagicMock(spec=TradingAgentsGraph)
+        graph.memory_log = log
+        graph.config = {"outcome_holding_days": 2}
+        graph.reflector = MagicMock()
+        graph._resolve_benchmark.return_value = "SPY"
+        graph._fetch_returns.return_value = SimpleNamespace(
+            raw_return=0.05, excess_return=0.02, holding_days=2,
+            entry_date="2026-01-06", exit_date="2026-01-08",
+            return_basis="first_close_gross",
+        )
+        graph.reflector.reflect_on_final_decision.side_effect = RuntimeError("temporary")
+
+        result = TradingAgentsGraph._resolve_pending_entries(
+            graph, "NVDA", as_of_date="2026-01-31"
+        )
+
+        assert log.get_pending_entries()
+        assert result.failed == [("NVDA", "2026-01-05", "reflection unavailable")]
 
     def test_resolve_skips_other_tickers(self, tmp_path):
         """Pending AAPL entry is not resolved when the run is for NVDA."""

@@ -48,13 +48,19 @@ class AgentState(MessagesState):
     company_of_interest: Annotated[str, "Company that we are interested in trading"]
     asset_type: Annotated[str, "Asset type under analysis such as stock or crypto"]
     instrument_context: Annotated[str, "Deterministic ticker identity resolved at run start"]
+    portfolio_context: Annotated[str, "Optional supplied caller book at the analysis date"]
     trade_date: Annotated[str, "What date we are trading at"]
     as_of_date: Annotated[str, "Date the analysis is evaluated as of"]
     analysis_mode: Annotated[str, "Whether analysis is live or historical"]
     shared_evidence: Annotated[
         list[dict], "Normalized source records available to every agent role"
     ]
+    market_evidence: Annotated[list[dict], "Private market analyst source records"]
+    social_evidence: Annotated[list[dict], "Private sentiment analyst source records"]
+    news_evidence: Annotated[list[dict], "Private news analyst source records"]
+    fundamentals_evidence: Annotated[list[dict], "Private fundamentals analyst source records"]
     evidence_collected: Annotated[bool, "Whether optional enrichment ran for this state"]
+    memory_note: Annotated[str, "Settlement status for this analysis run"]
 
     sender: Annotated[str, "Agent that sent this message"]
 

@@ -1,17 +1,20 @@
 from typing import Annotated
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
+from tradingagents.dataflows.date_window import as_of
 from tradingagents.dataflows.market_data_validator import build_verified_market_snapshot
 
 
 @tool
 def get_verified_market_snapshot(
-    symbol: Annotated[str, "ticker symbol of the company"],
+    symbol: Annotated[str, InjectedState("company_of_interest")],
     curr_date: Annotated[str, "the current trading date, YYYY-mm-dd"],
     look_back_days: Annotated[
         int, "number of recent trading rows to include for sanity-checking"
     ] = 30,
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
 ) -> str:
     """Deterministic verification snapshot for exact market-data claims.
 
@@ -20,4 +23,8 @@ def get_verified_market_snapshot(
     price levels, Bollinger bands, RSI, MACD, moving averages, support /
     resistance, or historical comparisons, and treat it as the source of truth.
     """
-    return build_verified_market_snapshot(symbol, curr_date, look_back_days)
+    try:
+        date = as_of(curr_date, trade_date)
+    except ValueError as exc:
+        return str(exc)
+    return build_verified_market_snapshot(symbol, date, look_back_days)

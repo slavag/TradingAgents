@@ -50,3 +50,8 @@ def test_no_thinking_level_is_omitted():
 def test_latest_flash_models_omit_deprecated_temperature(model):
     kw = _captured_kwargs(model, temperature=0.0)
     assert "temperature" not in kw
+
+
+def test_gemini_call_has_bounded_default_timeout():
+    assert _captured_kwargs("gemini-3.5-flash")["timeout"] == 600
+    assert _captured_kwargs("gemini-3.5-flash", timeout=42)["timeout"] == 42

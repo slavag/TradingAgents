@@ -28,6 +28,16 @@ def test_no_env_uses_built_in_defaults(monkeypatch):
     assert dc.DEFAULT_CONFIG["checkpoint_enabled"] is False
 
 
+def test_blank_path_env_values_keep_usable_local_defaults(monkeypatch):
+    monkeypatch.setenv("TRADINGAGENTS_RESULTS_DIR", "")
+    monkeypatch.setenv("TRADINGAGENTS_CACHE_DIR", "")
+    monkeypatch.setenv("TRADINGAGENTS_MEMORY_LOG_PATH", "")
+    dc = _reload_with_env(monkeypatch)
+    assert dc.DEFAULT_CONFIG["results_dir"].endswith("/.tradingagents/logs")
+    assert dc.DEFAULT_CONFIG["data_cache_dir"].endswith("/.tradingagents/cache")
+    assert dc.DEFAULT_CONFIG["memory_log_path"].endswith("/.tradingagents/memory/trading_memory.md")
+
+
 def test_string_overrides(monkeypatch):
     dc = _reload_with_env(
         monkeypatch,
@@ -42,6 +52,34 @@ def test_string_overrides(monkeypatch):
     assert dc.DEFAULT_CONFIG["quick_think_llm"] == "gemini-3-flash-preview"
     assert dc.DEFAULT_CONFIG["backend_url"] == "https://example.invalid/v1"
     assert dc.DEFAULT_CONFIG["output_language"] == "Chinese"
+
+
+def test_role_provider_and_endpoint_overrides(monkeypatch):
+    dc = _reload_with_env(
+        monkeypatch,
+        TRADINGAGENTS_QUICK_THINK_PROVIDER="anthropic",
+        TRADINGAGENTS_DEEP_THINK_PROVIDER="google",
+        TRADINGAGENTS_FINAL_REPORT_PROVIDER="azure",
+        TRADINGAGENTS_FINAL_REPORT_LLM="custom-deployment",
+        TRADINGAGENTS_QUICK_BACKEND_URL="https://quick.example",
+        TRADINGAGENTS_DEEP_BACKEND_URL="https://deep.example",
+        TRADINGAGENTS_FINAL_REPORT_BACKEND_URL="https://final.example",
+    )
+    assert dc.DEFAULT_CONFIG["quick_think_provider"] == "anthropic"
+    assert dc.DEFAULT_CONFIG["deep_think_provider"] == "google"
+    assert dc.DEFAULT_CONFIG["final_report_provider"] == "azure"
+    assert dc.DEFAULT_CONFIG["final_report_llm"] == "custom-deployment"
+    assert dc.DEFAULT_CONFIG["quick_backend_url"] == "https://quick.example"
+    assert dc.DEFAULT_CONFIG["deep_backend_url"] == "https://deep.example"
+    assert dc.DEFAULT_CONFIG["final_report_backend_url"] == "https://final.example"
+
+
+def test_jev_news_triage_requires_explicit_boolean_opt_in(monkeypatch):
+    config = dict(default_config_module.DEFAULT_CONFIG, jev_news_triage_enabled=False)
+    monkeypatch.delenv("TRADINGAGENTS_JEV_NEWS_TRIAGE", raising=False)
+    assert default_config_module._apply_env_overrides(config.copy())["jev_news_triage_enabled"] is False
+    monkeypatch.setenv("TRADINGAGENTS_JEV_NEWS_TRIAGE", "true")
+    assert default_config_module._apply_env_overrides(config.copy())["jev_news_triage_enabled"] is True
 
 
 def test_int_coercion(monkeypatch):

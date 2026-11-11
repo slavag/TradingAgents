@@ -2,6 +2,11 @@ import os
 
 _TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
 
+
+def _env_path(name: str, default: str) -> str:
+    value = os.getenv(name)
+    return value if value and value.strip() else default
+
 # Single source of truth for env-var → config-key overrides. To expose
 # a new config key for environment-based override, add a row here — no
 # entry-point script changes required. Coercion is driven by the type
@@ -12,11 +17,22 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_DEEP_THINK_LLM":       "deep_think_llm",
     "TRADINGAGENTS_QUICK_THINK_LLM":      "quick_think_llm",
     "TRADINGAGENTS_LLM_BACKEND_URL":      "backend_url",
+    "TRADINGAGENTS_QUICK_THINK_PROVIDER": "quick_think_provider",
+    "TRADINGAGENTS_DEEP_THINK_PROVIDER": "deep_think_provider",
+    "TRADINGAGENTS_FINAL_REPORT_PROVIDER": "final_report_provider",
+    "TRADINGAGENTS_FINAL_REPORT_LLM": "final_report_llm",
+    "TRADINGAGENTS_QUICK_BACKEND_URL": "quick_backend_url",
+    "TRADINGAGENTS_DEEP_BACKEND_URL": "deep_backend_url",
+    "TRADINGAGENTS_FINAL_REPORT_BACKEND_URL": "final_report_backend_url",
     "TRADINGAGENTS_OUTPUT_LANGUAGE":      "output_language",
     "TRADINGAGENTS_MAX_DEBATE_ROUNDS":    "max_debate_rounds",
     "TRADINGAGENTS_MAX_RISK_ROUNDS":      "max_risk_discuss_rounds",
     "TRADINGAGENTS_ANTHROPIC_PROMPT_CACHE": "anthropic_prompt_cache",
+    "TRADINGAGENTS_JEV_NEWS_TRIAGE": "jev_news_triage_enabled",
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
+    "TRADINGAGENTS_PARALLEL_ANALYSTS": "parallel_analysts",
+    "TRADINGAGENTS_BACKGROUND_SETTLEMENT": "background_settlement",
+    "TRADINGAGENTS_MAX_TOOL_ROUNDS": "max_tool_rounds",
     "TRADINGAGENTS_ENRICHMENT_ENABLED":   "enrichment_enabled",
     "TRADINGAGENTS_EVIDENCE_PROMPT_MAX_CHARS": "evidence_prompt_max_chars",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
@@ -96,9 +112,9 @@ def _apply_env_overrides(config: dict) -> dict:
 
 DEFAULT_CONFIG = _apply_env_overrides({
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
-    "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", os.path.join(_TRADINGAGENTS_HOME, "logs")),
-    "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR", os.path.join(_TRADINGAGENTS_HOME, "cache")),
-    "memory_log_path": os.getenv("TRADINGAGENTS_MEMORY_LOG_PATH", os.path.join(_TRADINGAGENTS_HOME, "memory", "trading_memory.md")),
+    "results_dir": _env_path("TRADINGAGENTS_RESULTS_DIR", os.path.join(_TRADINGAGENTS_HOME, "logs")),
+    "data_cache_dir": _env_path("TRADINGAGENTS_CACHE_DIR", os.path.join(_TRADINGAGENTS_HOME, "cache")),
+    "memory_log_path": _env_path("TRADINGAGENTS_MEMORY_LOG_PATH", os.path.join(_TRADINGAGENTS_HOME, "memory", "trading_memory.md")),
     # Optional cap on the number of resolved memory log entries. When set,
     # the oldest resolved entries are pruned once this limit is exceeded.
     # Pending entries are never pruned. None disables rotation entirely.
@@ -135,6 +151,9 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Checkpoint/resume: when True, LangGraph saves state after each node
     # so a crashed run can resume from the last successful step.
     "checkpoint_enabled": False,
+    "parallel_analysts": False,
+    "background_settlement": False,
+    "max_tool_rounds": 8,
     # Collect optional, source-labelled filings and earnings records once per run.
     "enrichment_enabled": True,
     # Hard character budget for source records inserted into each agent prompt.
@@ -146,6 +165,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
     "anthropic_prompt_cache": True,
+    "jev_news_triage_enabled": False,
     "max_recur_limit": 100,
     # News / data fetching parameters
     # Increase for longer lookback strategies or to broaden macro coverage;
@@ -200,6 +220,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
         ".AX":  "^AXJO",       # Australia (ASX 200)
         ".SS":  "000001.SS",   # Shanghai (SSE Composite)
         ".SZ":  "399001.SZ",   # Shenzhen (SZSE Component)
+        ".SA":  "^BVSP",       # Brazil (Ibovespa)
         "":     "SPY",         # default for US-listed tickers (no suffix)
     },
 })

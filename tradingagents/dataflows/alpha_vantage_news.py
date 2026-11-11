@@ -1,5 +1,29 @@
+import json
+from datetime import date, datetime
+
 from .alpha_vantage_common import _make_api_request, format_datetime_for_api
+from .config import get_config
+from .symbol_utils import normalize_symbol
 from .temporal import historical_unavailable
+
+
+def triage_news_articles(ticker: str, as_of_date: str, articles: list[dict]):
+    """Load the optional classifier only after the dated ticker feed is filtered."""
+    from tradingagents.agents.news_triage import triage_news_articles as triage
+
+    return triage(ticker, as_of_date, articles)
+
+
+def _published_on(value) -> date | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value[:8], "%Y%m%d").date()
+    except ValueError:
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
 
 
 def get_news(ticker, start_date, end_date) -> dict[str, str] | str:
@@ -19,10 +43,68 @@ def get_news(ticker, start_date, end_date) -> dict[str, str] | str:
     params = {
         "tickers": ticker,
         "time_from": format_datetime_for_api(start_date),
-        "time_to": format_datetime_for_api(end_date),
+        "time_to": date.fromisoformat(end_date).strftime("%Y%m%dT2359"),
     }
 
-    return _make_api_request("NEWS_SENTIMENT", params)
+    response = _make_api_request("NEWS_SENTIMENT", params)
+    if not get_config().get("jev_news_triage_enabled", False) or historical_unavailable(
+        "Jev ticker-news triage", end_date
+    ):
+        return response
+    try:
+        payload = json.loads(response) if isinstance(response, str) else dict(response)
+        feed = payload.get("feed")
+        start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    except (ValueError, TypeError, AttributeError):
+        return response
+    if not isinstance(feed, list):
+        return response
+
+    canonical = normalize_symbol(ticker)
+    retained = []
+    eligible = []
+    eligible_indexes = []
+    uncertain = 0
+    for article in feed:
+        if not isinstance(article, dict):
+            continue
+        published = _published_on(article.get("time_published"))
+        if published is not None and not start <= published <= end:
+            continue
+        tags = article.get("ticker_sentiment")
+        tagged = {
+            normalize_symbol(str(entry.get("ticker")))
+            for entry in tags if isinstance(entry, dict) and entry.get("ticker")
+        } if isinstance(tags, list) else set()
+        if tagged and canonical not in tagged:
+            continue
+        retained.append(article)
+        if published is not None and canonical in tagged:
+            eligible_indexes.append(len(retained) - 1)
+            eligible.append({
+                "title": article.get("title"),
+                "summary": article.get("summary"),
+            })
+        else:
+            uncertain += 1
+
+    if eligible:
+        keep, note = triage_news_articles(ticker, end_date, eligible)
+        if len(keep) != len(eligible):
+            keep = [True] * len(eligible)
+            note = "Jev news triage unavailable; articles are unscreened."
+        for index, kept in reversed(list(zip(eligible_indexes, keep, strict=True))):
+            if not kept:
+                del retained[index]
+    else:
+        note = "Jev news triage skipped: no dated, ticker-tagged articles were verified."
+    if uncertain:
+        note += f" {uncertain} article(s) without verified date or ticker tag shown unscreened."
+    payload["feed"] = retained
+    if "items" in payload:
+        payload["items"] = len(retained)
+    payload["tradingagents_news_triage"] = note
+    return json.dumps(payload, ensure_ascii=False)
 
 def get_global_news(curr_date, look_back_days: int = 7, limit: int = 50) -> dict[str, str] | str:
     """Returns global market news & sentiment data without ticker-specific filtering.

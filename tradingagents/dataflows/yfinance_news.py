@@ -7,8 +7,16 @@ import yfinance as yf
 from dateutil.relativedelta import relativedelta
 
 from .config import get_config
+from .errors import VendorUnavailableError
 from .stockstats_utils import yf_retry
 from .symbol_utils import normalize_symbol
+
+
+def triage_news_articles(ticker: str, as_of_date: str, articles: list[dict]):
+    """Load the optional Jev adapter only after deterministic vendor filtering."""
+    from tradingagents.agents.news_triage import triage_news_articles as triage
+
+    return triage(ticker, as_of_date, articles)
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -84,6 +92,17 @@ def _in_news_window(pub_date, start_dt, end_dt) -> bool:
     return end >= datetime.now(timezone.utc) - timedelta(days=1)
 
 
+def _search_news(canonical: str, limit: int) -> list[dict]:
+    """Keep only Yahoo search articles explicitly tagged with this symbol."""
+    search = yf_retry(lambda: yf.Search(query=canonical, news_count=limit))
+    news = getattr(search, "news", None) or []
+    return [
+        article for article in news[:limit]
+        if isinstance(article, dict)
+        and canonical in (str(value).upper() for value in article.get("relatedTickers") or [])
+    ]
+
+
 def get_news_yfinance(
     ticker: str,
     start_date: str,
@@ -108,40 +127,92 @@ def get_news_yfinance(
     resolved = "" if canonical == ticker else f" (resolved to {canonical})"
     try:
         stock = yf.Ticker(canonical)
-        news = yf_retry(lambda: stock.get_news(count=article_limit))
+        news = yf_retry(lambda: stock.get_news(count=article_limit)) or []
+        if not news:
+            news = _search_news(canonical, article_limit)
 
         if not news:
-            return f"No news found for {ticker}{resolved}"
+            raise VendorUnavailableError(
+                f"Yahoo Finance news has no verified articles tagged {canonical}"
+            )
 
         # Parse date range for filtering
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
-        news_str = ""
-        filtered_count = 0
-
+        dated_articles = []
         for article in news:
+            related = article.get("relatedTickers") if isinstance(article, dict) else None
+            if related is None and isinstance(article, dict):
+                content = article.get("content")
+                related = content.get("relatedTickers") if isinstance(content, dict) else None
+            if (
+                isinstance(related, list) and related
+                and canonical not in {normalize_symbol(str(item)) for item in related}
+            ):
+                continue
             data = _extract_article_data(article)
 
             # Keep only articles within the requested window (look-ahead safe).
             if not _in_news_window(data["pub_date"], start_dt, end_dt):
                 continue
+            dated_articles.append(data)
 
-            news_str += f"### {data['title']} (source: {data['publisher']})\n"
+        if not dated_articles:
+            raise VendorUnavailableError(
+                f"Yahoo Finance news sample for {canonical} does not establish "
+                f"coverage between {start_date} and {end_date}"
+            )
+
+        eligible_indexes = [
+            index for index, data in enumerate(dated_articles)
+            if data["pub_date"] is not None
+        ]
+        eligible = [dated_articles[index] for index in eligible_indexes]
+        if eligible:
+            screened_keep, triage_note = triage_news_articles(
+                ticker, end_date, eligible
+            )
+            if len(screened_keep) != len(eligible):
+                screened_keep = [True] * len(eligible)
+                triage_note = "Jev news triage unavailable; articles are unscreened."
+        else:
+            screened_keep, triage_note = [], ""
+        keep = [True] * len(dated_articles)
+        for index, retained in zip(eligible_indexes, screened_keep, strict=True):
+            keep[index] = retained
+        undated_count = len(dated_articles) - len(eligible)
+        if undated_count and (
+            triage_note or get_config().get("jev_news_triage_enabled", False)
+        ):
+            triage_note += (
+                f" {undated_count} undated article(s) shown unscreened."
+            )
+        news_str = ""
+        for data, retained in zip(dated_articles, keep, strict=True):
+            if not retained:
+                continue
+            published = (
+                _as_utc(data["pub_date"]).date().isoformat()
+                if data["pub_date"] is not None else "date unavailable"
+            )
+            news_str += f"### {data['title']} (published: {published}; source: {data['publisher']})\n"
             if data["summary"]:
                 news_str += f"{data['summary']}\n"
             if data["link"]:
                 news_str += f"Link: {data['link']}\n"
             news_str += "\n"
-            filtered_count += 1
+        if not news_str:
+            news_str = "No verified articles retained after relevance triage.\n"
+        note = f"{triage_note}\n\n" if triage_note else ""
+        return f"## {ticker}{resolved} News, from {start_date} to {end_date}:\n\n{note}{news_str}"
 
-        if filtered_count == 0:
-            return f"No news found for {ticker}{resolved} between {start_date} and {end_date}"
-
-        return f"## {ticker}{resolved} News, from {start_date} to {end_date}:\n\n{news_str}"
-
-    except Exception as e:
-        return f"Error fetching news for {ticker}: {str(e)}"
+    except VendorUnavailableError:
+        raise
+    except Exception as exc:
+        raise VendorUnavailableError(
+            f"Yahoo Finance news request failed for {canonical}: {type(exc).__name__}"
+        ) from None
 
 
 def get_global_news_yfinance(

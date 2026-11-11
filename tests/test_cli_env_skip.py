@@ -33,6 +33,58 @@ class TestProviderDefaultUrl(unittest.TestCase):
 
 @pytest.mark.unit
 class TestCliSkipsPromptsFromEnv(unittest.TestCase):
+    def test_env_role_providers_select_models_and_check_each_key(self):
+        import cli.main as m
+
+        env = {
+            "TRADINGAGENTS_LLM_PROVIDER": "openai",
+            "TRADINGAGENTS_QUICK_THINK_PROVIDER": "anthropic",
+            "TRADINGAGENTS_DEEP_THINK_PROVIDER": "google",
+            "TRADINGAGENTS_FINAL_REPORT_PROVIDER": "azure",
+            "TRADINGAGENTS_QUICK_THINK_LLM": "claude-sonnet-5-5",
+            "TRADINGAGENTS_DEEP_THINK_LLM": "gemini-3.6-pro",
+            "TRADINGAGENTS_FINAL_REPORT_LLM": "deployment-a",
+            "TRADINGAGENTS_OUTPUT_LANGUAGE": "English",
+        }
+        config = dict(m.DEFAULT_CONFIG)
+        config.update({
+            "llm_provider": "openai",
+            "quick_think_provider": "anthropic",
+            "deep_think_provider": "google",
+            "final_report_provider": "azure",
+            "quick_think_llm": "claude-sonnet-5-5",
+            "deep_think_llm": "gemini-3.6-pro",
+            "final_report_llm": "deployment-a",
+        })
+        with (
+            mock.patch.dict(os.environ, env, clear=False),
+            mock.patch.object(m, "DEFAULT_CONFIG", config),
+            mock.patch.object(m, "fetch_announcements", return_value=None),
+            mock.patch.object(m, "display_announcements"),
+            mock.patch.object(m, "get_tickers", return_value=["AAPL"]),
+            mock.patch.object(m, "get_analysis_date", return_value="2026-05-29"),
+            mock.patch.object(m, "select_analysts", return_value=[]),
+            mock.patch.object(m, "select_research_depth", return_value=1),
+            mock.patch.object(m, "ensure_api_key") as ensure_key,
+            mock.patch.object(m, "select_llm_provider") as prompt_provider,
+            mock.patch.object(m, "select_shallow_thinking_agent") as prompt_quick,
+            mock.patch.object(m, "select_deep_thinking_agent") as prompt_deep,
+            mock.patch.object(m, "select_verifier_model") as prompt_verifier,
+        ):
+            selections = m.get_user_selections()
+
+        self.assertEqual(selections["quick_provider"], "anthropic")
+        self.assertEqual(selections["deep_provider"], "google")
+        self.assertEqual(selections["final_report_provider"], "azure")
+        self.assertEqual(
+            [call.args[0] for call in ensure_key.call_args_list],
+            ["openai", "anthropic", "google", "azure"],
+        )
+        prompt_provider.assert_not_called()
+        prompt_quick.assert_not_called()
+        prompt_deep.assert_not_called()
+        prompt_verifier.assert_not_called()
+
     def test_env_config_skips_llm_prompts(self):
         import cli.main as m
 
@@ -43,6 +95,7 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
             "TRADINGAGENTS_FINAL_REPORT_LLM": "gpt-6.1-sol",
             "TRADINGAGENTS_LLM_BACKEND_URL": "https://opencode.ai/zen/go/v1",
             "TRADINGAGENTS_OUTPUT_LANGUAGE": "Japanese",
+            "TRADINGAGENTS_SHOW_ANNOUNCEMENTS": "0",
         }
         fake_cfg = dict(m.DEFAULT_CONFIG)
         fake_cfg.update({
@@ -56,7 +109,7 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
 
         with mock.patch.dict(os.environ, env, clear=False), \
              mock.patch.object(m, "DEFAULT_CONFIG", fake_cfg), \
-             mock.patch.object(m, "fetch_announcements", return_value=None), \
+             mock.patch.object(m, "fetch_announcements", return_value=None) as fetch_announcements, \
              mock.patch.object(m, "display_announcements"), \
              mock.patch.object(m, "get_tickers", return_value=["AAPL"]), \
              mock.patch.object(m, "get_analysis_date", return_value="2026-05-29"), \
@@ -76,6 +129,7 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
         prompt_quick.assert_not_called()
         prompt_deep.assert_not_called()
         prompt_verifier.assert_not_called()
+        fetch_announcements.assert_not_called()
         # API key is still verified for the env-configured provider.
         ensure_key.assert_called_once()
 

@@ -4,7 +4,9 @@ Regressions for #980 (validation rejected GC=F), #981 (BTCUSD misclassified as
 stock), #982 (BTC-USDT accepted but unpriceable on Yahoo).
 """
 import pytest
+from typer.testing import CliRunner
 
+from cli.main import app
 from cli.models import AssetType
 from cli.utils import detect_asset_type, is_valid_ticker_input, normalize_ticker_symbol
 from tradingagents.dataflows.symbol_utils import normalize_symbol
@@ -22,6 +24,9 @@ from tradingagents.dataflows.symbol_utils import normalize_symbol
     ("GC=F", "GC=F"),
     ("600519.SS", "600519.SS"),
     ("EURUSD", "EURUSD=X"),
+    ("700.HK", "0700.HK"),
+    ("09992.HK", "9992.HK"),
+    ("600519.SH", "600519.SS"),
 ])
 def test_normalize_symbol_crypto_and_passthrough(raw, expected):
     assert normalize_symbol(raw) == expected
@@ -33,9 +38,12 @@ def test_normalize_symbol_crypto_and_passthrough(raw, expected):
     ("EURUSD=X", True),
     ("AAPL", True),
     ("0700.HK", True),
+    ("XAUUSD+", True),
     ("^GSPC", True),
     ("", True),                 # empty -> defaults to SPY downstream
     ("bad symbol!", False),     # space + '!' rejected
+    ("..", False),
+    ("ＡＡＰＬ", False),
     ("A" * 40, False),          # too long
 ])
 def test_ticker_input_validation(value, ok):
@@ -60,3 +68,11 @@ def test_cli_normalize_delegates_to_data_layer():
     # CLI must produce the same canonical symbol the data path will price.
     for raw in ("XAUUSD", "BTCUSD", "btc-usdt", "AAPL"):
         assert normalize_ticker_symbol(raw) == normalize_symbol(raw)
+
+
+def test_analyze_portfolio_option_rejects_invalid_file_before_prompts(tmp_path):
+    book = tmp_path / "portfolio.json"
+    book.write_text('{"cash": Infinity}', encoding="utf-8")
+    result = CliRunner().invoke(app, ["analyze", "--portfolio", str(book)])
+    assert result.exit_code == 1
+    assert "not usable" in result.output

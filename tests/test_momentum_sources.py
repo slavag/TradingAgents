@@ -15,6 +15,15 @@ def sources_module():
     return import_module("tradingagents.web.momentum_sources")
 
 
+@pytest.fixture(autouse=True)
+def completed_market_session_clock(monkeypatch):
+    """Keep dated market fixtures fresh independently of the wall clock."""
+    monkeypatch.setattr(
+        sources_module(), "_utcnow",
+        lambda: datetime(2026, 10, 16, 21, tzinfo=timezone.utc),
+    )
+
+
 class Response:
     def __init__(self, payload=None, *, status=200, text=None):
         self.status_code = status

@@ -202,6 +202,37 @@ def test_filings_are_dated_source_links_and_metadata_only(sec, configured, monke
         assert 0 < kwargs["timeout"] <= 30
 
 
+def test_unpadded_model_date_is_canonical_before_sec_cutoff(sec, configured, monkeypatch):
+    _mock_http(
+        monkeypatch,
+        sec,
+        {
+            TICKERS_URL: TICKERS,
+            SUBMISSIONS_URL: _submissions([
+                _filing(filingDate="2025-02-04", accessionNumber="0000320193-25-000020"),
+                _filing(filingDate="2025-01-31"),
+            ]),
+            FACTS_URL: _facts(),
+        },
+    )
+
+    records = sec.get_company_filings("AAPL", "2025-2-1")
+
+    assert any(record["status"] == "available" and record["published_at"] == "2025-01-31"
+               for record in records)
+    assert all(record["as_of_date"] == "2025-02-01" for record in records)
+    assert "2025-02-04" not in json.dumps(records)
+
+
+def test_sub_million_sec_fact_keeps_its_reported_precision(sec):
+    records = sec._format_facts(
+        _facts([_fact(val=600_000)]), "0000320193", "AAPL", "2025-02-01", {}
+    )
+    assert len(records) == 1
+    assert "Value: 600000 USD" in records[0]["content"]
+    assert "Period: 2024-09-29 to 2024-12-28" in records[0]["content"]
+
+
 def test_facts_exclude_later_restatements_and_future_periods(sec, configured, monkeypatch):
     _mock_http(
         monkeypatch,
@@ -263,6 +294,29 @@ def test_latest_period_and_shortest_duration_are_explicit(sec, configured, monke
 
     assert "Value: 40 USD" in facts[0]["content"]
     assert "2024-04-01 to 2024-06-30" in facts[0]["content"]
+
+
+def test_as_filed_capital_expenditure_retains_its_reported_span(sec, configured, monkeypatch):
+    _mock_http(
+        monkeypatch,
+        sec,
+        {
+            TICKERS_URL: TICKERS,
+            SUBMISSIONS_URL: _submissions([_filing()]),
+            FACTS_URL: _facts(
+                [_fact(val=2500000000)],
+                tag="PaymentsToAcquirePropertyPlantAndEquipment",
+            ),
+        },
+    )
+    facts = [
+        record for record in sec.get_company_filings("AAPL", "2025-02-01")
+        if record["category"] == "fundamentals"
+    ]
+    assert len(facts) == 1
+    assert "Metric: Capital expenditures" in facts[0]["content"]
+    assert "Value: 2500000000 USD" in facts[0]["content"]
+    assert "Period: 2024-09-29 to 2024-12-28" in facts[0]["content"]
 
 
 def test_symbol_alias_is_exact_and_never_strips_an_exchange(sec, configured, monkeypatch):

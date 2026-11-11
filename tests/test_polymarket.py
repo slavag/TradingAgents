@@ -72,6 +72,18 @@ class PolymarketFilterTests(unittest.TestCase):
 
 @pytest.mark.unit
 class PolymarketFormatTests(unittest.TestCase):
+    def test_long_shot_odds_keep_subpercent_precision(self):
+        data = {"events": [{"markets": [
+            _market("Long shot?", 0.0005, volume=100, end_date="2030-12-31T00:00:00Z"),
+            _market("Near certain?", 0.9995, volume=90, end_date="2030-12-31T00:00:00Z"),
+            _market("Invalid odds?", 1.2, volume=80, end_date="2030-12-31T00:00:00Z"),
+        ]}]}
+        with mock.patch.object(polymarket, "_request", return_value=data):
+            output = polymarket.get_prediction_markets("odds", limit=10)
+        self.assertIn("Long shot?** — Yes 0.05%", output)
+        self.assertIn("Near certain?** — Yes 99.95%", output)
+        self.assertNotIn("Invalid odds?", output)
+
     def test_probability_volume_and_weekly_change_render(self):
         with mock.patch.object(polymarket, "_request", return_value=_SEARCH):
             out = polymarket.get_prediction_markets("anything", limit=10)

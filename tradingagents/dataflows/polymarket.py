@@ -11,6 +11,7 @@ outcomes (a "Yes" at 0.76 means the market prices a 76% chance).
 """
 import json
 import logging
+import math
 from datetime import datetime, timezone
 
 import requests
@@ -65,6 +66,20 @@ def _is_forward_looking(market: dict, now: datetime) -> bool:
     return bool(_parse_json_list(market.get("outcomePrices"))) and bool(
         _parse_json_list(market.get("outcomes"))
     )
+
+
+def _odds(prob: float) -> str:
+    """Retain two significant digits near zero or certainty."""
+    def decimals(distance: float) -> int:
+        return 1 - math.floor(math.log10(distance))
+
+    if 0 < prob < 0.01:
+        percent = prob * 100
+        return f"{percent:.{decimals(percent)}f}".rstrip("0").rstrip(".") + "%"
+    if 0.99 < prob < 1:
+        distance = (1 - prob) * 100
+        return f"{100 - distance:.{decimals(distance)}f}".rstrip("0").rstrip(".") + "%"
+    return f"{prob:.0%}"
 
 
 def get_prediction_markets(topic: str, limit: int | None = None) -> str:
@@ -128,6 +143,8 @@ def get_prediction_markets(topic: str, limit: int | None = None) -> str:
             prob = float(prices[0])
         except (ValueError, IndexError):
             continue
+        if not math.isfinite(prob) or not 0 <= prob <= 1:
+            continue
         label = outcomes[0] if outcomes else "Yes"
         volume = m.get("volumeNum") or 0
         end_date = (m.get("endDate") or "")[:10]
@@ -138,7 +155,7 @@ def get_prediction_markets(topic: str, limit: int | None = None) -> str:
             else ""
         )
         lines.append(
-            f"- **{m.get('question')}** — {label} {prob:.0%} "
+            f"- **{m.get('question')}** — {label} {_odds(prob)} "
             f"(${volume:,.0f} volume, resolves {end_date}{wk_str})"
         )
 

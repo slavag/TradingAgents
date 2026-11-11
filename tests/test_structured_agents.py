@@ -313,16 +313,26 @@ class TestTraderAgent:
             "Trader Proposal", "rating_action_conflict"
         )
 
-    def test_trader_rejects_numeric_nav_size_without_portfolio_context(self):
+    @pytest.mark.parametrize("portfolio_context", [
+        None,
+        "Portfolio at the analysis date:\n- No current position in NVDA",
+        "Portfolio at the analysis date:\n- Current position in NVDA: 10 units",
+    ])
+    def test_trader_rejects_numeric_nav_size_without_complete_sizing_inputs(
+        self, portfolio_context,
+    ):
         proposal = TraderProposal(
             action=TraderAction.BUY,
             reasoning="Build a position.",
             position_sizing="Allocate 5% of portfolio NAV.",
         )
 
-        rendered = create_trader(_structured_trader_llm({}, proposal))(
-            _make_trader_state()
-        )["trader_investment_plan"]
+        state = _make_trader_state()
+        if portfolio_context is not None:
+            state["portfolio_context"] = portfolio_context
+        rendered = create_trader(_structured_trader_llm({}, proposal))(state)[
+            "trader_investment_plan"
+        ]
 
         assert rendered == render_stage_unavailable(
             "Trader Proposal", "unsupported_portfolio_sizing"
@@ -594,6 +604,15 @@ def _structured_sentiment_llm(captured: dict, report: SentimentReport | None = N
 
 @pytest.mark.unit
 class TestSentimentAnalystAgent:
+    @pytest.fixture(autouse=True)
+    def offline_sources(self, monkeypatch):
+        import tradingagents.agents.analysts.sentiment_analyst as sentiment_module
+
+        monkeypatch.setattr(sentiment_module.get_news, "func", lambda *a, **k: "news", raising=False)
+        monkeypatch.setattr(sentiment_module, "fetch_stocktwits_messages", lambda *a, **k: "stocktwits")
+        monkeypatch.setattr(sentiment_module, "fetch_reddit_posts", lambda *a, **k: "reddit")
+        monkeypatch.setattr(sentiment_module, "jev_screen", lambda *a, **k: None)
+
     def test_structured_path_produces_rendered_markdown(self):
         captured = {}
         report = SentimentReport(

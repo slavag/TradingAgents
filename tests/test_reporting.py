@@ -43,6 +43,59 @@ def test_write_report_tree_creates_files(tmp_path):
     assert "MKT" in complete and "PM DECISION" in complete
 
 
+def test_portfolio_book_change_is_evidence_drift_in_run_manifest():
+    first = build_run_manifest(
+        _state() | {"portfolio_context": "Portfolio at the analysis date:\n- No current position in AAPL"},
+        "AAPL",
+    )
+    second = build_run_manifest(
+        _state() | {"portfolio_context": "Portfolio at the analysis date:\n- Current position in AAPL: 10 units"},
+        "AAPL",
+    )
+    assert compare_run_manifests(second, first) == "evidence_changed"
+
+
+def test_reused_report_folder_prunes_only_obsolete_owned_sections(tmp_path):
+    metadata = {"generated_at": "2026-10-16T20:00:00+00:00"}
+    write_report_tree(
+        _state(), "AAPL", tmp_path, run_metadata=metadata,
+        report_timestamp="20261016T200000Z",
+    )
+    stale = tmp_path / "1_analysts" / "sentiment.md"
+    stale.write_text("OLD SENTIMENT", encoding="utf-8")
+    foreign = tmp_path / "notes.txt"
+    foreign.write_text("keep", encoding="utf-8")
+    sources = tmp_path / "0_sources"
+    sources.mkdir()
+    (sources / "evidence.json").write_text("immutable", encoding="utf-8")
+    old_html = tmp_path / "AAPL_full_20261016T200000Z.html"
+
+    write_report_tree(
+        _state(), "AAPL", tmp_path, run_metadata=metadata,
+        report_timestamp="20261017T200000Z",
+    )
+
+    assert not stale.exists()
+    assert (tmp_path / "1_analysts" / "market.md").read_text() == "MKT"
+    assert old_html.is_file()
+    assert (tmp_path / "AAPL_full_20261017T200000Z.html").is_file()
+    assert foreign.read_text() == "keep"
+    assert (sources / "evidence.json").read_text() == "immutable"
+    assert (tmp_path / "forecast_record.json").is_file()
+
+
+def test_report_section_symlink_cannot_write_outside_run_folder(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    save_path = tmp_path / "run"
+    save_path.mkdir()
+    (save_path / "1_analysts").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        write_report_tree(_state(), "AAPL", save_path)
+    assert not (outside / "market.md").exists()
+
+
 @pytest.mark.unit
 def test_top_level_ticker_reports_share_one_utc_filename_timestamp(tmp_path):
     out = write_report_tree(

@@ -1,8 +1,11 @@
 # TradingAgents/graph/setup.py
 
+import logging
+from collections import Counter
 from dataclasses import replace
-from typing import Any
+from typing import Any, TypedDict
 
+from langchain_core.messages import HumanMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
@@ -21,12 +24,105 @@ from tradingagents.agents import (
     create_sentiment_analyst,
     create_trader,
 )
+from tradingagents.agents.analysts.turn import WRAP_UP
 from tradingagents.agents.utils.agent_states import AgentState
-from tradingagents.agents.utils.evidence import collect_shared_evidence
+from tradingagents.agents.utils.evidence import (
+    collect_shared_evidence,
+    merge_evidence,
+    tool_message_evidence,
+)
 from tradingagents.llm_clients.prompt_cache import PromptCachePolicy
 
 from .analyst_execution import build_analyst_execution_plan
 from .conditional_logic import ConditionalLogic
+
+logger = logging.getLogger(__name__)
+
+def _next_after_tools(agent_node: str, wrap_node: str, max_tool_rounds: int):
+    def route(state):
+        rounds = sum(
+            bool(getattr(message, "tool_calls", None))
+            for message in state["messages"]
+        )
+        return wrap_node if rounds >= max_tool_rounds else agent_node
+
+    return route
+
+
+def _wrap_up_node(spec, agent, max_tool_rounds: int):
+    def wrap_up(state):
+        calls = Counter(
+            call["name"]
+            for message in state["messages"]
+            for call in (getattr(message, "tool_calls", None) or [])
+        )
+        logger.warning(
+            "%s reached %d tool rounds (%s)", spec.agent_node,
+            max_tool_rounds,
+            ", ".join(f"{name} x{count}" for name, count in calls.most_common()),
+        )
+        try:
+            result = agent({
+                **state,
+                "messages": [*state["messages"], HumanMessage(WRAP_UP)],
+            })
+        except Exception as exc:
+            logger.warning(
+                "%s final report turn failed (%s)",
+                spec.agent_node, type(exc).__name__,
+            )
+            result = {}
+        if not result.get(spec.report_key):
+            result[spec.report_key] = (
+                f"DATA_UNAVAILABLE: {spec.agent_node} could not produce a "
+                f"report after {max_tool_rounds} tool rounds."
+            )
+        return result
+
+    return wrap_up
+
+
+def _parallel_analyst_graph(spec, agent, tool_node: ToolNode, max_tool_rounds: int):
+    evidence_key = f"{spec.key}_evidence"
+    fields = {spec.report_key: str, evidence_key: list}
+    if spec.key == "market":
+        fields["verified_market_snapshot"] = dict
+    output = TypedDict(f"{spec.key.capitalize()}Output", fields, total=False)
+    graph = StateGraph(AgentState, output_schema=output)
+    graph.add_node("agent", agent)
+    graph.add_edge(START, "agent")
+
+    def handoff(state):
+        run_date = str(state.get("trade_date") or "")
+        result = {
+            spec.report_key: state.get(spec.report_key, ""),
+            evidence_key: merge_evidence(
+                state.get("shared_evidence", []), tool_message_evidence(state),
+                run_date,
+            ),
+        }
+        if spec.key == "market" and state.get("verified_market_snapshot"):
+            result["verified_market_snapshot"] = state["verified_market_snapshot"]
+        return result
+
+    graph.add_node("handoff", handoff)
+    if spec.key == "social":
+        graph.add_edge("agent", "handoff")
+    else:
+        graph.add_node("tools", tool_node)
+        graph.add_node("wrap_up", _wrap_up_node(spec, agent, max_tool_rounds))
+        graph.add_conditional_edges(
+            "agent",
+            lambda state: "tools" if state["messages"][-1].tool_calls else "handoff",
+            ["tools", "handoff"],
+        )
+        graph.add_conditional_edges(
+            "tools", _next_after_tools("agent", "wrap_up", max_tool_rounds),
+            ["agent", "wrap_up"],
+        )
+        graph.add_edge("wrap_up", "handoff")
+    graph.add_edge("handoff", END)
+    return graph.compile()
 
 # Every target a shared conditional router can return. Each edge driven by the
 # router maps all of them, so a fall-through return (e.g. under prompt/i18n/
@@ -70,7 +166,9 @@ class GraphSetup:
         )
 
     def setup_graph(
-        self, selected_analysts=("market", "social", "news", "fundamentals")
+        self, selected_analysts=("market", "social", "news", "fundamentals"),
+        *, parallel_analysts: bool = False, max_tool_rounds: int = 8,
+        background_settlement: bool = False, memory_node=None,
     ):
         """Set up and compile the agent workflow graph.
 
@@ -82,6 +180,8 @@ class GraphSetup:
                 - "fundamentals": Fundamentals analyst
         """
         plan = build_analyst_execution_plan(selected_analysts)
+        if background_settlement and (not parallel_analysts or memory_node is None):
+            raise ValueError("background settlement needs parallel analysts and a memory node")
 
         analyst_factories = {
             "market": lambda: create_market_analyst(self.quick_thinking_llm),
@@ -119,9 +219,22 @@ class GraphSetup:
 
         # Add analyst nodes to the graph
         for spec in plan.specs:
-            workflow.add_node(spec.agent_node, analyst_factories[spec.key]())
-            workflow.add_node(spec.clear_node, create_msg_delete())
-            workflow.add_node(spec.tool_node, self.tool_nodes[spec.key])
+            agent = analyst_factories[spec.key]()
+            if parallel_analysts:
+                workflow.add_node(
+                    spec.agent_node,
+                    _parallel_analyst_graph(
+                        spec, agent, self.tool_nodes[spec.key], max_tool_rounds,
+                    ),
+                )
+            else:
+                workflow.add_node(spec.agent_node, agent)
+                workflow.add_node(spec.clear_node, create_msg_delete())
+                workflow.add_node(spec.tool_node, self.tool_nodes[spec.key])
+                workflow.add_node(
+                    f"wrap_up_{spec.key}",
+                    _wrap_up_node(spec, agent, max_tool_rounds),
+                )
 
         # Add other nodes
         workflow.add_node("Evidence Collector", collect_shared_evidence)
@@ -133,31 +246,55 @@ class GraphSetup:
         workflow.add_node("Neutral Analyst", neutral_analyst)
         workflow.add_node("Conservative Analyst", conservative_analyst)
         workflow.add_node("Portfolio Manager", portfolio_manager_node)
+        if background_settlement:
+            workflow.add_node("Memory Log", memory_node)
 
         # Define edges
-        # Start with the first analyst
         workflow.add_edge(START, "Evidence Collector")
-        workflow.add_edge("Evidence Collector", plan.specs[0].agent_node)
+        if parallel_analysts:
+            analysts = [spec.agent_node for spec in plan.specs]
+            for node in analysts:
+                workflow.add_edge("Evidence Collector", node)
+            if background_settlement:
+                workflow.add_edge("Evidence Collector", "Memory Log")
 
-        # Connect analysts in sequence
-        for i, spec in enumerate(plan.specs):
-            current_analyst = spec.agent_node
-            current_tools = spec.tool_node
-            current_clear = spec.clear_node
+            def combine_analyst_evidence(state):
+                combined = state.get("shared_evidence", [])
+                run_date = str(state.get("trade_date") or "")
+                for spec in plan.specs:
+                    combined = merge_evidence(
+                        combined, state.get(f"{spec.key}_evidence", []), run_date
+                    )
+                return {"shared_evidence": combined}
 
-            # Add conditional edges for current analyst
-            workflow.add_conditional_edges(
-                current_analyst,
-                getattr(self.conditional_logic, f"should_continue_{spec.key}"),
-                [current_tools, current_clear],
+            workflow.add_node("Analyst Evidence", combine_analyst_evidence)
+            workflow.add_edge(
+                [*analysts, "Memory Log"] if background_settlement else analysts,
+                "Analyst Evidence",
             )
-            workflow.add_edge(current_tools, current_analyst)
-
-            # Connect to next analyst or to Bull Researcher if this is the last analyst
-            if i < len(plan.specs) - 1:
-                workflow.add_edge(current_clear, plan.specs[i + 1].agent_node)
-            else:
-                workflow.add_edge(current_clear, "Bull Researcher")
+            workflow.add_edge("Analyst Evidence", "Bull Researcher")
+        else:
+            workflow.add_edge("Evidence Collector", plan.specs[0].agent_node)
+            for i, spec in enumerate(plan.specs):
+                current_analyst = spec.agent_node
+                current_tools = spec.tool_node
+                current_clear = spec.clear_node
+                workflow.add_conditional_edges(
+                    current_analyst,
+                    getattr(self.conditional_logic, f"should_continue_{spec.key}"),
+                    [current_tools, current_clear],
+                )
+                wrap_node = f"wrap_up_{spec.key}"
+                workflow.add_conditional_edges(
+                    current_tools,
+                    _next_after_tools(current_analyst, wrap_node, max_tool_rounds),
+                    [current_analyst, wrap_node],
+                )
+                workflow.add_edge(wrap_node, current_clear)
+                if i < len(plan.specs) - 1:
+                    workflow.add_edge(current_clear, plan.specs[i + 1].agent_node)
+                else:
+                    workflow.add_edge(current_clear, "Bull Researcher")
 
         # Both research-debate edges share the complete DEBATE_PATH_MAP (#1088).
         for debate_node in ("Bull Researcher", "Bear Researcher"):

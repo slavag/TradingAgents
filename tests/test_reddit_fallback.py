@@ -315,6 +315,23 @@ class TestCryptoSearchTerm:
     def test_equity_passes_through(self):
         assert self._captured_ticker("NVDA") == "NVDA"
 
+    def test_crypto_uses_crypto_communities_by_default(self):
+        seen = []
+
+        def fake_fetch(ticker, sub, limit, timeout):
+            seen.append((ticker, sub))
+            return []
+
+        with patch.object(reddit, "_fetch_subreddit", side_effect=fake_fetch):
+            out = reddit.fetch_reddit_posts("BTC-USD", inter_request_delay=0)
+
+        assert seen == [
+            ("BTC", "Bitcoin"),
+            ("BTC", "CryptoCurrency"),
+            ("BTC", "CryptoMarkets"),
+        ]
+        assert "r/stocks" not in out
+
 
 @pytest.mark.unit
 def test_historical_reddit_is_unavailable_without_sleep_or_network(monkeypatch):

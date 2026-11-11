@@ -3,10 +3,11 @@
 import os
 import re
 import tempfile
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
-from filelock import FileLock
+from filelock import FileLock, Timeout
 
 from tradingagents.agents.utils.rating import RATINGS_5_TIER, parse_decision_signal
 
@@ -32,8 +33,26 @@ class TradingMemoryLog:
             if self._log_path
             else None
         )
+        self._settlement_lock = (
+            FileLock(str(self._log_path.with_name(f"{self._log_path.name}.settling.lock")))
+            if self._log_path else None
+        )
         # Optional cap on resolved entries. None disables rotation.
         self._max_entries = cfg.get("memory_log_max_entries")
+
+    @contextmanager
+    def settling(self, *, wait: bool = True):
+        """Claim one reflection pass per log across concurrent runs."""
+        if self._settlement_lock is None:
+            yield True
+            return
+        try:
+            acquired = self._settlement_lock.acquire(timeout=-1 if wait else 0)
+        except Timeout:
+            yield False
+            return
+        with acquired:
+            yield True
 
     # --- Write path (Phase A) ---
 
@@ -95,6 +114,18 @@ class TradingMemoryLog:
                 try:
                     entry_date = date.fromisoformat(entry["date"])
                 except (TypeError, ValueError):
+                    continue
+                exit_value = entry.get("exit_date")
+                if exit_value:
+                    try:
+                        outcome_date = date.fromisoformat(exit_value)
+                    except (TypeError, ValueError):
+                        continue
+                    if outcome_date >= cutoff:
+                        continue
+                elif cutoff < date.today():
+                    # A legacy result lacks the date its reflection became
+                    # knowable. It cannot be replayed into a historical run.
                     continue
                 if entry_date < cutoff:
                     chronological.append((entry_date, entry))
@@ -320,12 +351,10 @@ class TradingMemoryLog:
         if not self._max_entries or self._max_entries <= 0:
             return blocks
 
-        # Tag each block with (kept, is_resolved) by parsing tag-line markers.
-        decisions = []
-        for block in blocks:
+        resolved: list[tuple[date, int]] = []
+        for index, block in enumerate(blocks):
             stripped = block.strip()
             if not stripped:
-                decisions.append((block, False))
                 continue
             tag_line = stripped.splitlines()[0].strip()
             is_resolved = (
@@ -333,20 +362,19 @@ class TradingMemoryLog:
                 and tag_line.endswith("]")
                 and not tag_line.endswith("| pending]")
             )
-            decisions.append((block, is_resolved))
+            if is_resolved:
+                try:
+                    decision_date = date.fromisoformat(tag_line[1:].split("|", 1)[0].strip())
+                except ValueError:
+                    decision_date = date.min
+                resolved.append((decision_date, index))
 
-        resolved_count = sum(1 for _, r in decisions if r)
-        if resolved_count <= self._max_entries:
+        if len(resolved) <= self._max_entries:
             return blocks
-
-        to_drop = resolved_count - self._max_entries
-        kept: list[str] = []
-        for block, is_resolved in decisions:
-            if is_resolved and to_drop > 0:
-                to_drop -= 1
-                continue
-            kept.append(block)
-        return kept
+        to_drop = {
+            index for _, index in sorted(resolved)[: len(resolved) - self._max_entries]
+        }
+        return [block for index, block in enumerate(blocks) if index not in to_drop]
 
     def _parse_entry(self, raw: str) -> dict | None:
         lines = raw.strip().splitlines()
@@ -388,12 +416,16 @@ class TradingMemoryLog:
             tag_fields.extend([e["entry_date"], e["exit_date"], e["return_basis"]])
         tag = f"[{' | '.join(tag_fields)}]"
         parts = [tag, f"DECISION:\n{e['decision']}"]
+        if not e.get("exit_date"):
+            parts.append("Legacy outcome timing unverified; use only as a current lesson.")
         if e["reflection"]:
             parts.append(f"REFLECTION:\n{e['reflection']}")
         return "\n\n".join(parts)
 
     def _format_reflection_only(self, e: dict) -> str:
         tag = f"[{e['date']} | {e['ticker']} | {e['rating']} | {e['raw'] or 'n/a'}]"
+        if not e.get("exit_date"):
+            tag += " Legacy outcome timing unverified."
         if e["reflection"]:
             return f"{tag}\n{e['reflection']}"
         text = e["decision"][:300]

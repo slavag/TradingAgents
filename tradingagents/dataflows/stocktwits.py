@@ -14,6 +14,7 @@ network call succeeded.
 
 from __future__ import annotations
 
+import html
 import http.client
 import json
 import logging
@@ -44,6 +45,7 @@ def fetch_stocktwits_messages(
     limit: int = 30,
     timeout: float = 10.0,
     as_of_date: str | None = None,
+    screen=None,
 ) -> str:
     """Fetch recent StockTwits messages for ``ticker`` and return them as a
     formatted plaintext block ready for prompt injection.
@@ -71,6 +73,25 @@ def fetch_stocktwits_messages(
     if not messages:
         return f"<no StockTwits messages found for ${ticker.upper()}>"
 
+    screen_note = ""
+    if screen is not None:
+        try:
+            keep, screen_note = screen([
+                html.unescape(message.get("body") or "")[:1000] for message in messages
+            ])
+            if len(keep) != len(messages):
+                raise ValueError("screen returned the wrong number of flags")
+            original_count = len(messages)
+            messages = [message for message, flag in zip(messages, keep, strict=True) if flag]
+        except Exception as exc:
+            logger.warning("StockTwits screening failed for %s: %s", ticker, type(exc).__name__)
+            screen_note = f"<Jev screening unavailable ({type(exc).__name__}); posts are unscreened>"
+        if not messages:
+            return (
+                f"{screen_note}\n\n<none of the {original_count} StockTwits messages "
+                f"is about ${ticker.upper()}>"
+            )
+
     lines = []
     bullish = bearish = unlabeled = 0
     for m in messages[:limit]:
@@ -79,7 +100,7 @@ def fetch_stocktwits_messages(
         entities = m.get("entities") or {}
         sentiment_obj = entities.get("sentiment") or {}
         sentiment = sentiment_obj.get("basic") if isinstance(sentiment_obj, dict) else None
-        body = (m.get("body") or "").replace("\n", " ").strip()
+        body = html.unescape(m.get("body") or "").replace("\n", " ").strip()
         if len(body) > 280:
             body = body[:280] + "…"
 
@@ -103,4 +124,4 @@ def fetch_stocktwits_messages(
         f"Unlabeled: {unlabeled} · "
         f"Total: {total} most-recent messages"
     )
-    return summary + "\n\n" + "\n".join(lines)
+    return (screen_note + "\n\n" if screen_note else "") + summary + "\n\n" + "\n".join(lines)

@@ -29,6 +29,8 @@ def _supports_effort(model: str) -> bool:
     model_lc = model.lower()
     if model_lc in _EFFORT_EXACT:
         return True
+    if re.search(r"-\d{8}$", model_lc):
+        model_lc = model_lc.rsplit("-", 1)[0]
     match = _EFFORT_MODEL.match(model_lc)
     if not match:
         return False

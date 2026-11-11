@@ -22,9 +22,12 @@ from tradingagents.portfolio.state import (
     InstrumentForecast,
     OptimizationStatus,
     PortfolioConstraints,
+    PortfolioContext,
     PortfolioOptimizationResult,
     PortfolioState,
+    Position,
     TargetWeight,
+    load_portfolio,
 )
 from tradingagents.web.service import optimize_portfolio_payload
 
@@ -54,6 +57,49 @@ def test_portfolio_state_rejects_negative_cash_or_quantity():
         PortfolioState(cash=-1, holdings=())
     with pytest.raises(ValidationError):
         Holding(symbol="AAA", quantity=-1, price=100, sector="Tech", country="US")
+
+
+def test_portfolio_context_matches_broker_aliases_without_changing_spelling():
+    context = PortfolioContext(positions=(
+        Position(ticker="BTCUSDT", quantity="1.25", average_price="75000"),
+        Position(ticker="700.HK", quantity="10", average_price="400"),
+        Position(ticker="BTC", quantity="3"),
+    ))
+
+    assert [p.ticker for p in context.positions_in("BTC-USD")] == ["BTCUSDT"]
+    assert [p.ticker for p in context.positions_in("0700.HK")] == ["700.HK"]
+    assert [p.ticker for p in context.positions_in("BTC")] == ["BTC"]
+    assert "listed as 700.HK" in context.render("0700.HK")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("cash", "NaN"),
+    ("cash", "Infinity"),
+    ("quantity", "NaN"),
+    ("quantity", "-Infinity"),
+    ("average_price", "Infinity"),
+])
+def test_portfolio_context_rejects_nonfinite_numbers(field, value):
+    payload = {"cash": "100", "positions": [{"ticker": "AAPL", "quantity": "1"}]}
+    if field == "cash":
+        payload["cash"] = value
+    else:
+        payload["positions"][0][field] = value
+    with pytest.raises(ValidationError):
+        PortfolioContext.model_validate(payload)
+
+
+def test_empty_portfolio_is_explicitly_flat():
+    context = PortfolioContext(positions=())
+    assert "No current position in NVDA" in context.render("NVDA")
+    assert context.fingerprint() == PortfolioContext(positions=()).fingerprint()
+
+
+def test_load_portfolio_rejects_nonfinite_json_before_analysis(tmp_path):
+    book = tmp_path / "portfolio.json"
+    book.write_text('{"cash": NaN, "positions": []}', encoding="utf-8")
+    with pytest.raises(ValueError, match="not usable"):
+        load_portfolio(book)
 
 
 def test_constraints_reject_incoherent_limits():
