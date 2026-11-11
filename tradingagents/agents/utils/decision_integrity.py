@@ -198,6 +198,7 @@ def _target_fields(draft: PortfolioDecisionDraft) -> tuple[Any, ...]:
         draft.supporting_quote_high,
         draft.target_method,
         draft.target_risks,
+        draft.target_assumptions,
     )
 
 
@@ -281,6 +282,7 @@ def _target_rejection_reason(
     draft: PortfolioDecisionDraft,
     evidence_text: str,
     reference_price: float | None,
+    quote_price: float | None = None,
 ) -> TargetValidationReason | None:
     target = draft.price_target
     if target is None or not math.isfinite(target) or target <= 0:
@@ -289,7 +291,7 @@ def _target_rejection_reason(
         return TargetValidationReason.SUPPORTING_QUOTE_MISSING
 
     quote_reason = _quote_rejection_reason(
-        target,
+        quote_price if quote_price is not None else target,
         draft.supporting_quote,
         evidence_text,
     )
@@ -341,6 +343,21 @@ def finalize_portfolio_decision(
         draft.supporting_quote_low, draft.supporting_quote_high,
     ))
     if point_proposed and range_proposed:
+        # Providers sometimes populate both optional shapes. Validate each
+        # independently instead of discarding two potentially usable forecasts.
+        # Prefer the explicit central target; retain a range if only it validates.
+        for unused_fields in (
+            ("target_low", "target_high", "supporting_quote_low", "supporting_quote_high"),
+            ("price_target", "supporting_quote"),
+        ):
+            candidate = finalize_portfolio_decision(
+                draft.model_copy(update=dict.fromkeys(unused_fields)),
+                evidence_text,
+                reference_price,
+                eligible_quotes=eligible_quotes,
+            )
+            if candidate.target_validation_status is TargetValidationStatus.ACCEPTED:
+                return candidate
         return _without_target(
             draft, TargetValidationStatus.REJECTED, TargetValidationReason.TARGET_SHAPE_MIXED,
         )
@@ -368,6 +385,27 @@ def finalize_portfolio_decision(
             draft, TargetValidationStatus.REJECTED,
             TargetValidationReason.TARGET_RATIONALE_MISSING,
         )
+
+    estimated = draft.target_basis == "Model estimate"
+    if estimated:
+        for value, reason in (
+            (draft.target_assumptions, TargetValidationReason.TARGET_ASSUMPTIONS_MISSING),
+            (draft.target_method, TargetValidationReason.TARGET_METHOD_MISSING),
+            (draft.target_risks, TargetValidationReason.TARGET_RISKS_MISSING),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                return _without_target(draft, TargetValidationStatus.REJECTED, reason)
+        if reference_price is None or not math.isfinite(reference_price) or reference_price <= 0:
+            return _without_target(
+                draft, TargetValidationStatus.REJECTED, TargetValidationReason.TARGET_REFERENCE_MISSING,
+            )
+        if not eligible_quotes:
+            return _without_target(
+                draft, TargetValidationStatus.REJECTED,
+                TargetValidationReason.SUPPORTING_QUOTE_NOT_ELIGIBLE,
+            )
+        # Projected prices need not already exist in source material. Their
+        # input price must still match an admissible verbatim source quote.
 
     if range_proposed:
         if not isinstance(draft.target_method, str) or not draft.target_method.strip():
@@ -409,9 +447,10 @@ def finalize_portfolio_decision(
 
         quotes = [draft.supporting_quote_low, draft.supporting_quote_high]
         for index, (value, quote) in enumerate(zip((low, high), quotes, strict=True)):
-            reason = _quote_rejection_reason(value, quote, evidence_text)
+            quote_value = reference_price if estimated else value
+            reason = _quote_rejection_reason(quote_value, quote, evidence_text)
             if reason is TargetValidationReason.SUPPORTING_QUOTE_NOT_IN_EVIDENCE:
-                replacement = _find_exact_price_quote(value, evidence_text, eligible_quotes)
+                replacement = _find_exact_price_quote(quote_value, evidence_text, eligible_quotes)
                 if replacement is not None:
                     quote = replacement
                     reason = None
@@ -434,19 +473,22 @@ def finalize_portfolio_decision(
             time_horizon=draft.time_horizon,
             confidence_score=draft.confidence_score,
             target_summary=draft.target_summary,
+            target_basis=draft.target_basis,
+            target_assumptions=draft.target_assumptions,
             target_method=draft.target_method,
             target_risks=draft.target_risks,
             target_validation_status=TargetValidationStatus.ACCEPTED,
         )
 
+    quote_value = reference_price if estimated else draft.price_target
     validated_draft = draft
     quote_reason = _quote_rejection_reason(
-        draft.price_target,
+        quote_value,
         draft.supporting_quote,
         evidence_text,
     )
     if quote_reason is TargetValidationReason.SUPPORTING_QUOTE_NOT_IN_EVIDENCE:
-        exact_quote = _find_exact_price_quote(draft.price_target, evidence_text, eligible_quotes)
+        exact_quote = _find_exact_price_quote(quote_value, evidence_text, eligible_quotes)
         if exact_quote is not None:
             validated_draft = draft.model_copy(
                 update={"supporting_quote": exact_quote},
@@ -456,6 +498,7 @@ def finalize_portfolio_decision(
         validated_draft,
         evidence_text,
         reference_price,
+        quote_price=quote_value,
     )
     if reason is not None:
         return _without_target(draft, TargetValidationStatus.REJECTED, reason)
@@ -474,6 +517,8 @@ def finalize_portfolio_decision(
         confidence_score=validated_draft.confidence_score,
         target_summary=validated_draft.target_summary,
         supporting_quote=validated_draft.supporting_quote,
+        target_basis=validated_draft.target_basis,
+        target_assumptions=validated_draft.target_assumptions,
         target_method=validated_draft.target_method,
         target_risks=validated_draft.target_risks,
         target_validation_status=TargetValidationStatus.ACCEPTED,

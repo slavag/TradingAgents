@@ -85,6 +85,8 @@ class TargetValidationReason(str, Enum):
     TARGET_RISKS_MISSING = "target_risks_missing"
     TARGET_RATIONALE_MISSING = "target_rationale_missing"
     TARGET_HORIZON_INVALID = "target_horizon_invalid"
+    TARGET_ASSUMPTIONS_MISSING = "target_assumptions_missing"
+    TARGET_REFERENCE_MISSING = "target_reference_missing"
 
 
 class ThesisRating(str, Enum):
@@ -461,6 +463,14 @@ class PortfolioDecisionDraft(BaseModel):
             "independent of whether a numeric target is validated."
         ),
     )
+    target_basis: Literal["Source level", "Model estimate"] = Field(
+        default="Source level",
+        description="Use Model estimate for a projected target derived from verified inputs; Source level for an exact observed level.",
+    )
+    target_assumptions: str | None = Field(
+        default=None,
+        description="Required for Model estimate: explicit forward assumptions and calculation. These are model assumptions, not sourced facts.",
+    )
     price_target: float | None = Field(default=None)
     time_horizon: str | None = Field(default=None)
     confidence_score: int | None = Field(
@@ -527,6 +537,14 @@ class PortfolioTargetRepair(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    target_basis: Literal["Source level", "Model estimate"] = Field(
+        default="Source level",
+        description="Use Model estimate for a projected target derived from verified inputs; Source level for an exact observed level.",
+    )
+    target_assumptions: str | None = Field(
+        default=None,
+        description="Required for Model estimate: explicit forward assumptions and calculation. These are model assumptions, not sourced facts.",
+    )
     price_target: float | None = None
     target_low: float | None = None
     target_high: float | None = None
@@ -584,6 +602,14 @@ class PortfolioDecision(BaseModel):
             "independent of target validation."
         ),
     )
+    target_basis: Literal["Source level", "Model estimate"] = Field(
+        default="Source level",
+        description="Use Model estimate for a projected target derived from verified inputs; Source level for an exact observed level.",
+    )
+    target_assumptions: str | None = Field(
+        default=None,
+        description="Required for Model estimate: explicit forward assumptions and calculation. These are model assumptions, not sourced facts.",
+    )
     price_target: float | None = Field(
         default=None,
         description=(
@@ -591,7 +617,7 @@ class PortfolioDecision(BaseModel):
             "stated time horizon. Provide it whenever the debate contains a "
             "verified reference price and evidence-backed valuation, support, or "
             "resistance levels; use null only when the available evidence cannot "
-            "support a numeric target."
+            "support a numeric target. For projected targets use Model estimate with explicit assumptions."
         ),
     )
     time_horizon: str | None = Field(
@@ -621,8 +647,8 @@ class PortfolioDecision(BaseModel):
     supporting_quote: str | None = Field(
         default=None,
         description=(
-            "Verbatim quote from the supplied evidence containing the exact "
-            "target and nearby price-level context."
+            "Verbatim quote from supplied evidence: the exact target level for "
+            "Source level, or the verified input close for Model estimate."
         ),
     )
     target_low: float | None = None
@@ -685,7 +711,7 @@ class PortfolioDecision(BaseModel):
             self.supporting_quote_low, self.supporting_quote_high,
         )
         shared = (self.time_horizon, self.confidence_score, self.target_summary)
-        explanation = (self.target_method, self.target_risks)
+        explanation = (self.target_method, self.target_risks, self.target_assumptions)
         has_point = any(value is not None for value in point)
         has_range = any(value is not None for value in target_range)
         has_any = any(value is not None for value in (*point, *target_range, *shared, *explanation))
@@ -695,9 +721,12 @@ class PortfolioDecision(BaseModel):
             all(value is not None for value in (*point, *shared))
             if has_point else
             all(value is not None and (not isinstance(value, str) or value.strip())
-                for value in (*target_range, *shared, *explanation))
+                for value in (*target_range, *shared, self.target_method, self.target_risks))
             if has_range else False
         )
+        if (has_any and self.target_basis == "Model estimate"
+                and not all(isinstance(value, str) and value.strip() for value in explanation)):
+            raise ValueError("model estimates require method, risks, and assumptions")
         if has_any and not has_all:
             raise ValueError("finalized target bundle must be complete or absent")
         if (
@@ -799,6 +828,10 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         parts.extend(["", f"**Target Confidence**: {decision.confidence_score}/100"])
     if decision.target_summary:
         parts.extend(["", f"**Target Rationale**: {decision.target_summary}"])
+    if decision.price_target is not None or decision.target_low is not None:
+        parts.extend(["", f"**Target Basis**: {decision.target_basis}"])
+    if decision.target_assumptions:
+        parts.extend(["", f"**Target Assumptions**: {decision.target_assumptions}"])
     if decision.target_method:
         parts.extend(["", f"**Target Method**: {decision.target_method}"])
     if decision.target_risks:

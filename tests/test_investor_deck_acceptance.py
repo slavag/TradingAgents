@@ -220,7 +220,8 @@ def test_source_only_peng_range_reaches_final_slide_without_cut_text(tmp_path):
     assert "| Low | 72.83 |" in full_md and "| High | 77.10 |" in full_md
 
 
-def test_offline_peng_repair_range_flows_through_deck_forecast_and_web(tmp_path):
+@pytest.mark.parametrize("estimated", [False, True])
+def test_offline_peng_repair_range_flows_through_deck_forecast_and_web(tmp_path, estimated):
     state = peng_state_from_public_sec_fixtures_and_saved_vendor_rows()
     state.update({
         "company_of_interest": "PENG",
@@ -268,6 +269,15 @@ def test_offline_peng_repair_range_flows_through_deck_forecast_and_web(tmp_path)
         target_method="Technical scenario",
         target_risks="A failed breakout or weak cash conversion would invalidate the range.",
     )
+    if estimated:
+        repair.invoke.return_value = PortfolioTargetRepair(
+            price_target=79.53, supporting_quote="| Close | 75.74 |",
+            target_basis="Model estimate", target_assumptions="Assume 5% growth from the verified close.",
+            time_horizon="3 months", confidence_score=12,
+            target_summary="Projected recovery if demand persists.",
+            target_method="Verified close multiplied by 1.05",
+            target_risks="Weaker cash conversion may invalidate assumed growth.",
+        )
     llm = MagicMock()
     llm.with_structured_output.side_effect = lambda schema: (
         first if schema is PortfolioDecisionDraft else repair
@@ -293,6 +303,16 @@ def test_offline_peng_repair_range_flows_through_deck_forecast_and_web(tmp_path)
 
     assert first.invoke.call_count == 1 and repair.invoke.call_count == 1
     assert state["portfolio_decision"]["target_validation_status"] == "Accepted"
+    if estimated:
+        assert "79.53" in html
+        assert "Model estimate" in html and "Assume 5% growth" in html
+        assert "12/100" in html and "78/100" in html
+        assert web["price_target"] == 79.53
+        assert web["target_basis"] == "Model estimate"
+        assert "Assume 5% growth" in web["target_assumptions"]
+        assert '\"central_target\": \"79.53\"' in forecast
+        assert "Model estimate; assumptions:" in forecast
+        return
     assert "72.83–77.10" in html and "72.83" in web["price_target_label"]
     assert (web["target_low"], web["target_high"]) == (72.83, 77.10)
     assert '"target_low": "72.83"' in forecast

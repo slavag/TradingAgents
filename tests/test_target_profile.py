@@ -21,6 +21,8 @@ NO_POSITION_GUIDANCE = {
 }
 
 NO_RANGE_TARGET = {
+    "target_basis": None,
+    "target_assumptions": None,
     "target_low": None,
     "target_high": None,
     "supporting_quote_low": None,

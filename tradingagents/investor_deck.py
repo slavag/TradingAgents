@@ -110,6 +110,8 @@ class DecisionBlock(BaseModel):
     target_horizon: str | None = None
     target_confidence: int | None = None
     target_rationale: str | None = None
+    target_basis: str | None = None
+    target_assumptions: str | None = None
     target_method: str | None = None
     target_risks: str | None = None
     target_quote: str | None = None
@@ -809,6 +811,8 @@ def _decision_slide(state: Mapping[str, Any], ledger: ResearchLedger) -> DeckSli
         target_horizon=decision.time_horizon if accepted else None,
         target_confidence=decision.confidence_score if accepted else None,
         target_rationale=_decision_text(decision.target_summary) if accepted else None,
+        target_basis=decision.target_basis if accepted else None,
+        target_assumptions=_decision_text(decision.target_assumptions) if accepted else None,
         target_method=_decision_text(decision.target_method) if accepted else None,
         target_risks=_decision_text(decision.target_risks) if accepted else None,
         target_quote=decision.supporting_quote if accepted else None,

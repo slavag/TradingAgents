@@ -301,7 +301,7 @@ def test_pm_repairs_missing_target_with_low_confidence_peng_range_once():
 
 
 @pytest.mark.unit
-def test_pm_abstains_after_one_invalid_target_repair():
+def test_pm_preserves_recommendation_after_one_invalid_target_repair():
     from tradingagents.agents.schemas import PortfolioTargetRepair
 
     repair = PortfolioTargetRepair(
@@ -318,11 +318,11 @@ def test_pm_abstains_after_one_invalid_target_repair():
 
     decision = create_portfolio_manager(llm)(state)["portfolio_decision"]
 
-    assert decision["status"] == "Abstain"
-    assert decision["rating"] is None
-    assert decision["existing_position_action"] is None
-    assert decision["new_position_action"] is None
-    assert decision["status_reason"] == "target_unavailable"
+    assert decision["status"] == "Actionable"
+    assert decision["rating"] == "Hold"
+    assert decision["recommendation_confidence_score"] == 78
+    assert decision["existing_position_action"] == "Hold"
+    assert decision["new_position_action"] == "Wait"
     assert decision["target_validation_status"] == "Rejected"
     assert decision["target_validation_reason"] == "supporting_quote_not_eligible"
     assert first_chain.invoke.call_count == 1
@@ -356,23 +356,24 @@ def test_pm_repair_cannot_change_original_rating():
 
     decision = create_portfolio_manager(llm)(_peng_pm_state())["portfolio_decision"]
 
-    assert decision["status"] == "Abstain"
-    assert decision["rating"] is None
-    assert decision["status_reason"] == "target_unavailable"
+    assert decision["status"] == "Actionable"
+    assert decision["rating"] == "Hold"
+    assert decision["recommendation_confidence_score"] == 78
     assert first_chain.invoke.call_count == 1
     assert repair_chain.invoke.call_count == 1
 
 
 @pytest.mark.unit
-def test_pm_with_no_verified_price_rows_abstains_without_paid_repair():
+def test_pm_with_no_verified_price_rows_preserves_recommendation_without_paid_repair():
     llm, first_chain, repair_chain = _pm_llm(_peng_pm_draft(), None)
     state = _peng_pm_state()
     state["shared_evidence"] = []
 
     decision = create_portfolio_manager(llm)(state)["portfolio_decision"]
 
-    assert decision["status"] == "Abstain"
-    assert decision["status_reason"] == "target_unavailable"
+    assert decision["status"] == "Actionable"
+    assert decision["rating"] == "Hold"
+    assert decision["recommendation_confidence_score"] == 78
     assert first_chain.invoke.call_count == 1
     assert repair_chain.invoke.call_count == 0
 
@@ -500,3 +501,17 @@ def test_constraint_text_is_unambiguous():
     # No template braces: it is embedded in ChatPromptTemplate strings, where
     # braces would be parsed as input variables.
     assert "{" not in NO_EXTERNAL_TOOLS and "}" not in NO_EXTERNAL_TOOLS
+
+
+@pytest.mark.unit
+def test_pm_repair_failure_preserves_recommendation_and_independent_confidence():
+    llm, first_chain, repair_chain = _pm_llm(_peng_pm_draft(), None)
+    repair_chain.invoke.side_effect = RuntimeError("provider failed")
+    decision = create_portfolio_manager(llm)(_peng_pm_state())["portfolio_decision"]
+    assert decision["status"] == "Actionable"
+    assert decision["rating"] == "Hold"
+    assert decision["recommendation_confidence_score"] == 78
+    assert decision["existing_position_action"] == "Hold"
+    assert decision["price_target"] is None
+    assert first_chain.invoke.call_count == 1
+    assert repair_chain.invoke.call_count == 1

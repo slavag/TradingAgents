@@ -323,6 +323,8 @@ def forecast_record_from_state(
         data_quality=quality,
         data_quality_notes=(
             "Uncalibrated decision snapshot; probability distribution unavailable.",
+            *((f"Model estimate; assumptions: {decision.get('target_assumptions')}",)
+              if decision.get("target_basis") == "Model estimate" else ()),
         ),
         provenance=ForecastProvenance(
             models=models,

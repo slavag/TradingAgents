@@ -139,7 +139,7 @@ def test_unavailable_trader_proposal_failcloses_final_decision_without_model_cal
     llm.with_structured_output.return_value.invoke.assert_not_called()
 
 
-def test_primary_target_without_verbatim_quote_withholds_actionable_rating():
+def test_invalid_target_preserves_actionable_rating_and_confidence():
     draft = actionable_draft(
         price_target=999.0,
         time_horizon="12 months",
@@ -152,10 +152,11 @@ def test_primary_target_without_verbatim_quote_withholds_actionable_rating():
         make_pm_state()
     )["final_trade_decision"]
 
-    assert "**Decision Status**: Abstain" in result
-    assert "**Rating**" not in result
+    assert "**Decision Status**: Actionable" in result
+    assert "**Rating**: Buy" in result
+    assert "**Recommendation Confidence**: 72/100" in result
     assert "**Price Target**" not in result
-    assert "target_unavailable" in result
+    assert "supporting_quote_not_in_evidence" in result
 
 
 def test_primary_target_with_verbatim_quote_is_rendered():
@@ -191,9 +192,9 @@ def test_portfolio_manager_result_preserves_typed_decision_snapshot():
 
     result = create_portfolio_manager(configured_llm(result=draft))(make_pm_state())
 
-    assert result["portfolio_decision"]["status"] == "Abstain"
-    assert result["portfolio_decision"]["rating"] is None
-    assert result["portfolio_decision"]["status_reason"] == "target_unavailable"
+    assert result["portfolio_decision"]["status"] == "Actionable"
+    assert result["portfolio_decision"]["rating"] == "Buy"
+    assert result["portfolio_decision"]["recommendation_confidence_score"] == 72
 
 
 def test_prompt_defines_independent_thesis_and_symmetric_conditional_actions():
@@ -209,4 +210,4 @@ def test_prompt_defines_independent_thesis_and_symmetric_conditional_actions():
     assert "Conditional Sell requires" in prompt
     assert "Wait requires" in prompt
     assert "Recommendation Confidence" in prompt
-    assert "Never invent a price level" in prompt
+    assert "Never invent an observed price level" in prompt

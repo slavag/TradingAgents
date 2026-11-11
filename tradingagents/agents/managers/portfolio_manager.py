@@ -15,7 +15,6 @@ from tradingagents.agents.schemas import (
     PortfolioDecision,
     PortfolioDecisionDraft,
     PortfolioTargetRepair,
-    TargetValidationReason,
     TargetValidationStatus,
     render_pm_decision,
 )
@@ -63,28 +62,6 @@ def _manager_result(risk_debate_state: dict, decision: PortfolioDecision) -> dic
     }
 
 
-def _target_unavailable(reason: str | None = None) -> PortfolioDecision:
-    safe_reason = reason if reason in {item.value for item in TargetValidationReason} else None
-    return PortfolioDecision(
-        status=DecisionStatus.ABSTAIN,
-        rating=None,
-        executive_summary=(
-            "No actionable recommendation: a defensible price target or range "
-            "was unavailable."
-        ),
-        investment_thesis=(
-            "The source-backed research remains available, but the target "
-            "requirement was not met."
-        ),
-        status_reason="target_unavailable",
-        target_validation_status=(
-            TargetValidationStatus.REJECTED if safe_reason
-            else TargetValidationStatus.NOT_PROPOSED
-        ),
-        target_validation_reason=safe_reason,
-    )
-
-
 def _target_ready(decision: PortfolioDecision) -> bool:
     return (
         decision.target_validation_status is TargetValidationStatus.ACCEPTED
@@ -93,17 +70,6 @@ def _target_ready(decision: PortfolioDecision) -> bool:
         and isinstance(decision.target_risks, str)
         and bool(decision.target_risks.strip())
     )
-
-
-def _target_failure_reason(decision: PortfolioDecision) -> str | None:
-    if decision.target_validation_reason:
-        return decision.target_validation_reason
-    if decision.target_validation_status is TargetValidationStatus.ACCEPTED:
-        if not decision.target_method or not decision.target_method.strip():
-            return TargetValidationReason.TARGET_METHOD_MISSING.value
-        if not decision.target_risks or not decision.target_risks.strip():
-            return TargetValidationReason.TARGET_RISKS_MISSING.value
-    return None
 
 
 def create_portfolio_manager(llm):
@@ -177,14 +143,14 @@ Verified target candidates:
 - Wait requires an explicit watch plan: what evidence or price behavior permits entry, an optional alternate setup, and what invalidates or materially weakens the setup. Do not return a generic instruction to revisit later.
 - A bullish or strongly bullish thesis with future entry conditions is Conditional Buy, not Wait. A bearish or strongly bearish thesis with future sell or short conditions is Conditional Sell, not Wait.
 - Recommendation Confidence is required for every actionable decision. Score the evidence strength for the recommendation from 0 to 100 independently of target confidence; it must remain meaningful even when no numeric target can be validated.
-- Never invent a price level. Use price ranges only when the supplied evidence contains those levels; otherwise express the condition without a number.
+- Never invent an observed price level or source quote. Forward price estimates are permitted with explicit model assumptions, a verified input price, and independent target confidence. Keep entry conditions grounded in supplied evidence.
 - Apply the same rating standard to materially identical evidence across runs.
-- A numeric target must use an exact value from the verified target candidates above and copy that table row verbatim as its supporting quote. These are observed price levels, not forecasts by themselves; explain why the chosen level is a plausible central case for the stated horizon.
-- A target range may instead use two exact verified rows as its low and high bounds. Explain why those anchors form a plausible forward scenario for the stated horizon; a Hold range may bracket the close. Label technical scenarios as such, not as fair value.
+- For a Source level target, use an exact verified candidate value and copy its row verbatim as the supporting quote. For a Model estimate, project a central-case price from the verified close, current research, and explicit forward assumptions. The projected target need not already appear in a source. Set target_basis to Model estimate, explain the calculation in target_assumptions, and cite the verified Close row as the supporting quote. Never present assumptions as observed facts. Use Model estimate when source levels cannot support a forward target.
+- A Source level target range may instead use two exact verified rows as its low and high bounds. Explain why those anchors form a plausible forward scenario for the stated horizon; a Hold range may bracket the close. Label technical scenarios as such, not as fair value.
 - Every proposed target or range needs a method, risks, target confidence, and a full rationale. Target confidence measures evidence strength, not probability; low confidence is acceptable when clearly labeled.
-- If no verified candidate supports the direction and horizon, leave the entire target bundle null rather than inventing a level. The application will withhold an actionable rating if it cannot repair the target.
-- For Buy/Overweight, the target should normally be above the reference price; for Sell/Underweight, below it. Use null only when the supplied evidence genuinely cannot support a numeric target, never as a shortcut.
-- Use Actionable with a five-tier rating when the evidence supports a direction. Use Abstain with a null rating when it does not. Never use Unavailable; the application reserves that status for technical failures.
+- Provide a complete target bundle for every completed analysis, including Hold and low-confidence recommendations. Choose exactly one shape: a point target OR a range; set all unused shape fields to null. Express uncertainty in the independent recommendation and target confidence scores, with no minimum score required. A target validation issue must not change the recommendation.
+- For Buy/Overweight, the target should normally be above the reference price; for Sell/Underweight, below it. Use a Model estimate with explicit assumptions when no exact source-level target supports the horizon. A missing verified input price is a data failure; low confidence is not.
+- Use Actionable with a five-tier rating for completed research. A balanced outlook can support Hold with low recommendation confidence. Never omit the recommendation solely because target confidence is low or a target is difficult to estimate. Never use Unavailable; the application reserves that status for technical failures.
 
 Be decisive and ground every conclusion in specific evidence from the analysts.
 
@@ -210,15 +176,13 @@ Be decisive and ground every conclusion in specific evidence from the analysts.
                 reference_price=reference_price,
                 eligible_quotes=target_candidates,
             )
-            if draft.status is DecisionStatus.ACTIONABLE and not _target_ready(decision):
-                if not target_candidates:
-                    decision = _target_unavailable(_target_failure_reason(decision))
-                else:
-                    repair_llm = bind_structured(
-                        llm, PortfolioTargetRepair, "Target Repair",
-                        fallback_to_text=False,
-                    )
-                    repair_prompt = f"""Fill only the missing or invalid target bundle for the existing Portfolio Manager decision.
+            if (draft.status is DecisionStatus.ACTIONABLE
+                    and not _target_ready(decision) and target_candidates):
+                repair_llm = bind_structured(
+                    llm, PortfolioTargetRepair, "Target Repair",
+                    fallback_to_text=False,
+                )
+                repair_prompt = f"""Fill only the missing or invalid target bundle for the existing Portfolio Manager decision.
 
 Original rating: {draft.rating.value}
 Original thesis: {draft.investment_thesis}
@@ -226,26 +190,25 @@ Validation reason: {decision.target_validation_reason or 'target_not_proposed'}
 Verified candidate price rows:
 {candidate_lines}
 
-Return a complete point target or range with horizon, exact supporting row(s), method, risks, rationale, and uncalibrated target confidence. Use the observed rows as anchors, not automatic forecasts. Do not revise the rating, position actions, thesis, company facts, or evidence. Return target fields only; if no defensible scenario exists, leave the bundle null.
+When no source-level target supports the horizon, return a Model estimate with explicit target_assumptions and calculation, using the verified Close row as its input supporting quote. The projected price need not appear in that quote. Return exactly one complete shape: a point target OR a range. Set every unused shape field to null. Include horizon, exact supporting row(s), method, risks, rationale, and uncalibrated target confidence. Low confidence is acceptable; do not omit a target because confidence is low. Use the observed rows as anchors, not automatic forecasts. Do not revise the rating, position actions, thesis, company facts, or evidence. Return target fields only. Represent weak or conflicting evidence with low target confidence and explicit risks; do not use a null bundle as a substitute for an uncertain estimate.
 
 {NO_EXTERNAL_TOOLS}{get_language_instruction()}"""
-                    try:
-                        repair = invoke_structured_required(
-                            repair_llm, repair_prompt, "Target Repair",
-                        )
-                        if not isinstance(repair, PortfolioTargetRepair):
-                            raise StructuredOutputFailure("structured_response_invalid")
-                        repaired_draft = draft.model_copy(update=repair.model_dump())
-                        decision = finalize_portfolio_decision(
-                            repaired_draft,
-                            evidence,
-                            reference_price=reference_price,
-                            eligible_quotes=target_candidates,
-                        )
-                    except (StructuredOutputFailure, ValidationError, TypeError, ValueError):
-                        decision = _target_unavailable(_target_failure_reason(decision))
-                    if decision.status is DecisionStatus.ACTIONABLE and not _target_ready(decision):
-                        decision = _target_unavailable(_target_failure_reason(decision))
+                try:
+                    repair = invoke_structured_required(
+                        repair_llm, repair_prompt, "Target Repair",
+                    )
+                    if not isinstance(repair, PortfolioTargetRepair):
+                        raise StructuredOutputFailure("structured_response_invalid")
+                    repaired_draft = draft.model_copy(update=repair.model_dump())
+                    decision = finalize_portfolio_decision(
+                        repaired_draft,
+                        evidence,
+                        reference_price=reference_price,
+                        eligible_quotes=target_candidates,
+                    )
+                except (StructuredOutputFailure, ValidationError, TypeError, ValueError):
+                    # A target-only failure must not erase the PM recommendation.
+                    pass
         except StructuredOutputFailure as exc:
             decision = PortfolioDecision.unavailable(exc.code)
         except (ValidationError, TypeError, ValueError):

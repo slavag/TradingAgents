@@ -1,5 +1,7 @@
 # Actionable Target or Target Range
 
+> The failure-to-Abstain and exact-source-target restrictions below are superseded by [Recommendation and target confidence](../../recommendation-target-confidence.md) as of November 11, 2026.
+
 ## Goal and acceptance case
 
 Every new actionable stock decision must include an evidence-backed numeric point target or target range, even when target confidence is low. The value must carry a stated horizon, method, source quote(s), and a concise account of risks. Confidence is an uncalibrated evidence-strength judgement, not a probability; no minimum confidence score is required to publish a validated target. If a defensible value still cannot be produced after one bounded repair, the run keeps its company research but withholds an actionable rating instead of inventing a number.

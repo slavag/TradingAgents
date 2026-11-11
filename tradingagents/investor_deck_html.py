@@ -241,6 +241,8 @@ def _render_decision(block: DecisionBlock, numbers: dict[str, int]) -> str:
         f'<p class="decision-value">{escape(target)}</p>'
         f'{target_note}{line("Horizon:", block.target_horizon)}'
         f'{line("Target confidence:", target_confidence)}'
+        f'{line("Basis:", block.target_basis)}'
+        f'{line("Assumptions:", block.target_assumptions)}'
         f'{line("Method:", block.target_method)}'
         f'{line("Team rationale:", block.target_rationale)}'
         f'{line("Risks:", block.target_risks)}'

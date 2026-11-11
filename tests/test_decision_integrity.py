@@ -274,7 +274,6 @@ def test_verified_peng_hold_range_is_accepted_at_low_confidence():
     ({"target_risks": ""}, "target_risks_missing"),
     ({"target_summary": ""}, "target_rationale_missing"),
     ({"time_horizon": "3 months ago"}, "target_horizon_invalid"),
-    ({"price_target": 77.10, "supporting_quote": "| High | 77.10 |"}, "target_shape_mixed"),
     ({"rating": PortfolioRating.BUY}, "target_direction_conflict"),
 ])
 def test_peng_range_rejects_invalid_or_ineligible_bounds(changes, expected_reason):
@@ -696,3 +695,105 @@ def test_build_decision_evidence_uses_completed_state_sections_only():
 def test_extract_verified_reference_price_rejects_ambiguous_numbers():
     assert extract_verified_reference_price("Revenue 100; resistance 120.") is None
     assert extract_verified_reference_price("Verified close: $1,234.50") == 1234.5
+
+
+@pytest.mark.parametrize("point,expected", [(77.10, 77.10), (999.0, None)])
+def test_mixed_target_fields_retain_a_validated_shape(point, expected):
+    decision = finalize_portfolio_decision(
+        peng_range_draft(price_target=point, supporting_quote=f"| High | {point:.2f} |"),
+        peng_price_evidence(), reference_price=75.74, eligible_quotes=_PENG_PRICE_ROWS,
+    )
+    assert decision.target_validation_status is TargetValidationStatus.ACCEPTED
+    assert decision.price_target == expected
+    if expected is None:
+        assert (decision.target_low, decision.target_high) == (72.83, 77.10)
+    else:
+        assert decision.target_low is None and decision.target_high is None
+    assert decision.recommendation_confidence_score == 72
+    assert decision.confidence_score == 18
+
+
+def test_model_estimate_uses_verified_input_without_requiring_forecast_in_source():
+    draft = peng_range_draft(
+        target_low=None, target_high=None, supporting_quote_low=None, supporting_quote_high=None,
+        price_target=79.53, supporting_quote="| Close | 75.74 |",
+        target_basis="Model estimate", target_assumptions="Assume 5% growth from the verified close.",
+        target_method="Reference close multiplied by 1.05", confidence_score=12,
+    )
+    result = finalize_portfolio_decision(
+        draft, peng_price_evidence(), reference_price=75.74, eligible_quotes=_PENG_PRICE_ROWS,
+    )
+    assert result.target_validation_status is TargetValidationStatus.ACCEPTED
+    assert result.price_target == 79.53
+    assert result.target_basis == "Model estimate"
+    assert result.confidence_score == 12
+    assert result.recommendation_confidence_score == 72
+    assert "**Target Basis**: Model estimate" in render_pm_decision(result)
+    assert "Assume 5% growth" in render_pm_decision(result)
+
+
+@pytest.mark.parametrize("changes", [
+    {"target_assumptions": None},
+    {"supporting_quote": "| High | 77.10 |"},
+    {"price_target": float("inf")},
+    {"target_method": ""},
+    {"target_risks": ""},
+])
+def test_model_estimate_still_requires_valid_inputs_and_explicit_assumptions(changes):
+    draft = peng_range_draft(
+        target_low=None, target_high=None, supporting_quote_low=None, supporting_quote_high=None,
+        price_target=79.53, supporting_quote="| Close | 75.74 |",
+        target_basis="Model estimate", target_assumptions="Assume 5% growth.",
+    ).model_copy(update=changes)
+    result = finalize_portfolio_decision(
+        draft, peng_price_evidence(), reference_price=75.74, eligible_quotes=_PENG_PRICE_ROWS,
+    )
+    assert result.target_validation_status is TargetValidationStatus.REJECTED
+    assert result.price_target is None
+    assert result.recommendation_confidence_score == 72
+
+
+@pytest.mark.parametrize("reference,quotes,changes,reason", [
+    (None, _PENG_PRICE_ROWS, {}, "target_reference_missing"),
+    (75.74, None, {}, "supporting_quote_not_eligible"),
+    (75.74, _PENG_PRICE_ROWS, {"rating": PortfolioRating.BUY, "price_target": 70}, "target_direction_conflict"),
+])
+def test_model_estimate_rejects_missing_authoritative_input_or_conflicting_direction(reference, quotes, changes, reason):
+    draft = peng_range_draft(
+        target_low=None, target_high=None, supporting_quote_low=None, supporting_quote_high=None,
+        price_target=79.53, supporting_quote="| Close | 75.74 |",
+        target_basis="Model estimate", target_assumptions="Assume 5% growth.",
+    ).model_copy(update=changes)
+    decision = finalize_portfolio_decision(
+        draft, peng_price_evidence(), reference_price=reference, eligible_quotes=quotes,
+    )
+    assert decision.target_validation_reason == reason
+    assert decision.price_target is None
+
+
+def test_estimated_range_accepts_zero_confidence_and_keeps_assumptions():
+    draft = peng_range_draft(
+        target_low=70, target_high=80,
+        supporting_quote_low="| Close | 75.74 |", supporting_quote_high="| Close | 75.74 |",
+        target_basis="Model estimate", target_assumptions="Demand uncertainty implies a broad 70–80 scenario.",
+        confidence_score=0,
+    )
+    decision = finalize_portfolio_decision(
+        draft, peng_price_evidence(), reference_price=75.74, eligible_quotes=_PENG_PRICE_ROWS,
+    )
+    assert decision.target_validation_status is TargetValidationStatus.ACCEPTED
+    assert (decision.target_low, decision.target_high) == (70, 80)
+    assert decision.confidence_score == 0
+    assert decision.target_assumptions == draft.target_assumptions
+
+
+def test_mixed_invalid_shapes_cannot_bypass_target_validation():
+    draft = peng_range_draft(
+        price_target=999, supporting_quote="Price target: 999",
+        target_low=900, target_high=1000,
+    )
+    decision = finalize_portfolio_decision(
+        draft, peng_price_evidence(), reference_price=75.74, eligible_quotes=_PENG_PRICE_ROWS,
+    )
+    assert decision.target_validation_reason == "target_shape_mixed"
+    assert decision.price_target is None and decision.target_low is None

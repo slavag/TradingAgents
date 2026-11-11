@@ -1025,6 +1025,8 @@ def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, d
         "target_high": None,
         "supporting_quote_low": None,
         "supporting_quote_high": None,
+        "target_basis": None,
+        "target_assumptions": None,
         "target_method": None,
         "target_risks": None,
     }
@@ -1063,6 +1065,8 @@ def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, d
             "supporting_quote": typed.supporting_quote if accepted else None,
             "supporting_quote_low": typed.supporting_quote_low if accepted else None,
             "supporting_quote_high": typed.supporting_quote_high if accepted else None,
+            "target_basis": typed.target_basis if accepted else None,
+            "target_assumptions": typed.target_assumptions if accepted else None,
             "target_method": typed.target_method if accepted else None,
             "target_risks": typed.target_risks if accepted else None,
             "target_validation_status": typed.target_validation_status.value,
@@ -1395,6 +1399,8 @@ def target_outlook_text(result: dict) -> str:
     summary = result.get("target_summary")
     status = str(result.get("target_validation_status") or "").casefold()
     if summary and status in {"", TargetValidationStatus.ACCEPTED.value.casefold()}:
+        if result.get("target_basis") == "Model estimate":
+            return f"Model estimate. Assumptions: {result.get('target_assumptions') or '-'} {summary}"
         return str(summary)
     rejection = result.get("target_rejection_reason")
     if rejection:
@@ -1407,7 +1413,7 @@ def target_status_text(result: dict) -> str:
     """Render target validation separately from overall run completion."""
     status = str(result.get("target_validation_status") or "").strip()
     if status.casefold() == TargetValidationStatus.ACCEPTED.value.casefold():
-        return "Validated"
+        return "Model estimate" if result.get("target_basis") == "Model estimate" else "Validated"
     if status.casefold() == TargetValidationStatus.REJECTED.value.casefold():
         reason = result.get("target_rejection_reason")
         readable = str(reason).replace("_", " ") if reason else "validation failed"
