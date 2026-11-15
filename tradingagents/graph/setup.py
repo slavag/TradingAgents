@@ -32,6 +32,8 @@ from tradingagents.agents.utils.evidence import (
     tool_message_evidence,
 )
 from tradingagents.llm_clients.prompt_cache import PromptCachePolicy
+from tradingagents.related_companies import create_related_company_researcher
+from tradingagents.related_companies.primary import augment_primary_performance
 
 from .analyst_execution import build_analyst_execution_plan
 from .conditional_logic import ConditionalLogic
@@ -238,6 +240,12 @@ class GraphSetup:
 
         # Add other nodes
         workflow.add_node("Evidence Collector", collect_shared_evidence)
+        related_research = create_related_company_researcher(self.quick_thinking_llm)
+
+        def related_node(state):
+            return augment_primary_performance(state, related_research(state))
+
+        workflow.add_node("Related Company Research", related_node)
         workflow.add_node("Bull Researcher", bull_researcher_node)
         workflow.add_node("Bear Researcher", bear_researcher_node)
         workflow.add_node("Research Manager", research_manager_node)
@@ -251,12 +259,13 @@ class GraphSetup:
 
         # Define edges
         workflow.add_edge(START, "Evidence Collector")
+        workflow.add_edge("Evidence Collector", "Related Company Research")
         if parallel_analysts:
             analysts = [spec.agent_node for spec in plan.specs]
             for node in analysts:
-                workflow.add_edge("Evidence Collector", node)
+                workflow.add_edge("Related Company Research", node)
             if background_settlement:
-                workflow.add_edge("Evidence Collector", "Memory Log")
+                workflow.add_edge("Related Company Research", "Memory Log")
 
             def combine_analyst_evidence(state):
                 combined = state.get("shared_evidence", [])
@@ -274,7 +283,7 @@ class GraphSetup:
             )
             workflow.add_edge("Analyst Evidence", "Bull Researcher")
         else:
-            workflow.add_edge("Evidence Collector", plan.specs[0].agent_node)
+            workflow.add_edge("Related Company Research", plan.specs[0].agent_node)
             for i, spec in enumerate(plan.specs):
                 current_analyst = spec.agent_node
                 current_tools = spec.tool_node

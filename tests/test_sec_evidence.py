@@ -581,3 +581,48 @@ def test_empty_section_extraction_marks_document_unavailable_without_losing_fact
                for row in records)
     assert any(row.get("document_type") == "10-K" and row["status"] == "unavailable"
                for row in records)
+
+
+def test_document_adapter_keeps_full_comparative_columns_through_ledger(sec, monkeypatch, tmp_path):
+    from decimal import Decimal
+
+    from tradingagents.agents.utils.evidence import normalize_evidence
+    from tradingagents.research_ledger import build_research_ledger
+
+    html = (Path(__file__).parent / 'fixtures/sec/cbrs_q3_statement_fragment.html').read_text()
+    monkeypatch.setattr(sec, 'fetch_archive_html', lambda *args, **kwargs: html)
+    monkeypatch.setattr(sec, 'get_config', lambda: {'data_cache_dir': str(tmp_path)})
+    filing = _filing(
+        form='10-Q', accessionNumber='0001628280-26-073366',
+        primaryDocument='cbrs-statement.htm', filingDate='2026-11-12', reportDate='2026-09-30',
+    )
+    records = sec._document_records([filing], '2021728', 'CBRS', '2026-11-13', 'Research analyst@example.org')
+    table = next(record for record in records if record.get('table_rows'))
+    assert max(map(len, table['table_rows'])) == 24
+    normalized = normalize_evidence(table, '2026-11-13')
+    ledger = build_research_ledger({'trade_date': '2026-11-13', 'shared_evidence': [normalized]}, '2026-11-13')
+    revenue = {(fact.period_end, fact.period_kind): fact.value for fact in ledger.facts if fact.metric == 'net_sales'}
+    assert revenue[('2026-09-30', 'quarterly')] == Decimal('210809000')
+    assert revenue[('2025-09-30', 'quarterly')] == Decimal('135714000')
+    assert revenue[('2026-09-30', 'ytd')] == Decimal('584324000')
+    assert revenue[('2025-09-30', 'ytd')] == Decimal('338548000')
+
+
+def test_recent_ipo_uses_registration_when_no_annual_is_available(sec):
+    registration = _filing(form='424B4', accessionNumber='0000320193-26-000001', filingDate='2026-05-14')
+    quarter = _filing(form='10-Q', accessionNumber='0000320193-26-000002', filingDate='2026-11-12')
+    assert sec._eligible_filing(registration, date(2026, 11, 13))
+    assert not sec._eligible_filing(registration, date(2026, 5, 13))
+    selected = sec._select_filing_rows([quarter, registration])
+    assert registration in selected and quarter in selected
+    annual = _filing(form='10-K', accessionNumber='0000320193-26-000003', filingDate='2026-11-13')
+    selected = sec._select_filing_rows([annual, quarter, registration])
+    assert annual in selected and quarter in selected and registration not in selected
+
+
+def test_registration_supplement_keeps_a_bounded_substantive_base_fallback(sec):
+    base = _filing(form='S-1', accessionNumber='0000320193-26-000001', filingDate='2026-05-01')
+    supplement = _filing(form='424B3', accessionNumber='0000320193-26-000002', filingDate='2026-05-14')
+    older = _filing(form='S-1', accessionNumber='0000320193-25-000001', filingDate='2025-01-01')
+    selected = sec._select_filing_rows([supplement, base, older])
+    assert supplement in selected and base in selected and older not in selected

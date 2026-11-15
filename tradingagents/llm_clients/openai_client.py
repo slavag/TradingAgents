@@ -7,6 +7,8 @@ from urllib.parse import urlparse
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 
+from tradingagents.request_policy import DEFAULT_REQUEST_RETRIES, request_timeout_seconds
+
 from .api_key_env import get_api_key_env
 from .base_client import BaseLLMClient, normalize_content
 from .capabilities import get_capabilities
@@ -289,7 +291,10 @@ class OpenAIClient(BaseLLMClient):
     def get_llm(self) -> Any:
         """Return a configured ChatOpenAI instance, driven by the provider registry."""
         self.warn_if_unknown_model()
-        llm_kwargs = {"model": self.model}
+        timeout = self.kwargs.get("timeout")
+        if timeout is None or isinstance(timeout, (int, float, str)):
+            timeout = request_timeout_seconds(timeout)
+        llm_kwargs = {"model": self.model, "timeout": timeout, "max_retries": DEFAULT_REQUEST_RETRIES}
         spec = OPENAI_COMPATIBLE_PROVIDERS.get(self.provider)
         chat_cls = NormalizedChatOpenAI
 
@@ -357,6 +362,11 @@ class OpenAIClient(BaseLLMClient):
                 and _supports_reasoning_effort(self.model)
                 and self.kwargs.get("reasoning_effort") != "none"
             ):
+                continue
+            if key == "timeout":
+                # None means use the finite application default, not an endless read.
+                continue
+            if key == "max_retries" and self.kwargs[key] is None:
                 continue
             llm_kwargs[key] = self.kwargs[key]
 

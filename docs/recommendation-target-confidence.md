@@ -15,6 +15,8 @@ Both shapes must be positive and finite. Ranges must be ordered, and directional
 
 The initial request asks for both outputs even at low confidence. One bounded target-only repair can fill an omitted or invalid target, including a model estimate. A repair cannot change the recommendation, thesis, actions, or recommendation confidence. If input data or provider output still cannot pass validation, the valid recommendation survives with an explicit target error; the app does not fabricate a price or confidence score. Technical failure to produce the recommendation itself remains Unavailable.
 
+Unsupported numeric account-allocation advice is replaced with qualitative, account-dependent sizing in both the Trader and Portfolio Manager paths, including target repair. It cannot invalidate the whole decision. Recommendation, price targets, confidence scores, source quotes, and unrelated percentages are preserved. This addresses SNDK's `unsupported_portfolio_sizing` failure in run `2421de6129004530ab82a39cc4b5ad0a`; that saved failure report contains no recoverable Portfolio Manager draft.
+
 The investor deck and full report expose the target basis and assumptions. CLI/web target profiles preserve them, consolidated outlooks label estimates, and saved forecast quality notes retain the estimate assumptions. Existing reports are immutable and are not retroactively assigned a new recommendation or forecast.
 
 ## Verification

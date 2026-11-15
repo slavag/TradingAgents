@@ -53,6 +53,34 @@ def has_numeric_portfolio_weight(text: str) -> bool:
     return bool(_PORTFOLIO_WEIGHT.search(text))
 
 
+def remove_numeric_portfolio_weights(text: str) -> str:
+    """Replace unsupported account allocations without discarding the analysis."""
+    return _PORTFOLIO_WEIGHT.sub(
+        "an account-dependent allocation based on your risk budget", text,
+    )
+
+
+def sanitize_decision_sizing(draft: PortfolioDecisionDraft) -> PortfolioDecisionDraft:
+    """Keep decision metrics and verbatim evidence intact while removing sizing."""
+    fields = (
+        "executive_summary", "investment_thesis", "existing_position_summary",
+        "new_position_summary", "target_summary", "target_method", "target_risks",
+        "target_assumptions",
+    )
+    updates: dict[str, Any] = {
+        field: remove_numeric_portfolio_weights(value)
+        for field in fields
+        if isinstance((value := getattr(draft, field)), str)
+    }
+    if draft.conditional_plan is not None:
+        updates["conditional_plan"] = draft.conditional_plan.model_copy(update={
+            field: remove_numeric_portfolio_weights(value)
+            for field, value in draft.conditional_plan.model_dump().items()
+            if isinstance(value, str)
+        })
+    return draft.model_copy(update=updates)
+
+
 def _normalize_whitespace(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
@@ -75,6 +103,10 @@ def build_decision_evidence(state: Mapping[str, Any]) -> str:
     source_evidence = render_admissible_evidence(state, max_chars=60_000)
     if source_evidence:
         sections.append(f"[source_evidence]\n{source_evidence.strip()}")
+    if (state.get("related_company_research")
+            and state["related_company_research"].get("as_of") == str(state.get("trade_date") or state.get("as_of_date") or "")):
+        from tradingagents.related_companies import render_related_context
+        sections.append(render_related_context(state["related_company_research"], max_chars=16000))
     return "\n\n".join(sections)
 
 
@@ -183,6 +215,68 @@ def extract_verified_reference_price(text: str) -> float | None:
     if not math.isfinite(value) or value <= 0:
         return None
     return value
+
+
+def verified_price_context(
+    state: Mapping[str, Any], *, allow_legacy_report: bool = False,
+) -> dict[str, Any]:
+    """Resolve the admitted daily price/units without reading model-authored prose."""
+    from tradingagents.agents.utils.evidence import evidence_is_admissible
+
+    run_date = str(state.get("trade_date") or state.get("as_of_date") or "")
+    market = state.get("verified_market_snapshot") or {}
+    records = [record for record in state.get("shared_evidence") or []
+               if isinstance(record, Mapping) and evidence_is_admissible(record, run_date)]
+    closes = []
+    currencies = set()
+    for record in records:
+        content = str(record.get("content") or "")
+        if record.get("source") == "get_verified_market_snapshot":
+            match = re.search(r"(?im)^\|\s*Close\s*\|\s*\$?([\d,.]+)\s*\|", content)
+            observed = re.search(r"(?m)^- Latest trading row used: (\d{4}-\d{2}-\d{2})", content)
+            day = (observed.group(1) if observed else market.get("observed_on")
+                   or str(record.get("published_at") or "")[:10])
+            if match and day and day <= run_date:
+                value = float(match.group(1).replace(",", ""))
+                if math.isfinite(value) and value > 0:
+                    closes.append((day, value))
+        if record.get("source") == "get_fundamentals":
+            currencies.update(re.findall(
+                r"(?im)^(?:52 Week High|52 Week Low|50 Day Average|200 Day Average):\s*"
+                r"[\d.,]+\s+([A-Za-z]{3})\s*$", content,
+            ))
+    currency = market.get("quote_currency")
+    if isinstance(currency, str) and re.fullmatch(r"[A-Za-z]{3}", currency):
+        currencies.add(currency)
+    reaction = state.get("extended_hours_reaction") or {}
+    if (reaction.get("status") == "available"
+            and reaction.get("symbol") == state.get("company_of_interest")
+            and reaction.get("analysis_date") == run_date):
+        reaction_currency = reaction.get("currency")
+        if isinstance(reaction_currency, str) and re.fullmatch(r"[A-Za-z]{3}", reaction_currency):
+            currencies.add(reaction_currency)
+    context_currency = re.search(r"\bQuote currency:\s*([A-Za-z]{3})\b", str(state.get("instrument_context") or ""))
+    if context_currency:
+        currencies.add(context_currency.group(1))
+    observed_on = market.get("observed_on")
+    close = None
+    if closes:
+        observed_on = max(day for day, _ in closes)
+        latest = {value for day, value in closes if day == observed_on}
+        close = next(iter(latest)) if len(latest) == 1 else None
+    else:
+        try:
+            value = float(market.get("close"))
+            requested = market.get("requested_date")
+            if (observed_on and observed_on <= run_date and (not requested or requested == run_date)
+                    and math.isfinite(value) and value > 0):
+                close = value
+        except (ValueError, TypeError):
+            pass
+        if close is None and allow_legacy_report:
+            close = extract_verified_reference_price(str(state.get("market_report") or ""))
+    return {"close": close, "observed_on": observed_on,
+            "quote_currency": next(iter(currencies)) if len(currencies) == 1 else None}
 
 
 def _target_fields(draft: PortfolioDecisionDraft) -> tuple[Any, ...]:

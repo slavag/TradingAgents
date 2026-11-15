@@ -166,6 +166,17 @@ def classify_runtime_error(exc: Exception) -> dict[str, Any]:
             "raw_message": raw_message,
         }
 
+    if "timed out" in lowered or "timeout" in type(exc).__name__.lower():
+        return {
+            "kind": "request_timeout",
+            "fatal_for_batch": False,
+            "user_message": (
+                "The provider request timed out after the allowed retry budget. "
+                "This ticker could not finish; already completed reports are preserved."
+            ),
+            "raw_message": raw_message,
+        }
+
     return {
         "kind": "runtime_error",
         "fatal_for_batch": False,
@@ -532,6 +543,9 @@ def serialize_result(result: dict[str, Any]) -> dict[str, Any]:
         "ticker": result["ticker"],
         "analysis_date": result["analysis_date"],
         "status": "completed",
+        "portfolio_outlooks": final_state.get("portfolio_outlooks") or [],
+        "related_company_research": final_state.get("related_company_research"),
+        "extended_hours_reaction": final_state.get("extended_hours_reaction"),
         "decision": result.get("decision"),
         "price_target": result.get("price_target") if accepted_target else None,
         "target_low": result.get("target_low") if accepted_target else None,

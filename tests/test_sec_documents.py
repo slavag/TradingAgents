@@ -249,3 +249,49 @@ def test_financial_table_rows_and_cells_are_bounded(sec_documents):
     assert len(sections) == 1
     assert len(sections[0].table_rows) == 120
     assert max(len(cell) for row in sections[0].table_rows for cell in row) <= 300
+
+
+def test_table_context_excludes_previous_table_body_and_keeps_caption(sec_documents):
+    html = '''<html><body><p>Prior non-GAAP reconciliation (in millions)</p><table><tr><td>Revenue</td><td>SECRET PRIOR ROW</td></tr></table>
+    <p>CONSOLIDATED STATEMENTS OF OPERATIONS</p><p>(in thousands)</p>
+    <table><tr><td></td><td colspan="2">Three Months Ended September 30,</td></tr>
+    <tr><td></td><td>2026</td><td>2025</td></tr>
+    <tr><td>Total revenue</td><td>210809</td><td>135714</td></tr></table></body></html>'''
+    table = sec_documents.extract_sections(html, 'EX-99.1')[1]
+    assert 'SECRET PRIOR ROW' not in table.content
+    assert 'Prior non-GAAP' not in table.content
+    assert 'in thousands' in table.content
+    assert 'STATEMENTS OF OPERATIONS' in table.content
+    assert table.table_rows[0] == ('', 'Three Months Ended September 30,', 'Three Months Ended September 30,')
+
+
+def test_financial_tables_keep_complete_wide_rows_and_skip_nested_containers(sec_documents):
+    cells = ''.join(f'<td>{i}</td>' for i in range(30))
+    html = f'<html><body><table><tr><td><table><tr><td>Total revenue</td>{cells}</tr></table></td></tr></table></body></html>'
+    sections = sec_documents.extract_sections(html, 'EX-99.1')
+    assert len(sections) == 1
+    assert len(sections[0].table_rows[0]) == 31
+    assert sections[0].table_rows[0][-1] == '29'
+
+
+@pytest.mark.parametrize('form', ['S-1', 'F-1', '424B4'])
+def test_registration_business_competition_and_counterparties_keep_heading_boundaries(sec_documents, form):
+    html = '''<html><body><h1>BUSINESS</h1><p>We provide specialist compute systems and cloud services to enterprise customers. Our products support training and inference workloads. We sell hardware and usage-based cloud access.</p>
+    <h2>Competition</h2><p>We compete directly with Alpha Systems and Beta Labs for enterprise inference workloads. Their alternative products serve similar buyers and compete on performance and total ownership cost.</p>
+    <h2>Customers</h2><p>Our customers include Orion Cloud under a multi-year supply agreement. Orion Cloud purchases systems for its commercial infrastructure and remains subject to the terms of that agreement.</p>
+    <h2>Suppliers</h2><p>Our suppliers include Delta Foundry, which provides advanced manufacturing services. Capacity availability and delivery terms are important to our planned production and inventory management.</p>
+    <h1>MANAGEMENT</h1><p>UNRELATED MANAGEMENT SECRET should not become customer or supplier evidence.</p></body></html>'''
+    sections = {section.name: section.content for section in sec_documents.extract_sections(html, form)}
+    assert 'specialist compute' in sections['Business']
+    assert 'Alpha Systems and Beta Labs' in sections['Competition']
+    assert 'Orion Cloud' in sections['Customers']
+    assert 'Delta Foundry' in sections['Suppliers']
+    assert all('MANAGEMENT SECRET' not in text for text in sections.values())
+
+
+def test_registration_styled_paragraph_heading_stops_customer_section(sec_documents):
+    body = 'Orion Cloud purchases our systems under a disclosed commercial agreement. Delivery terms and future orders depend on that agreement. '
+    html = f'<html><body><p><b>Customers</b></p><p>{body}</p><p><b>Management’s Discussion and Analysis</b></p><p>UNRELATED MANAGEMENT DETAILS must stay outside customer evidence.</p></body></html>'
+    sections = {section.name: section.content for section in sec_documents.extract_sections(html, 'S-1')}
+    assert 'Orion Cloud' in sections['Customers']
+    assert 'MANAGEMENT DETAILS' not in sections['Customers']

@@ -18,6 +18,7 @@ _ACCESSION = re.compile(r"\d{10}-\d{2}-\d{6}")
 _CIK = re.compile(r"\d+")
 MAX_SEC_HTML_BYTES = 8_000_000
 MIN_SEC_REQUEST_INTERVAL = 0.2
+REGISTRATION_FORMS = frozenset({"S-1", "F-1", "424B4", "424B3"})
 _sec_request_lock = Lock()
 _last_sec_request_at = 0.0
 
@@ -139,6 +140,58 @@ def discover_exhibits(
     return list(dict.fromkeys(found))[:2]
 
 
+def _registration_sections(selector: Selector) -> list[SecSection]:
+    """Read bounded IPO business disclosures using actual block-heading boundaries."""
+    aliases = {
+        "business": "Business", "our business": "Business", "business overview": "Business",
+        "competition": "Competition", "competitive landscape": "Competition",
+        "our competitors": "Competition", "customers": "Customers", "our customers": "Customers",
+        "suppliers": "Suppliers", "our suppliers": "Suppliers",
+        "manufacturing and supply chain": "Suppliers",
+    }
+    boundaries = set(aliases) | {
+        "management", "risk factors", "principal stockholders", "use of proceeds",
+        "intellectual property", "employees", "facilities", "legal proceedings",
+        "description of capital stock", "executive compensation", "capitalization",
+        "sales and marketing", "regulation", "government regulation", "financial statements",
+    }
+    blocks = []
+    for node in selector.xpath(
+        "//body//*[self::p or self::h1 or self::h2 or self::h3 or self::h4 "
+        "or self::h5 or self::h6 or (self::div and not(.//p or .//div or .//table))]"
+        "[not(ancestor::table)]"
+    ):
+        text = " ".join(" ".join(node.xpath(".//text()").getall()).split())
+        if text:
+            emphasized = any(
+                " ".join(" ".join(child.xpath(".//text()").getall()).split()) == text
+                for child in node.xpath(".//b|.//strong|.//*[@style]")
+                if str(child.root.tag).lower() in {"b", "strong"}
+                or re.search(r"font-weight\s*:\s*(?:bold|[6-9]00)", child.attrib.get("style", ""), re.I)
+            )
+            styled_heading = (len(text) <= 120 and not re.search(r"[.!?;]$", text)
+                              and (emphasized or bool(re.search(
+                                  r"font-weight\s*:\s*(?:bold|[6-9]00)", node.attrib.get("style", ""), re.I))))
+            blocks.append((text, str(node.root.tag).lower().startswith("h") or styled_heading))
+    candidates: dict[str, str] = {}
+    for index, (text, _) in enumerate(blocks):
+        name = aliases.get(text.rstrip(":").casefold())
+        if name is None:
+            continue
+        body = []
+        for value, heading in blocks[index + 1:]:
+            if heading or value.rstrip(":").casefold() in boundaries:
+                break
+            body.append(value)
+            if sum(map(len, body)) >= 4000:
+                break
+        content = " ".join(body)[:4000]
+        if len(content) >= 80 and len(content) > len(candidates.get(name, "")):
+            candidates[name] = content
+    return [SecSection(name, candidates[name]) for name in
+            ("Business", "Competition", "Customers", "Suppliers") if name in candidates]
+
+
 def _named_bounded_sections(form: str, text: str) -> list[SecSection]:
     if form in {"10-K", "20-F", "40-F"}:
         markers = [
@@ -226,23 +279,68 @@ def extract_sections(html: str, form: str) -> list[SecSection]:
     for node in selector.xpath("//script|//style|//noscript"):
         node.root.drop_tree()
     text = " ".join(" ".join(selector.xpath("//body//text()").getall()).split())
-    sections = _named_bounded_sections(form, text)
-    for index, table in enumerate(selector.xpath("//table")[:12], 1):
-        rows = tuple(
-            tuple(
-                " ".join(" ".join(cell.xpath(".//text()").getall()).split())[:300]
-                for cell in tr.xpath("./th|./td")[:20]
-            )
-            for tr in table.xpath(".//tr")[:120]
-        )
+    sections = (_registration_sections(selector) if form in REGISTRATION_FORMS
+                else _named_bounded_sections(form, text))
+    # Layout wrappers duplicate their descendants; only leaf tables own rows.
+    for index, table in enumerate(selector.xpath("//table[not(.//table)]")[:12], 1):
+        grid = []
+        pending = {}
+        oversized = False
+        for tr in table.xpath("./tr|./thead/tr|./tbody/tr|./tfoot/tr")[:120]:
+            cells = {}
+            for column, (value, remaining) in list(pending.items()):
+                cells[column] = value
+                if remaining > 1:
+                    pending[column] = (value, remaining - 1)
+                else:
+                    del pending[column]
+            column = 0
+            for cell in tr.xpath("./th|./td"):
+                while column in cells:
+                    column += 1
+                value = " ".join(" ".join(cell.xpath(".//text()").getall()).split())[:300]
+                try:
+                    width = max(1, int(cell.attrib.get("colspan", "1")))
+                    height = max(1, int(cell.attrib.get("rowspan", "1")))
+                except ValueError:
+                    oversized = True
+                    break
+                if column + width > 64 or height > 120:
+                    oversized = True
+                    break
+                for offset in range(width):
+                    cells[column + offset] = value
+                    if height > 1:
+                        pending[column + offset] = (value, height - 1)
+                column += width
+            if oversized:
+                break
+            grid.append(tuple(cells.get(column, "") for column in range(max(cells, default=-1) + 1)))
+        # Never silently chop off comparative periods from a wide statement.
+        if oversized:
+            continue
+        rows = tuple(grid)
         if any(
             re.search(r"net sales|revenue|operating income|cash flow", " ".join(row), re.I)
             for row in rows
         ):
-            preceding = " ".join(
-                " ".join(table.xpath("preceding::text()").getall()[-30:]).split()
-            )
-            sections.append(SecSection(f"Table {index}", preceding[-1000:], rows))
+            context = []
+            layout_ancestors = set(table.root.iterancestors("table"))
+            # Stop at the preceding table, including its caption and units.
+            # Filtering table text alone would retain that prior caption.
+            for text_node in reversed(table.root.xpath("preceding::text()")):
+                parent = text_node.getparent()
+                ancestors = set(parent.iterancestors("table"))
+                if parent.tag == "table":
+                    ancestors.add(parent)
+                if ancestors - layout_ancestors:
+                    break
+                context.append(str(text_node))
+                if sum(map(len, context)) >= 1000:
+                    break
+            preceding = " ".join(" ".join(reversed(context)).split())
+            caption = " ".join(table.xpath("./caption//text()").getall())
+            sections.append(SecSection(f"Table {index}", (preceding + " " + caption).strip()[-1000:], rows))
         if len(sections) >= 6:
             break
     return sections[:6]

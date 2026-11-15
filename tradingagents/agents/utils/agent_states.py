@@ -47,6 +47,7 @@ class RiskDebateState(TypedDict):
 class AgentState(MessagesState):
     company_of_interest: Annotated[str, "Company that we are interested in trading"]
     asset_type: Annotated[str, "Asset type under analysis such as stock or crypto"]
+    related_company_research: Annotated[dict, "Scoped competitor/supplier/customer evidence; never primary-company figures"]
     instrument_context: Annotated[str, "Deterministic ticker identity resolved at run start"]
     portfolio_context: Annotated[str, "Optional supplied caller book at the analysis date"]
     trade_date: Annotated[str, "What date we are trading at"]
@@ -68,6 +69,9 @@ class AgentState(MessagesState):
     market_report: Annotated[str, "Report from the Market Analyst"]
     verified_market_snapshot: Annotated[
         dict, "Structured daily OHLCV provenance used by the Market Analyst"
+    ]
+    extended_hours_reaction: Annotated[
+        dict, "Supplementary extended-hours quote; never the daily OHLCV or target anchor"
     ]
     sentiment_report: Annotated[str, "Report from the Sentiment Analyst"]
     news_report: Annotated[
@@ -91,4 +95,5 @@ class AgentState(MessagesState):
     portfolio_decision: Annotated[
         dict, "Typed PortfolioDecision snapshot serialized for forecast records"
     ]
+    portfolio_outlooks: Annotated[list[dict], "Validated six- and twelve-month outlooks with independent targets and confidence"]
     past_context: Annotated[str, "Memory log context injected at run start (same-ticker decisions + cross-ticker lessons)"]

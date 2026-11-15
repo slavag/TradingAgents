@@ -168,3 +168,15 @@ class ContextAnchoredPlaceholderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_verified_quote_currency_reaches_resolved_instrument_context():
+    resolve_instrument_identity.cache_clear()
+    try:
+        with patch("tradingagents.agents.utils.agent_utils.yf.Ticker") as ticker:
+            ticker.return_value.info = {"longName": "Canadian Example", "currency": "CAD"}
+            identity = resolve_instrument_identity("EXAMPLE.TO")
+        assert identity["quote_currency"] == "CAD"
+        assert "Quote currency: CAD" in build_instrument_context("EXAMPLE.TO", identity=identity)
+    finally:
+        resolve_instrument_identity.cache_clear()

@@ -89,9 +89,9 @@ def _bounded_table_rows(value: Any) -> list[list[str]]:
     if not isinstance(value, (list, tuple)):
         return []
     return [
-        [_redact(cell)[:300] for cell in row[:20]]
+        [_redact(cell)[:300] for cell in row]
         for row in value[:120]
-        if isinstance(row, (list, tuple))
+        if isinstance(row, (list, tuple)) and len(row) <= 64
     ]
 
 
@@ -316,6 +316,7 @@ def render_shared_evidence(
     ]
     priority = {
         "earnings_release": 1,
+        "market_reaction": 1,
         "business": 2,
         "fundamentals": 3,
         "quarterly_filing": 4,

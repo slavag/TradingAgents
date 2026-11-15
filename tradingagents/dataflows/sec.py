@@ -23,6 +23,7 @@ from tradingagents.settings import get_data_source_setting
 
 from .config import get_config
 from .sec_documents import (
+    REGISTRATION_FORMS,
     SecDocumentError,
     SecSection,
     _pace_sec_request,
@@ -50,7 +51,7 @@ _TICKER_RE = re.compile(r"[A-Z0-9][A-Z0-9.-]{0,19}")
 _ACCESSION_RE = re.compile(r"\d{10}-\d{2}-\d{6}")
 _DOCUMENT_RE = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*")
 _ARCHIVE_RE = re.compile(r"CIK\d{10}-submissions-\d{3}\.json")
-_FORMS = {"10-K", "10-Q", "8-K", "20-F", "40-F", "6-K"}
+_FORMS = {"10-K", "10-Q", "8-K", "20-F", "40-F", "6-K"} | REGISTRATION_FORMS
 _SECTION_CATEGORY = {
     "Business": "business",
     "Competition": "business",
@@ -324,7 +325,12 @@ def _select_filing_rows(eligible: list[dict[str, Any]]) -> list[dict[str, Any]]:
         row for row in eligible
         if row["form"].removesuffix("/A") in {"8-K", "6-K"}
     ][:MAX_CURRENT_REPORTS]
-    selected = {row["accessionNumber"]: row for row in (annual, quarterly, *current) if row}
+    registrations = [row for row in eligible if row["form"].removesuffix("/A") in REGISTRATION_FORMS] if annual is None else []
+    latest_registration = registrations[0] if registrations else None
+    base_registration = next((row for row in registrations[1:]
+                              if row["form"] in {"S-1", "F-1", "424B4"}), None)
+    selected = {row["accessionNumber"]: row for row in
+                (annual, quarterly, latest_registration, base_registration, *current) if row}
     return sorted(selected.values(), key=lambda row: row["filingDate"], reverse=True)
 
 
@@ -383,7 +389,7 @@ def _exhibit_report_period(html: str) -> str | None:
 
 
 def _section_category(form: str, section: SecSection) -> str:
-    if form in {"10-K", "20-F", "40-F"}:
+    if form in {"10-K", "20-F", "40-F"} | REGISTRATION_FORMS:
         return "business"
     if form == "10-Q":
         return "quarterly_filing"
@@ -402,6 +408,7 @@ def _document_records(
     document_limits = {
         "10-K": 3, "20-F": 3, "40-F": 3, "10-Q": 2,
         "8-K": 2, "6-K": 2, "EX-99.1": 6,
+        **dict.fromkeys(REGISTRATION_FORMS, 4),
     }
 
     def append_sections(
@@ -431,7 +438,7 @@ def _document_records(
                     section=section.name,
                     report_period=report_period,
                     table_rows=[
-                        [cell[:160] for cell in cells[:20]]
+                        [cell[:300] for cell in cells[:64]]
                         for cells in section.table_rows[:60]
                     ],
                 )
@@ -462,11 +469,16 @@ def _document_records(
         rows,
         key=lambda row: (
             0 if row["form"].removesuffix("/A") in {"10-K", "20-F", "40-F"}
-            else 1 if row["form"].removesuffix("/A") == "10-Q" else 2,
+            else 1 if row["form"].removesuffix("/A") == "10-Q"
+            else 2 if row["form"].removesuffix("/A") in REGISTRATION_FORMS else 3,
             -date.fromisoformat(row["filingDate"]).toordinal(),
         ),
     )
+    registration_topics: set[str] = set()
     for row in ordered:
+        if (row["form"].removesuffix("/A") in REGISTRATION_FORMS
+                and {"Business", "Competition", "Customers", "Suppliers"} <= registration_topics):
+            continue
         if fetches >= MAX_DOCUMENT_FETCHES or len(records) >= MAX_SECTION_RECORDS:
             break
         url = _filing_url(cik, row)
@@ -481,6 +493,8 @@ def _document_records(
                 cache_dir=cache_dir,
             )
             sections = extract_sections(html, document_type)
+            if document_type in REGISTRATION_FORMS:
+                registration_topics.update(section.name for section in sections)
             if sections:
                 append_sections(sections, row, url, document_type, row.get("reportDate"))
             else:

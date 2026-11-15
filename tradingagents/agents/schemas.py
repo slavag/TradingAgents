@@ -411,9 +411,66 @@ def parse_trader_proposal_markdown(text: str) -> TraderProposal:
 # ---------------------------------------------------------------------------
 
 
+class PortfolioTargetRepair(BaseModel):
+    """Target-only response; provider output cannot alter the investment decision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_basis: Literal["Source level", "Model estimate"] = Field(
+        default="Source level",
+        description="Use Model estimate for a projected target derived from verified inputs; Source level for an exact observed level.",
+    )
+    target_assumptions: str | None = Field(
+        default=None,
+        description="Required for Model estimate: explicit forward assumptions and calculation. These are model assumptions, not sourced facts.",
+    )
+    price_target: float | None = None
+    target_low: float | None = None
+    target_high: float | None = None
+    time_horizon: str | None = None
+    confidence_score: int | None = Field(default=None, ge=0, le=100)
+    target_summary: str | None = None
+    target_method: str | None = None
+    target_risks: str | None = None
+    supporting_quote: str | None = None
+    supporting_quote_low: str | None = None
+    supporting_quote_high: str | None = None
+
+    @field_validator("price_target", "target_low", "target_high", "confidence_score", mode="before")
+    @classmethod
+    def _nullish_numeric_to_none(cls, value):
+        return _coerce_optional_float(value)
+
+
+class PortfolioOutlookDraft(PortfolioTargetRepair):
+    """A separately reasoned forward view, never the tactical target relabeled."""
+
+    months: Literal[6, 12]
+    rating: PortfolioRating
+    recommendation_confidence_score: int = Field(ge=0, le=100)
+    summary: str = Field(min_length=1)
+    drivers: list[str] = Field(min_length=1, max_length=5)
+    upside_case: str = Field(min_length=1)
+    downside_case: str = Field(min_length=1)
+    invalidation: str = Field(min_length=1)
+    source_ids: list[str] = Field(min_length=1)
+
+
+class PortfolioOutlookRepair(BaseModel):
+    """One bounded repair for forward horizons; cannot modify the tactical decision."""
+
+    model_config = ConfigDict(extra="forbid")
+    outlooks: list[PortfolioOutlookDraft] = Field(min_length=1, max_length=2)
+
+
 class PortfolioDecisionDraft(BaseModel):
     """Provider-facing Portfolio Manager response before deterministic validation."""
 
+    outlooks: list[PortfolioOutlookDraft] = Field(
+        default_factory=list,
+        max_length=2,
+        description="Provide distinct 6-month and 12-month views, each with its own rating, recommendation confidence, target/range, target confidence, assumptions, drivers, upside/downside and invalidation. Do not reuse the tactical horizon.",
+    )
     status: DecisionStatus = DecisionStatus.ACTIONABLE
     rating: PortfolioRating | None = Field(
         default=None,
@@ -488,6 +545,21 @@ class PortfolioDecisionDraft(BaseModel):
     target_method: str | None = Field(default=None)
     target_risks: str | None = Field(default=None)
 
+    @field_validator("outlooks", mode="before")
+    @classmethod
+    def _isolate_invalid_outlooks(cls, value):
+        # Optional horizons cannot invalidate an otherwise complete tactical
+        # recommendation. Missing/invalid children go through bounded repair.
+        if not isinstance(value, list) or len(value) > 2:
+            return []
+        valid = []
+        for row in value:
+            try:
+                valid.append(PortfolioOutlookDraft.model_validate(row))
+            except (ValueError, TypeError):
+                continue
+        return valid
+
     @field_validator(
         "price_target",
         "target_low",
@@ -532,35 +604,6 @@ class PortfolioDecisionDraft(BaseModel):
         return self
 
 
-class PortfolioTargetRepair(BaseModel):
-    """Target-only response; provider output cannot alter the investment decision."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    target_basis: Literal["Source level", "Model estimate"] = Field(
-        default="Source level",
-        description="Use Model estimate for a projected target derived from verified inputs; Source level for an exact observed level.",
-    )
-    target_assumptions: str | None = Field(
-        default=None,
-        description="Required for Model estimate: explicit forward assumptions and calculation. These are model assumptions, not sourced facts.",
-    )
-    price_target: float | None = None
-    target_low: float | None = None
-    target_high: float | None = None
-    time_horizon: str | None = None
-    confidence_score: int | None = Field(default=None, ge=0, le=100)
-    target_summary: str | None = None
-    target_method: str | None = None
-    target_risks: str | None = None
-    supporting_quote: str | None = None
-    supporting_quote_low: str | None = None
-    supporting_quote_high: str | None = None
-
-    @field_validator("price_target", "target_low", "target_high", "confidence_score", mode="before")
-    @classmethod
-    def _nullish_numeric_to_none(cls, value):
-        return _coerce_optional_float(value)
 
 
 class PortfolioDecision(BaseModel):

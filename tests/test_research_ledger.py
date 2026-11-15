@@ -214,10 +214,8 @@ def test_sparse_sec_release_table_pairs_numeric_cells_with_repeated_periods():
     ledger = build_research_ledger({"shared_evidence": [row]}, "2026-10-09")
 
     sales = ledger.facts_for("net_sales")
-    assert any(f.period_label == "Q4-26" and f.basis == "gaap"
-               and f.value == Decimal("566685000") for f in sales)
-    assert any(f.period_label == "Q3-26" and f.basis == "gaap"
-               and f.value == Decimal("478713000") for f in sales)
+    # This saved row is clipped before the sixth period: no prefix attribution.
+    assert sales == ()
     income = ledger.facts_for("net_income")
     assert any(f.period_label == "Q4-26" and f.basis == "non_gaap"
                and f.value == Decimal("71438000") for f in income)
@@ -283,3 +281,157 @@ def test_sec_companyfacts_are_typed_without_turning_ytd_cash_into_a_quarter():
     assert ocf.period_kind == "ytd"
     assert ocf.period_label == "FY26 Q3 YTD"
     assert ledger.latest("operating_cash_flow") is None
+
+
+def test_multirow_statement_keeps_quarter_and_nine_months_separate():
+    row = sec_row(content='CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (in thousands, except per share amounts)',
+        report_period='2026-09-30', published_at='2026-11-12', as_of_date='2026-11-13', table_rows=[
+            ['', 'Three Months Ended September 30,', 'Three Months Ended September 30,', 'Nine Months Ended September 30,', 'Nine Months Ended September 30,'],
+            ['', '2026', '2025', '2026', '2025'],
+            ['Total revenue', '210,809', '135,714', '584,324', '338,548'],
+            ['Gross profit', '42,094', '55,135', '153,827', '128,838'],
+            ['Net income (loss)', '$', '(161,218)', '', '$', '(22,201)', '', '$', '(625,752)', '', '$', '263,444'],
+        ])
+    ledger = build_research_ledger({'shared_evidence': [row]}, '2026-11-13')
+    facts = ledger.facts_for('net_sales')
+    assert [(f.value, f.period_kind, f.period_end) for f in facts] == [
+        (Decimal('210809000'), 'quarterly', '2026-09-30'),
+        (Decimal('135714000'), 'quarterly', '2025-09-30'),
+        (Decimal('584324000'), 'ytd', '2026-09-30'),
+        (Decimal('338548000'), 'ytd', '2025-09-30')]
+    assert ledger.latest('gross_profit').value == Decimal('42094000')
+    assert ledger.latest('net_income').value == Decimal('-161218000')
+
+
+def test_multirow_statement_skips_ambiguous_value_counts_and_segment_headers():
+    row = sec_row(table_rows=[
+        ['', 'Three Months Ended September 30,', 'Nine Months Ended September 30,'],
+        ['', '2026', '2025', '2026', '2025'],
+        ['Total revenue', '1', '2', '3'],
+    ])
+    ledger = build_research_ledger({'shared_evidence': [row]}, '2026-10-09')
+    assert ledger.facts_for('net_sales') == ()
+
+
+def test_real_cbrs_statement_colspans_preserve_financial_periods():
+    fixture = Path(__file__).parent / 'fixtures' / 'sec' / 'cbrs_q3_statement_fragment.html'
+    section = extract_sections(fixture.read_text(), 'EX-99.1')[0]
+    row = sec_row(content=section.content, table_rows=[list(r) for r in section.table_rows])
+    ledger = build_research_ledger({'shared_evidence': [row]}, '2026-10-09')
+    assert ledger.latest('net_sales').value == Decimal('210809000')
+    assert ledger.latest('gross_profit').value == Decimal('42094000')
+    assert ledger.latest('net_income').value == Decimal('-161218000')
+    assert ledger.latest('net_sales', 'ytd').value == Decimal('584324000')
+
+
+def test_duration_header_retains_million_scale_non_gaap_basis_and_eps_units():
+    row = sec_row(content='Non-GAAP results (in millions, except per share data)', table_rows=[
+        ['', 'Three Months Ended September 30,', 'Three Months Ended September 30,'],
+        ['', '2026', '2025'],
+        ['Total revenue', '210.809', '135.714'],
+        ['Diluted EPS', '(0.50)', '0.25'],
+    ])
+    ledger = build_research_ledger({'shared_evidence': [row]}, '2026-10-09')
+    sales = ledger.latest('net_sales', basis='non_gaap')
+    assert sales.value == Decimal('210809000')
+    assert sales.period_end == '2026-09-30'
+    eps = ledger.latest('diluted_eps', basis='non_gaap')
+    assert eps.value == Decimal('-0.50')
+    assert eps.unit == 'USD_per_share'
+    assert ledger.latest('net_sales') is None
+
+
+def test_legacy_period_headers_skip_partial_numeric_rows():
+    row = sec_row(table_rows=[['Metric', 'Q4-26', 'Q3-26'], ['Total revenue', '100']])
+    ledger = build_research_ledger({'shared_evidence': [row]}, '2026-10-09')
+    assert ledger.facts_for('net_sales') == ()
+
+
+@pytest.mark.parametrize('content', ['Statements of operations', '(in thousands) (in millions)'])
+def test_duration_statement_rejects_unknown_or_conflicting_scale(content):
+    row = sec_row(content=content, table_rows=[
+        ['', 'Three Months Ended September 30,'], ['', '2026'], ['Total revenue', '123'],
+    ])
+    assert build_research_ledger({'shared_evidence': [row]}, '2026-10-09').facts == ()
+
+
+def test_duration_statement_explicit_column_basis_overrides_reconciliation_context():
+    row = sec_row(content='Reconciliation of GAAP to non-GAAP results (in thousands)', table_rows=[
+        ['', 'Three Months Ended September 30,', 'Three Months Ended September 30,'],
+        ['', '2026', '2025'], ['', 'GAAP', 'Non-GAAP'], ['Total revenue', '123', '140'],
+    ])
+    facts = build_research_ledger({'shared_evidence': [row]}, '2026-10-09').facts
+    assert [(f.value, f.basis) for f in facts] == [(Decimal('123000'), 'gaap'), (Decimal('140000'), 'non_gaap')]
+
+
+def test_duration_statement_explicit_row_basis_overrides_context():
+    row = sec_row(content='Adjusted non-GAAP measures (in thousands)', table_rows=[
+        ['', 'Three Months Ended September 30,'], ['', '2026'], ['GAAP Total revenue', '123'],
+    ])
+    facts = build_research_ledger({'shared_evidence': [row]}, '2026-10-09').facts
+    assert [(f.value, f.basis) for f in facts] == [(Decimal('123000'), 'gaap')]
+
+
+def test_duration_statement_rejects_conflicting_row_column_basis():
+    row = sec_row(content='Results (in thousands)', table_rows=[
+        ['', 'Three Months Ended September 30,'], ['', '2026'], ['', 'Non-GAAP'],
+        ['GAAP Total revenue', '123'],
+    ])
+    assert build_research_ledger({'shared_evidence': [row]}, '2026-10-09').facts == ()
+
+
+def test_duration_statement_same_year_columns_keep_explicit_bases_separate():
+    row = sec_row(content='Reconciliation of GAAP to non-GAAP (in thousands)', table_rows=[
+        ['', 'Three Months Ended September 30,', 'Three Months Ended September 30,'],
+        ['', '2026', '2026'], ['', 'GAAP', 'Non-GAAP'], ['Total revenue', '123', '140'],
+    ])
+    facts = build_research_ledger({'shared_evidence': [row]}, '2026-10-09').facts
+    assert [(f.value, f.basis) for f in facts] == [(Decimal('123000'), 'gaap'), (Decimal('140000'), 'non_gaap')]
+
+
+def test_duration_statement_skips_unowned_basis_in_mixed_context():
+    row = sec_row(content='Reconciliation of GAAP to non-GAAP (in thousands)', table_rows=[
+        ['', 'Three Months Ended September 30,'], ['', '2026'], ['Total revenue', '123'],
+    ])
+    assert build_research_ledger({'shared_evidence': [row]}, '2026-10-09').facts == ()
+
+
+@pytest.mark.parametrize('quarter,ytd', [('123', '456'), ('123', '123')])
+def test_duration_statement_same_year_columns_keep_duration_ownership(quarter, ytd):
+    row = sec_row(content='Statements of operations (in thousands)', table_rows=[
+        ['', 'Three Months Ended September 30,', 'Nine Months Ended September 30,'],
+        ['', '2026', '2026'], ['Total revenue', quarter, ytd],
+    ])
+    facts = build_research_ledger({'shared_evidence': [row]}, '2026-10-09').facts
+    assert [(f.value, f.period_kind) for f in facts] == [
+        (Decimal(quarter) * 1000, 'quarterly'), (Decimal(ytd) * 1000, 'ytd'),
+    ]
+
+
+@pytest.mark.parametrize('fragment_cells', [['(', '161218', ')'], ['-', '161218'], ['($', '161218', ')']])
+@pytest.mark.parametrize('aligned', [True, False])
+def test_duration_statement_rejects_unjoined_accounting_sign_fragments(fragment_cells, aligned):
+    width = len(fragment_cells) if aligned else 1
+    row = sec_row(content='Statements of operations (in thousands)', table_rows=[
+        [''] + ['Three Months Ended September 30,'] * width,
+        [''] + ['2026'] * width,
+        ['Net income (loss)'] + fragment_cells,
+    ])
+    # Isolated sign fragments have no trustworthy cell-level numeric ownership.
+    assert build_research_ledger({'shared_evidence': [row]}, '2026-10-09').facts == ()
+
+
+def test_reported_ttm_pe_uses_observation_date_without_inventing_earnings_period():
+    from tradingagents.research_ledger import _fundamentals_facts
+    facts = _fundamentals_facts({'content':'PE Ratio (TTM): 12.5\nFree Cash Flow: 1000', 'as_of_date':'2026-11-13'}, 'snapshot')
+    multiple = next(f for f in facts if f.metric == 'pe_ttm')
+    assert multiple.period_end == '2026-11-13'
+    assert 'snapshot' in multiple.period_label.lower()
+    assert next(f for f in facts if f.metric == 'free_cash_flow').period_end is None
+
+
+def test_currency_labeled_fundamentals_keep_their_reported_unit():
+    from tradingagents.research_ledger import _fundamentals_facts
+    rows = _fundamentals_facts({'content':'Market Cap: 12000000 GBP\nPE Ratio (TTM): 15', 'as_of_date':'2026-11-13'}, 'quote')
+    cap = next(row for row in rows if row.metric == 'market_cap')
+    assert cap.unit == 'GBP' and cap.value == 12000000

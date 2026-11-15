@@ -99,8 +99,9 @@ def test_trader_plan_html_renders_inline_markdown_without_raw_tokens():
 
     assert "**Action**" not in html
     assert "**HOLD**" not in html
-    assert "<strong>Action</strong>: Hold" in html
-    assert "FINAL TRANSACTION PROPOSAL: <strong>HOLD</strong>" in html
+    assert "Balanced risk/reward." in html
+    assert "<h3>Trader Plan</h3>" not in html
+    assert "FINAL TRANSACTION PROPOSAL" not in html
 
 
 def test_fallback_summary_omits_tables_chatter_and_mid_sentence_ellipsis():
@@ -328,8 +329,8 @@ def test_consolidated_reports_label_accepted_range_method_risk_and_both_anchors(
     assert "Target Risks: A failed breakout would invalidate the range." in markdown
     assert "Technical scenario" in html
     assert "A failed breakout would invalidate the range." in html
-    assert "| Low | 72.83 |" in markdown and "| High | 77.10 |" in markdown
-    assert "| Low | 72.83 |" in html and "| High | 77.10 |" in html
+    assert "| Low | 72.83 |" not in markdown and "| High | 77.10 |" not in markdown
+    assert "| Low | 72.83 |" not in html and "| High | 77.10 |" not in html
     assert "Validated targets: 0 of 1 completed runs" in html
 
 

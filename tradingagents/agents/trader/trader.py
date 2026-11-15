@@ -20,7 +20,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_agent_context_from_state,
     get_language_instruction,
 )
-from tradingagents.agents.utils.decision_integrity import has_numeric_portfolio_weight
+from tradingagents.agents.utils.decision_integrity import remove_numeric_portfolio_weights
 from tradingagents.agents.utils.structured import (
     NO_EXTERNAL_TOOLS,
     bind_structured,
@@ -91,10 +91,7 @@ def create_trader(llm):
             "Trader",
         )
 
-        if has_numeric_portfolio_weight(trader_plan):
-            trader_plan = render_stage_unavailable(
-                "Trader Proposal", "unsupported_portfolio_sizing"
-            )
+        trader_plan = remove_numeric_portfolio_weights(trader_plan)
 
         if not stage_is_unavailable(trader_plan, "Trader Proposal"):
             try:

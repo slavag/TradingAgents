@@ -1,5 +1,6 @@
 import functools
 import logging
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -147,6 +148,8 @@ def resolve_instrument_identity(ticker: str) -> dict:
         ("industry", "industry"),
         ("exchange", "exchange"),
         ("quoteType", "quote_type"),
+        ("currency", "quote_currency"),
+        ("financialCurrency", "financial_currency"),
     ):
         value = _clean_identity_value(info.get(source_key))
         if value:
@@ -188,6 +191,9 @@ def build_instrument_context(
             details.append(f"Industry: {industry}")
         if identity.get("exchange"):
             details.append(f"Exchange: {identity['exchange']}")
+        currency = identity.get("quote_currency")
+        if isinstance(currency, str) and re.fullmatch(r"[A-Za-z]{3}", currency):
+            details.append(f"Quote currency: {currency}")
 
     if details:
         context += (
@@ -236,6 +242,10 @@ def get_agent_context_from_state(
     if isinstance(portfolio_context, str) and portfolio_context:
         context += "\n\n" + portfolio_context
     context += render_shared_evidence(state, role)
+    if (state.get("related_company_research")
+            and state["related_company_research"].get("as_of") == str(state.get("trade_date") or state.get("as_of_date") or "")):
+        from tradingagents.related_companies import render_related_context
+        context += "\n\n" + render_related_context(state["related_company_research"], max_chars=16000)
     if include_reports:
         context += render_original_reports(state)
     return context

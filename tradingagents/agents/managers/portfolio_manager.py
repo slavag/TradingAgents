@@ -14,6 +14,7 @@ from tradingagents.agents.schemas import (
     DecisionStatus,
     PortfolioDecision,
     PortfolioDecisionDraft,
+    PortfolioOutlookRepair,
     PortfolioTargetRepair,
     TargetValidationStatus,
     render_pm_decision,
@@ -24,11 +25,13 @@ from tradingagents.agents.utils.agent_utils import (
 )
 from tradingagents.agents.utils.decision_integrity import (
     build_decision_evidence,
-    extract_verified_reference_price,
     finalize_portfolio_decision,
-    has_numeric_portfolio_weight,
+    sanitize_decision_sizing,
+    verified_price_context,
     verified_target_candidates,
 )
+from tradingagents.agents.utils.evidence import evidence_is_admissible
+from tradingagents.agents.utils.outlooks import validate_outlooks
 from tradingagents.agents.utils.structured import (
     NO_EXTERNAL_TOOLS,
     StructuredOutputFailure,
@@ -38,7 +41,7 @@ from tradingagents.agents.utils.structured import (
 )
 
 
-def _manager_result(risk_debate_state: dict, decision: PortfolioDecision) -> dict:
+def _manager_result(risk_debate_state: dict, decision: PortfolioDecision, outlooks=None) -> dict:
     final_trade_decision = render_pm_decision(decision)
     return {
         "risk_debate_state": {
@@ -59,6 +62,7 @@ def _manager_result(risk_debate_state: dict, decision: PortfolioDecision) -> dic
         },
         "final_trade_decision": final_trade_decision,
         "portfolio_decision": decision.model_dump(mode="json"),
+        "portfolio_outlooks": [row.model_dump(mode="json") for row in outlooks or []],
     }
 
 
@@ -81,6 +85,8 @@ def create_portfolio_manager(llm):
     )
 
     def portfolio_manager_node(state) -> dict:
+        from tradingagents.related_companies import admitted_related_sources
+
         instrument_context = get_agent_context_from_state(
             state, "portfolio_manager", include_reports=True
         )
@@ -105,6 +111,14 @@ def create_portfolio_manager(llm):
         target_candidates = verified_target_candidates(state)
         candidate_lines = "\n".join(f"- {line}" for line in target_candidates) or "- None verified"
 
+        source_rows = "\n".join(
+            f"{record.get('evidence_id')}: {record.get('title') or record.get('source')}"
+            for record in [*(state.get("shared_evidence") or []), *admitted_related_sources(state, str(state.get("trade_date") or state.get("as_of_date") or ""))]
+            if record.get("evidence_id") and evidence_is_admissible(
+                record, str(state.get("trade_date") or state.get("as_of_date") or ""),
+            )
+        )
+
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
 {instrument_context}
@@ -128,9 +142,13 @@ def create_portfolio_manager(llm):
 Verified target candidates:
 {candidate_lines}
 
+Admitted source record IDs for the outlooks:
+{source_rows}
+
 ---
 
 **Consistency Protocol:**
+- Evaluate the supplied direct-competitor and supplier/customer evidence before choosing the view. Explain material findings that change the recommendation, target assumptions, risk assessment or confidence, including counterarguments and coverage limitations. Related-company prices and financials are contextual evidence, never the main stock's reference price or observed target candidates.
 - Determine the thesis from evidence before choosing position actions. Treat upstream recommendations as arguments, not independent votes.
 - Compare the independent thesis with the Research Manager and Trader conclusions, and explain material disagreements from the underlying evidence rather than resolving them by vote count.
 - Do not move more than one tier away from a well-supported Research Manager rating unless the evidence identifies a factual thesis invalidation or a materially different horizon.
@@ -145,6 +163,7 @@ Verified target candidates:
 - Recommendation Confidence is required for every actionable decision. Score the evidence strength for the recommendation from 0 to 100 independently of target confidence; it must remain meaningful even when no numeric target can be validated.
 - Never invent an observed price level or source quote. Forward price estimates are permitted with explicit model assumptions, a verified input price, and independent target confidence. Keep entry conditions grounded in supplied evidence.
 - Apply the same rating standard to materially identical evidence across runs.
+- Daily OHLCV references and indicators exclude extended-hours trading. If a separate verified market-reaction marker is supplied, consider its session, timestamp and move as additional information, not a replacement daily close or proof of news causation. Reassess gap/execution risk when news postdates the daily price.
 - For a Source level target, use an exact verified candidate value and copy its row verbatim as the supporting quote. For a Model estimate, project a central-case price from the verified close, current research, and explicit forward assumptions. The projected target need not already appear in a source. Set target_basis to Model estimate, explain the calculation in target_assumptions, and cite the verified Close row as the supporting quote. Never present assumptions as observed facts. Use Model estimate when source levels cannot support a forward target.
 - A Source level target range may instead use two exact verified rows as its low and high bounds. Explain why those anchors form a plausible forward scenario for the stated horizon; a Hold range may bracket the close. Label technical scenarios as such, not as fair value.
 - Every proposed target or range needs a method, risks, target confidence, and a full rationale. Target confidence measures evidence strength, not probability; low confidence is acceptable when clearly labeled.
@@ -152,10 +171,17 @@ Verified target candidates:
 - For Buy/Overweight, the target should normally be above the reference price; for Sell/Underweight, below it. Use a Model estimate with explicit assumptions when no exact source-level target supports the horizon. A missing verified input price is a data failure; low confidence is not.
 - Use Actionable with a five-tier rating for completed research. A balanced outlook can support Hold with low recommendation confidence. Never omit the recommendation solely because target confidence is low or a target is difficult to estimate. Never use Unavailable; the application reserves that status for technical failures.
 
+**Forward investment outlooks (required in outlooks):**
+- Provide exactly two independently reasoned outlooks: months=6 and months=12 from {state.get('trade_date') or state.get('as_of_date')}. Do not copy the tactical target or relabel a short-term technical scenario.
+- Each horizon needs its own rating, recommendation_confidence_score, point target or range with confidence_score, method, explicit assumptions, risks and supporting input quote(s), summary, drivers, upside_case, downside_case and invalidation.
+- These are forward estimates, not company guidance. Use target_basis=Model estimate when projecting from verified inputs; copy the verified Close row as the input quote and explain your forecast calculation and assumptions. Different horizons may have different views; explain why.
+- source_ids must cite actual supplied evidence record IDs. Never invent a record ID, company fact, catalyst or announced date. Do not return only a horizon label or an unsupported price. Low confidence is acceptable and distinct from recommendation confidence.
+
 Be decisive and ground every conclusion in specific evidence from the analysts.
 
 {NO_EXTERNAL_TOOLS}{get_language_instruction()}"""
 
+        outlook_rows = []
         try:
             draft = invoke_structured_required(
                 structured_llm,
@@ -164,12 +190,10 @@ Be decisive and ground every conclusion in specific evidence from the analysts.
             )
             if not isinstance(draft, PortfolioDecisionDraft):
                 raise StructuredOutputFailure("structured_response_invalid")
-            if has_numeric_portfolio_weight(
-                str(draft.model_dump())
-            ):
-                raise StructuredOutputFailure("unsupported_portfolio_sizing")
+            outlook_rows = draft.outlooks
+            draft = sanitize_decision_sizing(draft)
             evidence = build_decision_evidence(state)
-            reference_price = extract_verified_reference_price(evidence)
+            reference_price = verified_price_context(state)["close"]
             decision = finalize_portfolio_decision(
                 draft,
                 evidence,
@@ -199,7 +223,9 @@ When no source-level target supports the horizon, return a Model estimate with e
                     )
                     if not isinstance(repair, PortfolioTargetRepair):
                         raise StructuredOutputFailure("structured_response_invalid")
-                    repaired_draft = draft.model_copy(update=repair.model_dump())
+                    repaired_draft = sanitize_decision_sizing(
+                        draft.model_copy(update=repair.model_dump()),
+                    )
                     decision = finalize_portfolio_decision(
                         repaired_draft,
                         evidence,
@@ -213,6 +239,36 @@ When no source-level target supports the horizon, return a Model estimate with e
             decision = PortfolioDecision.unavailable(exc.code)
         except (ValidationError, TypeError, ValueError):
             decision = PortfolioDecision.unavailable("structured_response_invalid")
-        return _manager_result(risk_debate_state, decision)
+        outlooks = []
+        if state.get("trade_date") or state.get("as_of_date"):
+            try:
+                outlooks = validate_outlooks(outlook_rows, state)
+                if (decision.status is DecisionStatus.ACTIONABLE and target_candidates
+                        and any(record.get("evidence_id") for record in state.get("shared_evidence") or [])
+                        and any(row.status != "available" for row in outlooks)):
+                    chain = bind_structured(llm, PortfolioOutlookRepair, "Outlook Repair", fallback_to_text=False)
+                    reasons = "; ".join(f"{row.months} months: {row.reason or row.status}" for row in outlooks)
+                    repair_prompt = f"""Complete only the missing or invalid six- and twelve-month investment outlooks.
+Analysis date: {state.get('trade_date') or state.get('as_of_date')}
+Validation: {reasons}
+Tactical view (must not be changed): {decision.executive_summary}
+Research: {decision.investment_thesis}
+Verified price rows:\n{candidate_lines}
+Source record IDs:\n{source_rows}
+Return outlooks only, with months=6 and months=12. Each needs an independent rating, recommendation confidence, numeric target/range and target confidence, summary, drivers, upside/downside cases and invalidation. Use explicit Model estimate assumptions and calculation for forward targets, anchored to the exact verified Close row. The forecast need not already appear in a source. Include horizon-specific method, risks, rationale and actual source_ids. Do not change tactical rating, target, guidance or facts. Low confidence is acceptable.
+{NO_EXTERNAL_TOOLS}{get_language_instruction()}"""
+                    try:
+                        repaired = invoke_structured_required(chain, repair_prompt, "Outlook Repair")
+                        if isinstance(repaired, PortfolioOutlookRepair):
+                            candidate_outlooks = validate_outlooks(repaired.outlooks, state)
+                            # A horizon-only repair cannot degrade a previously valid horizon.
+                            outlooks = [old if old.status == "available" else new
+                                        for old, new in zip(outlooks, candidate_outlooks, strict=True)]
+                    except (StructuredOutputFailure, ValidationError, TypeError, ValueError):
+                        pass
+            except (ValidationError, TypeError, ValueError):
+                # Horizon failures do not invalidate the independently completed tactical decision.
+                outlooks = []
+        return _manager_result(risk_debate_state, decision, outlooks)
 
     return portfolio_manager_node

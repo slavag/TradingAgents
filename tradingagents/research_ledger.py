@@ -108,6 +108,9 @@ _DATE = re.compile(r"20\d{2}-\d{2}-\d{2}\Z")
 _METRIC_ALIASES = {
     "total net sales": "net_sales",
     "total revenue": "net_sales",
+    "gross profit": "gross_profit",
+    "loss from operations": "operating_income",
+    "net income (loss)": "net_income",
     "revenue": "net_sales",
     "operating income": "operating_income",
     "net income": "net_income",
@@ -144,6 +147,159 @@ def _period_end(label: str, report_period: Any, first: bool) -> str | None:
     return label if _DATE.fullmatch(label) else None
 
 
+_MONTHS = {name.casefold(): number for number, name in enumerate((
+    "January", "February", "March", "April", "May", "June", "July", "August",
+    "September", "October", "November", "December",
+), 1)}
+_DURATION = re.compile(
+    r"\b(Three|Six|Nine|Twelve|3|6|9|12)\s+Months?\s+Ended\s+"
+    r"(" + "|".join(_MONTHS) + r")\s+(\d{1,2})", re.I,
+)
+
+
+def _accounting_bases(text: str) -> set[str]:
+    bases = set()
+    without_non_gaap, count = re.subn(r"\bnon[- ]gaap\b", "", text, flags=re.I)
+    if count or re.search(r"\badjusted\b", text, re.I):
+        bases.add("non_gaap")
+    if re.search(r"\bgaap\b", without_non_gaap, re.I):
+        bases.add("gaap")
+    return bases
+
+
+def _duration_metric(label: str) -> tuple[str | None, set[str]]:
+    prefix = re.match(r"^(non[- ]gaap|gaap|adjusted)\b[\s:–-]*", label, re.I)
+    if prefix:
+        return _metric(label[prefix.end():]), _accounting_bases(prefix.group())
+    return _metric(label), set()
+
+
+def _duration_table_facts(row: Mapping[str, Any], key: str, rows: list) -> list[ResearchFact]:
+    """Read explicit month-duration/year headers, rejecting incomplete comparatives."""
+    for header_index, header in enumerate(rows[:12]):
+        if not isinstance(header, list):
+            continue
+        duration_header = next((
+            cells for cells in reversed(rows[:header_index])
+            if isinstance(cells, list) and any(_DURATION.search(str(c)) for c in cells)
+        ), None)
+        if duration_header is None:
+            continue
+
+        def duration_identity(position, owned_header=duration_header):
+            match = (_DURATION.search(str(owned_header[position]))
+                     if position < len(owned_header) else None)
+            return tuple(part.casefold() for part in match.groups()) if match else None
+
+        years = []
+        for column, cell in enumerate(header):
+            year = str(cell).strip()
+            if re.fullmatch(r"20\d{2}", year):
+                # Colspan-expanded year labels repeat across formatting columns.
+                def column_basis(position):
+                    return set().union(*(
+                        _accounting_bases(str(cells[position]))
+                        for cells in rows[:12]
+                        if isinstance(cells, list) and len(cells) > position
+                        and not str(cells[0]).strip()
+                    ))
+
+                if (not years or years[-1][1] != year or years[-1][2] != column - 1
+                        or column_basis(column) != column_basis(column - 1)
+                        or duration_identity(column) != duration_identity(column - 1)):
+                    years.append([column, year, column])
+                else:
+                    years[-1][2] = column
+        if not years:
+            continue
+        columns = []
+        for column, year, _ in years:
+            # Only aligned, expanded cells can establish duration ownership.
+            match = (_DURATION.search(str(duration_header[column]))
+                     if column < len(duration_header) else None)
+            if match is None:
+                columns = []
+                break
+            duration, month, day = match.groups()
+            months = {"three": 3, "six": 6, "nine": 9, "twelve": 12}.get(duration.casefold())
+            months = months or int(duration)
+            try:
+                end = date(int(year), _MONTHS[month.casefold()], int(day)).isoformat()
+            except ValueError:
+                columns = []
+                break
+            kind = "quarterly" if months == 3 else "annual" if months == 12 else "ytd"
+            columns.append((f"{months}M ended {end}", end, kind))
+        if not columns:
+            return []
+        context = " ".join(str(row.get("content") or "").split()) + " " + " ".join(
+            str(cell) for cells in rows[:header_index + 1] if isinstance(cells, list) for cell in cells
+        )
+        scales = set(re.findall(r"\bin (thousands|millions|billions|dollars)\b", context, re.I))
+        scales = {value.casefold() for value in scales}
+        if not scales and re.search(r"\bUSD\b|\bU\.S\. dollars\b", context, re.I):
+            scales.add("dollars")
+        if len(scales) != 1 or "billions" in scales:
+            return []
+        scale = {"thousands": Decimal(1000), "millions": Decimal(1000000), "dollars": Decimal(1)}[scales.pop()]
+        context_bases = _accounting_bases(context)
+        basis_headers = []
+        for cells in rows:
+            if not isinstance(cells, list) or not cells:
+                continue
+            if _duration_metric(str(cells[0]))[0] is not None:
+                break
+            basis_headers.append(cells)
+        column_bases = [set() for _ in columns]
+        for index, (start, _, _) in enumerate(years):
+            stop = years[index + 1][0] if index + 1 < len(years) else len(header)
+            for cells in basis_headers:
+                for cell in cells[start:stop]:
+                    column_bases[index].update(_accounting_bases(str(cell)))
+        facts = []
+        for cells in rows[header_index + 1:]:
+            if not isinstance(cells, list) or not cells:
+                continue
+            metric, row_bases = _duration_metric(str(cells[0]))
+            if metric is None:
+                continue
+            # A detached sign/parenthesis must never be discarded while accepting
+            # its unsigned numeric neighbor, including in the ragged-row fallback.
+            if any(re.fullmatch(r"[\s$()+−-]*[()+−-][\s$()+−-]*", str(cell)) for cell in cells[1:]):
+                continue
+            values = []
+            if len(cells) == len(header):
+                for index, (start, _, _) in enumerate(years):
+                    stop = years[index + 1][0] if index + 1 < len(years) else len(cells)
+                    # Expanded colspan values repeat; each period must own one value.
+                    candidates = {
+                        value for cell in cells[start:stop]
+                        if (value := _decimal_cell(str(cell))) is not None
+                    }
+                    if len(candidates) != 1:
+                        values = []
+                        break
+                    values.append(candidates.pop())
+            else:
+                values = [v for c in cells[1:] if (v := _decimal_cell(str(c))) is not None]
+            if len(values) != len(columns):
+                continue
+            for (label, end, kind), value, explicit_bases in zip(columns, values, column_bases, strict=True):
+                bases = explicit_bases | row_bases
+                if not bases:
+                    bases = context_bases or {"gaap"}
+                if len(bases) != 1:
+                    continue
+                basis = next(iter(bases))
+                eps = metric == "diluted_eps"
+                facts.append(ResearchFact(
+                    metric, value if eps else value * scale,
+                    "USD_per_share" if eps else "USD", label, end, kind, basis, (key,),
+                ))
+        return facts
+    return []
+
+
 def _sec_table_facts(row: Mapping[str, Any], key: str) -> list[ResearchFact]:
     rows = row.get("table_rows")
     if not isinstance(rows, list):
@@ -155,7 +311,7 @@ def _sec_table_facts(row: Mapping[str, Any], key: str) -> list[ResearchFact]:
         )
     ), None)
     if header_index is None:
-        return []
+        return _duration_table_facts(row, key, rows)
     header = rows[header_index]
     marker_rows = rows[max(0, header_index - 2):header_index + 2]
     basis_markers = next((
@@ -210,7 +366,9 @@ def _sec_table_facts(row: Mapping[str, Any], key: str) -> list[ResearchFact]:
         if metric is None:
             continue
         values = [value for cell in cells[1:] if (value := _decimal_cell(str(cell))) is not None]
-        for (period, basis, first), value in zip(columns, values, strict=False):
+        if len(values) != len(columns):
+            continue
+        for (period, basis, first), value in zip(columns, values, strict=True):
             is_eps = metric == "diluted_eps"
             facts.append(ResearchFact(
                 metric=metric, value=value if is_eps else value * scale,
@@ -267,15 +425,20 @@ def _fundamentals_facts(row: Mapping[str, Any], key: str) -> list[ResearchFact]:
         label, separator, raw = line.partition(":")
         if not separator or label not in labels:
             continue
-        value = _decimal_cell(raw)
+        stated_currency = re.fullmatch(r"\s*(.+?)\s+([A-Za-z]{3})\s*", raw)
+        numeric = stated_currency.group(1) if stated_currency else raw
+        value = _decimal_cell(numeric)
         if value is None:
             continue
         metric, unit, kind, basis = labels[label]
-        period = "TTM" if kind == "ttm" else str(row.get("as_of_date"))
-        facts.append(ResearchFact(
-            metric, value, unit, period,
-            None if kind == "ttm" else period, kind, basis, (key,),
-        ))
+        if stated_currency and unit == "USD":
+            unit = stated_currency.group(2)
+        observed = str(row.get("as_of_date") or "")
+        period = "TTM" if kind == "ttm" else observed
+        end = None if kind == "ttm" else period
+        if metric == "pe_ttm" and _DATE.fullmatch(observed):
+            period, end = f"TTM multiple snapshot {observed}", observed
+        facts.append(ResearchFact(metric, value, unit, period, end, kind, basis, (key,)))
     return facts
 
 
@@ -438,8 +601,9 @@ def build_research_ledger(state: Mapping[str, Any], analysis_date: str) -> Resea
             excerpts[category].append(ResearchExcerpt(
                 category, key, str(row.get("content") or "")[:6000],
                 tuple(
-                    tuple(str(cell) for cell in cells[:20])
-                    for cells in table_rows[:120] if isinstance(cells, (list, tuple))
+                    tuple(str(cell) for cell in cells)
+                    for cells in table_rows[:120]
+                    if isinstance(cells, (list, tuple)) and len(cells) <= 64
                 ) if isinstance(table_rows, (list, tuple)) else (),
             ))
     for name, content in _team_excerpt_fields(state).items():

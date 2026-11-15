@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tradingagents.agents.utils.outlooks import PortfolioOutlookBundle, render_outlooks
 from tradingagents.forecasting.record_factory import forecast_record_from_state
 from tradingagents.investor_brief import (
     InvestorBrief,
@@ -77,6 +78,9 @@ _OWNED_SECTION_FILES = (
     ("4_risk", "conservative.md"),
     ("4_risk", "neutral.md"),
     ("5_portfolio", "decision.md"),
+    ("5_portfolio", "outlooks.md"),
+    ("1_analysts", "market_reaction.md"),
+    ("2_research", "related_companies.md"),
 )
 
 
@@ -87,6 +91,9 @@ def _reject_report_symlinks(save_path: Path, stem: str, investor_stem: str) -> N
         save_path / "0_sources" / "evidence.json",
         save_path / "0_sources" / "README.md",
         save_path / "forecast_record.json",
+        save_path / "outlooks.json",
+        save_path / "market_reaction.json",
+        save_path / "related_company_research.json",
         save_path / "run_manifest.json",
         save_path / f"{stem}.md",
         save_path / f"{stem}.html",
@@ -137,6 +144,16 @@ def build_run_manifest(
         for record in source_records
         if isinstance(record, dict)
     ]
+    def stable_related(value):
+        if isinstance(value, dict):
+            return {key: stable_related(item) for key, item in value.items()
+                    if key not in {"retrieved_at", "fetched_at", "collected_at", "discovery_notes", "justification"}}
+        if isinstance(value, list):
+            return [stable_related(item) for item in value]
+        return value
+
+    if final_state.get("related_company_research"):
+        evidence["related_company_research"] = stable_related(final_state["related_company_research"])
     evidence["risk_debate_history"] = (
         risk_state.get("history") if isinstance(risk_state, dict) else None
     )
@@ -173,26 +190,22 @@ def _generated_at_from_manifest(manifest: dict | None) -> datetime | None:
         return None
 
 
-def _write_immutable_forecast_record(path: Path, record) -> None:
+def _write_immutable_json(path: Path, payload, kind: str = "forecast record") -> None:
     if path.is_symlink():
-        raise ValueError("forecast record target cannot be a symlink")
-    payload = record.model_dump(mode="json")
+        raise ValueError(f"{kind} target cannot be a symlink")
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise FileExistsError(
-                f"refusing to overwrite invalid immutable forecast record: {path}"
-            ) from exc
+            raise FileExistsError(f"refusing to overwrite invalid immutable {kind}: {path}") from exc
         if existing == payload:
             return
-        raise FileExistsError(
-            f"refusing to overwrite immutable forecast record with different content: {path}"
-        )
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+        raise FileExistsError(f"refusing to overwrite immutable {kind} with different content: {path}")
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _write_immutable_forecast_record(path: Path, record) -> None:
+    _write_immutable_json(path, record.model_dump(mode="json"))
 
 
 def write_source_evidence(final_state: dict, save_path: str | Path) -> Path | None:
@@ -379,6 +392,37 @@ def write_report_tree(
             report_parts.append(("V. Portfolio Manager Decision", "5_portfolio", [
                 ("Portfolio Manager", "decision.md", risk["judge_decision"])
             ]))
+
+    if final_state.get("portfolio_outlooks"):
+        bundle = PortfolioOutlookBundle.model_validate({"outlooks": final_state["portfolio_outlooks"]})
+        _write_immutable_forecast_record(save_path / "outlooks.json", bundle)
+        content = render_outlooks(final_state["portfolio_outlooks"])
+        folder = save_path / "5_portfolio"
+        folder.mkdir(exist_ok=True)
+        (folder / "outlooks.md").write_text(content, encoding="utf-8")
+        sections.append("## VI. Investment outlooks\n\n" + content)
+        report_parts.append(("VI. Investment outlooks", "5_portfolio", [
+            ("Six- and twelve-month outlooks", "outlooks.md", content),
+        ]))
+
+    if isinstance(final_state.get("extended_hours_reaction"), dict):
+        record = final_state["extended_hours_reaction"]
+        _write_immutable_json(save_path / "market_reaction.json", record, "market reaction record")
+
+    if final_state.get("related_company_research"):
+        from tradingagents.related_companies.presentation import render_related_report
+        from tradingagents.research_ledger import build_research_ledger
+
+        related = final_state["related_company_research"]
+        _write_immutable_json(save_path / "related_company_research.json", related, "related-company research")
+        content = render_related_report(related, build_research_ledger(final_state, str(related["as_of"])))
+        folder = save_path / "2_research"
+        folder.mkdir(exist_ok=True)
+        (folder / "related_companies.md").write_text(content, encoding="utf-8")
+        sections.append("## Related-company research\n\n" + content)
+        report_parts.append(("Related-company research", "2_research", [
+            ("Competitors, suppliers and customers", "related_companies.md", content),
+        ]))
 
     # Write consolidated report
     header = f"# Trading Analysis Report: {ticker}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"

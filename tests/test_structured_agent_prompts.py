@@ -384,7 +384,7 @@ def test_pm_with_no_verified_price_rows_preserves_recommendation_without_paid_re
     "Portfolio at the analysis date:\n- No current position in NVDA",
     "Portfolio at the analysis date:\n- Current position in NVDA: 10 units",
 ])
-def test_portfolio_manager_rejects_numeric_nav_size_without_complete_sizing_inputs(
+def test_portfolio_manager_removes_numeric_nav_size_without_losing_decision(
     portfolio_context,
 ):
     from tradingagents.agents.schemas import (
@@ -405,6 +405,10 @@ def test_portfolio_manager_rejects_numeric_nav_size_without_complete_sizing_inpu
         new_position_action=NewPositionAction.AVOID,
         new_position_summary="Avoid a new long.",
         recommendation_confidence_score=70,
+        price_target=90, supporting_quote="| Low | 90.00 |",
+        time_horizon="3 months", confidence_score=28,
+        target_summary="Weak trend supports a cautious downside scenario.",
+        target_method="Technical scenario", target_risks="Trend may reverse.",
     ))
     risk = {
         "history": "h", "aggressive_history": "a", "conservative_history": "c",
@@ -415,6 +419,13 @@ def test_portfolio_manager_rejects_numeric_nav_size_without_complete_sizing_inpu
 
     state = {
         "company_of_interest": "NVDA",
+        "trade_date": "2026-11-11",
+        "market_report": "Verified close: 100.",
+        "shared_evidence": [{
+            "source": "get_verified_market_snapshot", "status": "available",
+            "published_at": "2026-11-11", "as_of_date": "2026-11-11",
+            "content": "Verified close: 100.\n| Close | 100.00 |\n| Low | 90.00 |",
+        }],
         "risk_debate_state": risk,
         "investment_plan": "plan",
         "trader_investment_plan": "trader plan",
@@ -423,8 +434,16 @@ def test_portfolio_manager_rejects_numeric_nav_size_without_complete_sizing_inpu
         state["portfolio_context"] = portfolio_context
     result = create_portfolio_manager(llm)(state)
 
-    assert result["portfolio_decision"]["status"] == "Unavailable"
-    assert "unsupported_portfolio_sizing" in result["final_trade_decision"]
+    decision = result["portfolio_decision"]
+    assert decision["status"] == "Actionable"
+    assert decision["rating"] == "Underweight"
+    assert decision["price_target"] == 90
+    assert decision["recommendation_confidence_score"] == 70
+    assert decision["confidence_score"] == 28
+    assert "0.25%" not in decision["existing_position_summary"]
+    assert "risk budget" in decision["existing_position_summary"]
+    assert "**Recommendation Confidence**: 70/100" in result["final_trade_decision"]
+    assert "**Target Confidence**: 28/100" in result["final_trade_decision"]
 
 
 @pytest.mark.unit
@@ -515,3 +534,23 @@ def test_pm_repair_failure_preserves_recommendation_and_independent_confidence()
     assert decision["price_target"] is None
     assert first_chain.invoke.call_count == 1
     assert repair_chain.invoke.call_count == 1
+
+
+@pytest.mark.unit
+def test_trader_sizing_does_not_make_upstream_proposal_unavailable():
+    from tradingagents.agents.schemas import TraderAction, TraderProposal
+
+    llm = _capturing_llm({}, TraderProposal(
+        action=TraderAction.HOLD,
+        reasoning="Hold while growth remains 8% and the trend is mixed.",
+        position_sizing="Limit to 2% of portfolio.",
+    ))
+    result = create_trader(llm)({
+        "company_of_interest": "SNDK",
+        "investment_plan": "Maintain exposure while awaiting confirmation.",
+    })["trader_investment_plan"]
+    assert "Unavailable" not in result
+    assert "**Action**: Hold" in result
+    assert "2%" not in result
+    assert "risk budget" in result
+    assert "growth remains 8%" in result

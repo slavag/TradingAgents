@@ -318,7 +318,7 @@ class TestTraderAgent:
         "Portfolio at the analysis date:\n- No current position in NVDA",
         "Portfolio at the analysis date:\n- Current position in NVDA: 10 units",
     ])
-    def test_trader_rejects_numeric_nav_size_without_complete_sizing_inputs(
+    def test_trader_removes_numeric_nav_size_without_discarding_proposal(
         self, portfolio_context,
     ):
         proposal = TraderProposal(
@@ -334,9 +334,12 @@ class TestTraderAgent:
             "trader_investment_plan"
         ]
 
-        assert rendered == render_stage_unavailable(
-            "Trader Proposal", "unsupported_portfolio_sizing"
-        )
+        parsed = parse_trader_proposal_markdown(rendered)
+        assert parsed.action is TraderAction.BUY
+        assert parsed.reasoning == "Build a position."
+        assert "5%" not in parsed.position_sizing
+        assert "risk budget" in parsed.position_sizing
+        assert "Unavailable" not in rendered
 
     def test_validates_and_normalizes_freetext_when_structured_unavailable(self):
         plain_response = (

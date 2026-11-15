@@ -310,7 +310,7 @@ def _render_source(row: ResearchSource, number: int) -> str:
         "get_fundamentals": "Market and valuation data",
         "get_income_statement": "Income statement",
     }
-    title = tool_titles.get(row.provider, row.title)
+    title = row.title if row.title.startswith("Related company — ") else tool_titles.get(row.provider, row.title)
     if title.startswith("SEC reported "):
         title = "Company filing financial data"
     elif row.provider == "analysis" and row.title in {"bull", "bear", "portfolio"}:

@@ -797,3 +797,34 @@ def test_mixed_invalid_shapes_cannot_bypass_target_validation():
     )
     assert decision.target_validation_reason == "target_shape_mixed"
     assert decision.price_target is None and decision.target_low is None
+
+
+def test_sizing_cleanup_preserves_metrics_source_quotes_and_unrelated_percentages():
+    from tradingagents.agents.utils.decision_integrity import sanitize_decision_sizing
+
+    source_quote = "Price target: 120. Portfolio rule example: 5% of capital."
+    draft = actionable_draft(
+        executive_summary="Limit to 2% of portfolio; sales grew 8%.",
+        existing_position_summary="Keep 1% of NAV.",
+        new_position_summary="Limit to 0.5% of account.",
+        conditional_plan=ConditionalActionPlan(
+            confirmation="Buy on confirmation, limited to 1% of NAV.",
+            alternative="Wait for a 5% pullback.",
+            invalidation="Exit if demand weakens.",
+        ),
+        price_target=120, supporting_quote=source_quote,
+        time_horizon="3 months", confidence_score=28,
+        target_summary="Expected 20% return.",
+    )
+    result = sanitize_decision_sizing(draft)
+    assert "2%" not in result.executive_summary
+    assert "sales grew 8%" in result.executive_summary
+    assert "1%" not in result.existing_position_summary
+    assert "0.5%" not in result.new_position_summary
+    assert "1%" not in result.conditional_plan.confirmation
+    assert result.conditional_plan.alternative == draft.conditional_plan.alternative
+    assert result.price_target == 120 and result.confidence_score == 28
+    assert result.recommendation_confidence_score == draft.recommendation_confidence_score
+    assert result.supporting_quote == source_quote
+    assert result.target_summary == "Expected 20% return."
+    assert draft.existing_position_summary == "Keep 1% of NAV."

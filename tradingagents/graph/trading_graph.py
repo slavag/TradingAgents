@@ -38,9 +38,11 @@ from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG, validate_outcome_holding_days
 from tradingagents.investor_deck import build_investor_deck
 from tradingagents.llm_clients import create_llm_client
+from tradingagents.llm_clients.openai_client import OPENAI_COMPATIBLE_PROVIDERS
 from tradingagents.llm_clients.prompt_cache import PromptCachePolicy
 from tradingagents.portfolio.state import PortfolioContext
 from tradingagents.reporting import write_report_tree
+from tradingagents.request_policy import request_timeout_seconds
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
@@ -235,6 +237,9 @@ class TradingAgentsGraph:
             effort = self.config.get("anthropic_effort")
             if effort:
                 kwargs["effort"] = effort
+
+        if provider in OPENAI_COMPATIBLE_PROVIDERS or provider == "azure":
+            kwargs["timeout"] = request_timeout_seconds(self.config.get("llm_request_timeout_seconds"))
 
         # Sampling temperature is cross-provider: forward it whenever set.
         # float() here so a value coming from a TRADINGAGENTS_TEMPERATURE env
@@ -577,6 +582,7 @@ class TradingAgentsGraph:
             f"risk={self.config['max_risk_discuss_rounds']}",
             f"asset={asset_type}",
             f"enrichment={bool(self.config.get('enrichment_enabled', True))}",
+            f"related=v1:{bool(self.config.get('related_company_research_enabled', True))}:{self.config.get('related_company_peer_limit', 3)}",
             f"portfolio={portfolio.fingerprint() if portfolio is not None else 'none'}",
             f"parallel={self.config.get('parallel_analysts', False)}",
             f"background_settlement={self.config.get('background_settlement', False)}",

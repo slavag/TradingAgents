@@ -773,7 +773,7 @@ def test_long_selected_source_sentence_and_takeaway_are_not_clipped():
                    for point in points)
 
 
-def test_leadership_takeaway_uses_a_complete_source_sentence():
+def test_leadership_body_preserves_complete_source_sentence_with_distinct_takeaway():
     source = ResearchSource(
         "ev-governance", "sec", "Officer filing", None,
         "2026-10-06", "Officer appointment", "available",
@@ -797,7 +797,8 @@ def test_leadership_takeaway_uses_a_complete_source_sentence():
         ledger, {"trade_date": "2026-10-09"}
     ) if item.topic == "leadership")
 
-    assert slide.takeaway == appointment
+    assert slide.takeaway != appointment
+    assert appointment in [p.text for block in slide.blocks if block.kind == "text" for p in block.points]
     assert "…" not in slide.takeaway
 
 
@@ -1000,3 +1001,29 @@ def test_source_packet_labels_reported_periods_for_interpretation():
     assert '"metric": "net_sales"' in packet
     assert '"period": "Q4-26"' in packet
     assert '"basis": "gaap"' in packet
+
+
+def test_model_narrative_and_validated_points_use_third_person_after_validation():
+    state = _supported_business_state()
+    quote = "We deliver our computing systems to customers."
+    state['shared_evidence'][0]['content'] += ' ' + quote
+    topics = [slide.topic for slide in build_deck_outline(
+        build_research_ledger(state, '2026-10-09'), state,
+    )]
+    rows = [NarrativeDraft(
+        topic=topic, takeaway='The evidence is mixed.',
+        context='We deliver our systems to customers.',
+        counterpoint='Our operating results warrant attention.',
+        source_ids=['ev-business'],
+        points=[DraftPoint(text=quote, quote=quote, source_id='ev-business')],
+    ) for topic in topics]
+    llm = MagicMock()
+    llm.with_structured_output.return_value.invoke.return_value = NarrativeBatch(slides=rows)
+    deck = build_investor_deck(state, 'PENG', '2026-10-09', llm)
+    assert deck is not None and deck.synthesis_status == 'complete'
+    for slide in deck.slides:
+        assert slide.narrative == ('They deliver their systems to customers. '
+                                   'Their operating results warrant attention.')
+        assert any(point.text == 'They deliver their computing systems to customers.'
+                   for block in slide.blocks if block.kind == 'text' for point in block.points)
+    assert quote in state['shared_evidence'][0]['content']

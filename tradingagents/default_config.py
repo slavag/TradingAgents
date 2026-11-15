@@ -1,5 +1,7 @@
 import os
 
+from tradingagents.request_policy import DEFAULT_REQUEST_TIMEOUT_SECONDS
+
 _TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
 
 
@@ -37,7 +39,10 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_EVIDENCE_PROMPT_MAX_CHARS": "evidence_prompt_max_chars",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_OUTCOME_HOLDING_DAYS": "outcome_holding_days",
+    "TRADINGAGENTS_RELATED_COMPANY_RESEARCH_ENABLED": "related_company_research_enabled",
+    "TRADINGAGENTS_RELATED_COMPANY_PEER_LIMIT": "related_company_peer_limit",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
+    "TRADINGAGENTS_LLM_REQUEST_TIMEOUT_SECONDS": "llm_request_timeout_seconds",
     "TRADINGAGENTS_LLM_MAX_RETRIES":      "llm_max_retries",
     # Provider-specific reasoning/thinking knobs (None = each provider's own
     # default). Settable here for non-interactive runs; the CLI also offers an
@@ -119,6 +124,8 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # the oldest resolved entries are pruned once this limit is exceeded.
     # Pending entries are never pruned. None disables rotation entirely.
     "memory_log_max_entries": None,
+    "related_company_research_enabled": True,
+    "related_company_peer_limit": 3,
     # LLM settings
     "llm_provider": "openai",
     "deep_think_llm": "gpt-5.5",
@@ -145,9 +152,11 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # and no setting makes LLM output bit-identical across runs (see README).
     "temperature": None,
     # SDK retry budget forwarded to every provider chat client. None leaves each
-    # provider/SDK at its own default (usually 2). Raise it to ride out bursty
-    # 429 throttling on rate-limited deployments instead of aborting a run (#1091).
+    # provider client policy (OpenAI-compatible: one retry; others: SDK default).
+    # Raise it to ride out bursty 429 throttling instead of aborting a run (#1091).
     "llm_max_retries": None,
+    # OpenAI-compatible clients: bounded network wait; SDK retries the same call once.
+    "llm_request_timeout_seconds": DEFAULT_REQUEST_TIMEOUT_SECONDS,
     # Checkpoint/resume: when True, LangGraph saves state after each node
     # so a crashed run can resume from the last successful step.
     "checkpoint_enabled": False,

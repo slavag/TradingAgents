@@ -1,4 +1,4 @@
-<img width="2559" height="1290" alt="image" src="https://github.com/user-attachments/assets/a6b967e3-73e9-460d-9311-ac8482ac5ba8" />
+<img width="1920" height="1290" alt="TradingAgents research dashboard with anonymized stock and company names" src="assets/tradingagents-research.png" />
 
 <p align="center">
   <img src="assets/TauricResearch.png" style="width: 60%; height: auto;">

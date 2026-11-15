@@ -9,7 +9,13 @@ from tradingagents.agents.utils.agent_utils import (
     get_verified_market_snapshot,
     normalize_text_content,
 )
+from tradingagents.agents.utils.evidence import merge_evidence
 from tradingagents.dataflows.market_data_validator import verified_market_snapshot
+from tradingagents.dataflows.market_reaction import (
+    fetch_extended_hours_reaction,
+    render_market_reaction,
+    unavailable_reaction,
+)
 
 
 def create_market_analyst(llm):
@@ -17,6 +23,17 @@ def create_market_analyst(llm):
     def market_analyst_node(state):
         current_date = state["trade_date"]
         instrument_context = get_agent_context_from_state(state, "market")
+
+        # State survives tool turns: an optional quote is fetched once per market stage.
+        reaction = state.get("extended_hours_reaction")
+        if reaction is None:
+            if state.get("analysis_mode") == "live":
+                reaction = fetch_extended_hours_reaction(state["company_of_interest"], current_date)
+            else:
+                reaction = unavailable_reaction(
+                    state["company_of_interest"], current_date, "historical_analysis"
+                )
+        reaction_text = render_market_reaction(reaction)
 
         tools = [
             get_stock_data,
@@ -58,6 +75,14 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
             + get_language_instruction()
         )
 
+        system_message += (
+            "\n\nSupplementary market-reaction information (separate from daily OHLCV):\n"
+            + " Extended-hours data is optional decision context. Do not add a dedicated extended-hours section or repeat unavailable-quote notices in the final report. Mention a verified reaction only in the reasoning when material, without implying news causation. "
+            + reaction_text
+            + "\nKeep this quote separate from regular-close target anchors and technical indicators. "
+            "Do not claim that a news event caused the move."
+        )
+
         prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -91,7 +116,23 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
         response = {
             "messages": [result],
             "market_report": report,
+            "extended_hours_reaction": reaction,
         }
+        if reaction.get("status") == "available":
+            response["shared_evidence"] = merge_evidence(
+                state.get("shared_evidence"),
+                [{
+                    "source": "get_extended_hours_reaction",
+                    "category": "market_reaction",
+                    "title": "Extended-hours market-reaction marker",
+                    "content": reaction_text,
+                    "published_at": reaction.get("observed_at_exchange") or reaction.get("observed_at"),
+                    "as_of_date": current_date,
+                    "status": "available",
+                    "coverage": "reported_fact",
+                }],
+                current_date,
+            )
         if report:
             snapshot = verified_market_snapshot(
                 state["company_of_interest"],

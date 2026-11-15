@@ -62,9 +62,14 @@ from tradingagents.agents.schemas import (
 )
 from tradingagents.agents.utils.decision_integrity import (
     build_decision_evidence,
-    extract_verified_reference_price,
     finalize_portfolio_decision,
     observed_technical_scenario,
+    verified_price_context,
+)
+from tradingagents.consolidated_brief import (
+    build_stock_brief,
+    render_brief_html,
+    render_brief_markdown,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.analyst_execution import (
@@ -952,7 +957,7 @@ def estimate_target_profile(llm, ticker: str, analysis_date: str, final_state, d
     """Build decision metrics from the PM output, with an evidence-grounded fallback."""
     final_trade_decision = extract_content_string(final_state.get("final_trade_decision")) or ""
     evidence_text = build_decision_evidence(final_state)
-    current_price = extract_verified_reference_price(evidence_text)
+    current_price = verified_price_context(final_state | {"trade_date": analysis_date}, allow_legacy_report=True)["close"]
     if current_price is None:
         current_price = fetch_reference_price(ticker, analysis_date)
 
@@ -1818,10 +1823,6 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
                 f"Horizon: {result.get('target_horizon') or '-'}",
             ]
         )
-        if result.get("target_validation_status") == "Accepted" and result.get("target_method"):
-            lines.append(f"Target Method: {result['target_method']}")
-        if result.get("target_validation_status") == "Accepted" and result.get("target_risks"):
-            lines.append(f"Target Risks: {result['target_risks']}")
 
         if result.get("error"):
             lines.extend(
@@ -1836,74 +1837,8 @@ def build_consolidated_report(analysis_results, analysis_date: str, summary_llm=
             )
             continue
 
-        final_state = result["final_state"]
-        section_summaries = get_consolidated_section_summaries(result, summary_llm=summary_llm)
-        supporting_evidence = target_evidence_text(result)
-        position_plan = []
-        if result.get("thesis"):
-            position_plan.append(f"Thesis: **{result['thesis']}**")
-        if result.get("existing_position_action"):
-            existing_summary = result.get("existing_position_summary") or "Guidance unavailable."
-            position_plan.append(
-                f"Existing position: **{result['existing_position_action']}** — {existing_summary}"
-            )
-        if result.get("new_position_action"):
-            new_summary = result.get("new_position_summary") or "Guidance unavailable."
-            position_plan.append(
-                f"New position: **{result['new_position_action']}** — {new_summary}"
-            )
-        for label, key in (
-            ("Confirmation", "conditional_confirmation"),
-            ("Alternative", "conditional_alternative"),
-            ("Invalidation", "conditional_invalidation"),
-        ):
-            if result.get(key):
-                position_plan.append(f"{label}: {result[key]}")
-        lines.extend(
-            [
-                f"Decision: {result.get('decision') or 'Unknown'}",
-                *(
-                    ["", "### Position Plan", *position_plan]
-                    if position_plan
-                    else []
-                ),
-                "",
-                "### Target Outlook",
-                ("No Portfolio Manager target was validated. The observed technical scenario above "
-                 "is a monitoring bracket, not a forecast or trading instruction."
-                 if scenario else sanitize_report_language(target_outlook_text(result))),
-                *(
-                    [
-                        "",
-                        "### Target Supporting Evidence",
-                        supporting_evidence,
-                    ]
-                    if supporting_evidence
-                    else []
-                ),
-                "",
-                "### Portfolio Management Decision",
-                section_summaries["Portfolio Management Decision"],
-                "",
-                "### Market Report",
-                section_summaries["Market"],
-                "",
-                "### Social Report",
-                section_summaries["Social"],
-                "",
-                "### News Report",
-                section_summaries["News"],
-                "",
-                "### Fundamentals Report",
-                section_summaries["Fundamentals"],
-                "",
-                "### Trader Plan",
-                sanitize_report_language(full_report_text(final_state.get("trader_investment_plan"), "No trader plan generated.")),
-                "",
-                "### Default Results",
-                f"`{result['results_dir']}`",
-            ]
-        )
+        brief = build_stock_brief(result)
+        lines.extend(["", render_brief_markdown(brief), ""])
 
     return "\n".join(lines) + "\n"
 
@@ -2038,7 +1973,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
     for result in analysis_results:
         kind = decision_kind(result.get("decision"))
         confidence_value = result.get("recommendation_confidence_score")
-        confidence_width = max(0, min(100, confidence_value)) if confidence_value is not None else None
+        max(0, min(100, confidence_value)) if confidence_value is not None else None
 
         if result.get("error"):
             sections.append(
@@ -2056,7 +1991,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             )
             continue
 
-        final_state = result["final_state"]
+        result["final_state"]
         scenario = nonactionable_scenario_for_result(result)
         scenario_html = (
             "<div class='scenario-card'><h3>Observed technical scenario — not a validated target</h3>"
@@ -2069,28 +2004,8 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             "an actionable target.</p></div>"
             if scenario else ""
         )
-        confidence_bar_html = (
-            f'<div class="confidence-bar"><span style="width:{confidence_width}%"></span></div>'
-            if confidence_width is not None else ""
-        )
-        outlook_copy = (
-            "No Portfolio Manager target was validated. The observed scenario above is for monitoring only."
-            if scenario else sanitize_report_language(target_outlook_text(result))
-        )
-        section_summaries = get_consolidated_section_summaries(result, summary_llm=summary_llm)
-        supporting_evidence = target_evidence_text(result)
-        target_evidence_html = (
-            "<div class='target-evidence'><strong>Target evidence:</strong> "
-            f"{escape(supporting_evidence)}</div>"
-            if supporting_evidence
-            else ""
-        )
-        target_context_html = "".join(
-            f"<div class='target-evidence'><strong>{escape(label)}:</strong> "
-            f"{escape(str(result[key]))}</div>"
-            for label, key in (("Target method", "target_method"), ("Target risks", "target_risks"))
-            if result.get("target_validation_status") == "Accepted" and result.get(key)
-        )
+        brief = build_stock_brief(result)
+        guidance = dict(brief.guidance)
         reference_price = format_price_target(result.get("reference_price"))
         delta_label = format_target_gap_percent(
             result.get("reference_price"),
@@ -2135,11 +2050,11 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
                 "<article class='position-card existing-position'>"
                 "<span class='compass-label'>Already own it</span>"
                 f"<strong>{escape(result.get('existing_position_action') or '-')}</strong>"
-                f"<p>{escape(result.get('existing_position_summary') or 'Guidance unavailable.')}</p></article>"
+                f"<p>{escape(guidance.get('Existing position') or 'Guidance unavailable.')}</p></article>"
                 "<article class='position-card new-position'>"
                 "<span class='compass-label'>Considering a new position</span>"
                 f"<strong>{escape(result.get('new_position_action') or '-')}</strong>"
-                f"<p>{escape(result.get('new_position_summary') or 'Guidance unavailable.')}</p></article>"
+                f"<p>{escape(guidance.get('New position') or 'Guidance unavailable.')}</p></article>"
                 f"{conditions}</section>"
             )
 
@@ -2158,26 +2073,7 @@ def build_consolidated_report_html(analysis_results, analysis_date: str, summary
             f"<article class='metric-card'><span class='metric-icon'>{metric_icon('confidence')}</span><div><span class='metric-label'>Recommendation confidence (uncalibrated)</span><strong>{escape(str(confidence_value) + '/100' if confidence_value is not None else '-')}</strong></div></article>"
             "</div>"
             f"{scenario_html}"
-            "<div class='confidence-strip'>"
-            f"{confidence_bar_html}"
-            f"<div class='confidence-copy'>{escape(outlook_copy)}</div>"
-            f"{target_evidence_html}"
-            f"{target_context_html}"
-            "</div>"
-            "<div class='narrative-block'>"
-            "<h3>Portfolio Management Decision</h3>"
-            f"<div class='bullet-summary'>{bullet_markdown_to_html(section_summaries['Portfolio Management Decision'])}</div>"
-            "</div>"
-            "<div class='highlight-stack'>"
-            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('market')}</span><h3>Market</h3></div><div class='bullet-summary'>{bullet_markdown_to_html(section_summaries['Market'])}</div></article>"
-            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('social')}</span><h3>Social</h3></div><div class='bullet-summary'>{bullet_markdown_to_html(section_summaries['Social'])}</div></article>"
-            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('news')}</span><h3>News</h3></div><div class='bullet-summary'>{bullet_markdown_to_html(section_summaries['News'])}</div></article>"
-            f"<article class='highlight-card'><div class='highlight-head'><span class='highlight-icon'>{highlight_icon('fundamentals')}</span><h3>Fundamentals</h3></div><div class='bullet-summary'>{bullet_markdown_to_html(section_summaries['Fundamentals'])}</div></article>"
-            "</div>"
-            "<div class='narrative-block accent'>"
-            "<h3>Trader Plan</h3>"
-            f"<div class='report-body'>{render_report_body_html(final_state.get('trader_investment_plan'), 'No trader plan generated.')}</div>"
-            "</div>"
+            f"{render_brief_html(brief, include_guidance=False)}"
             "<details class='audit-details'><summary>Audit details</summary>"
             f"<p>Saved report directory: <code>{escape(result['results_dir'])}</code></p></details>"
             "</section>"
@@ -3199,6 +3095,14 @@ def run_single_analysis(
     }
 
 
+def _attach_saved_report_paths(result: dict, markdown_path: Path) -> None:
+    """Make saved CLI detail reports reachable from consolidated briefs."""
+    result["report_path"] = str(markdown_path.resolve())
+    result["investor_report_path"] = str(markdown_path.with_name(
+        markdown_path.name.replace("_full_", "_investor_", 1)
+    ).with_suffix(".html").resolve())
+
+
 def run_analysis(checkpoint: bool | None = None, portfolio=None):
     # First get all user selections
     selections = get_user_selections()
@@ -3311,6 +3215,7 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None):
                     report_timestamp=report_timestamp,
                     investor_deck=successful_results[0]["_investor_deck"],
                 )
+                _attach_saved_report_paths(successful_results[0], report_file)
                 console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
                 console.print(f"  [dim]Complete report:[/dim] {report_file.name}")
             else:
@@ -3318,13 +3223,18 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None):
                 for result in analysis_results:
                     if result.get("error") or not result.get("final_state"):
                         continue
-                    save_report_to_disk(
+                    saved_detail = save_report_to_disk(
                         result["final_state"],
                         result["ticker"],
                         save_path / result["ticker"],
                         report_timestamp=report_timestamp,
                         investor_deck=result["_investor_deck"],
                     )
+                    _attach_saved_report_paths(result, saved_detail)
+                if consolidated_default_report is not None:
+                    save_consolidated_report(analysis_results, selections["analysis_date"],
+                                             consolidated_default_dir, tickers=tickers,
+                                             report_timestamp=report_timestamp)
                 report_file = save_consolidated_report(
                     analysis_results,
                     selections["analysis_date"],

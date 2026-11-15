@@ -344,7 +344,7 @@ def test_nested_sec_table_metadata_is_bounded_and_redacted():
     rows = normalize_evidence(record, "2025-05-02")["table_rows"]
 
     assert len(rows) == 120
-    assert all(len(row) == 20 for row in rows)
+    assert all(len(row) == 25 for row in rows)
     assert max(len(cell) for row in rows for cell in row) <= 300
     assert "SECRET" not in str(rows)
 

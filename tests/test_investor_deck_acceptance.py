@@ -255,7 +255,7 @@ def test_offline_peng_repair_range_flows_through_deck_forecast_and_web(tmp_path,
         rating="Hold", executive_summary="Maintain exposure pending confirmation.",
         investment_thesis="Reported growth is offset by cash conversion risk.",
         thesis="Neutral", existing_position_action="Hold",
-        existing_position_summary="Keep a measured position.",
+        existing_position_summary="Limit to 0.25% of NAV while awaiting confirmation.",
         new_position_action="Avoid", new_position_summary="Wait for better risk/reward.",
         recommendation_confidence_score=78,
     )
@@ -280,7 +280,7 @@ def test_offline_peng_repair_range_flows_through_deck_forecast_and_web(tmp_path,
         )
     llm = MagicMock()
     llm.with_structured_output.side_effect = lambda schema: (
-        first if schema is PortfolioDecisionDraft else repair
+        first if schema is PortfolioDecisionDraft else repair if schema is PortfolioTargetRepair else None
     )
 
     state.update(create_portfolio_manager(llm)(state))
@@ -303,6 +303,8 @@ def test_offline_peng_repair_range_flows_through_deck_forecast_and_web(tmp_path,
 
     assert first.invoke.call_count == 1 and repair.invoke.call_count == 1
     assert state["portfolio_decision"]["target_validation_status"] == "Accepted"
+    assert "0.25%" not in state["portfolio_decision"]["existing_position_summary"]
+    assert web["recommendation_confidence_score"] == 78
     if estimated:
         assert "79.53" in html
         assert "Model estimate" in html and "Assume 5% growth" in html
