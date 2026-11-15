@@ -1,8 +1,10 @@
 <img width="1920" height="1290" alt="TradingAgents research dashboard with anonymized stock and company names" src="assets/tradingagents-research.png" />
 
 <p align="center">
-  <img src="assets/TauricResearch.png" style="width: 60%; height: auto;">
+  <img src="assets/TauricResearch.png" width="60%" alt="Tauric Research">
 </p>
+
+# TradingAgents: Multi-Agents LLM Financial Trading Framework
 
 <div align="center" style="line-height: 1;">
   <a href="https://arxiv.org/abs/2412.20138" target="_blank"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-2412.20138-B31B1B?logo=arxiv"/></a>
@@ -10,37 +12,55 @@
   <a href="https://x.com/TauricResearch" target="_blank"><img alt="X Follow" src="https://img.shields.io/badge/X-TauricResearch-white?logo=x&logoColor=white"/></a>
   <a href="https://github.com/TauricResearch/" target="_blank"><img alt="Community" src="https://img.shields.io/badge/GitHub_Community-TauricResearch-14C290?logo=discourse"/></a>
 </div>
+
 <br>
 <div align="center">
   <a href="https://github.com/TauricResearch" target="_blank"><img alt="TradingAgents #1 Repository of the Day" src="https://trendshift.io/api/badge/repositories/16192" width="250" height="55"/></a>
 </div>
-<br>
-<div align="center">
-  <!-- Keep these links. Translations will automatically update with the README. -->
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=de">Deutsch</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=es">Español</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=fr">français</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=ja">日本語</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=ko">한국어</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=pt">Português</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=ru">Русский</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=zh">中文</a>
-</div>
 
----
+This is the [slavag/TradingAgents](https://github.com/slavag/TradingAgents) fork of [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents). Upstream announcements and framework documentation were refreshed from [upstream main at `9fa1196`](https://github.com/TauricResearch/TradingAgents/blob/9fa1196fffbcfd9de5146d2dd2869df84ab99838/README.md) on November 15, 2026. The setup and usage sections below describe this fork; the [integration ledger](docs/upstream-v0.7.1-integration.md) records adopted and deferred upstream features.
 
-# TradingAgents: Multi-Agents LLM Financial Trading Framework
+## Recent improvements in this fork
 
-## News
-- [2026-07] **TradingAgents v0.3.1** released with correctness and stability fixes: Alpha Vantage look-ahead filtering, graph-router crash-safety, graph-shape-aware checkpoint resume, working crypto sentiment sources, a configurable LLM retry budget, Bedrock API-key auth, and Claude Sonnet 5 / Fable 5 support. See [CHANGELOG.md](CHANGELOG.md) for the full list.
+Updated November 15, 2026:
+
+- **Investor reports:** fuller business, product, and financial explanations; third-person company descriptions; correctly separated financial periods, units, accounting bases, and loss figures. Supplier and customer slides appear when admitted named relationship evidence is available.
+- **Independent outlooks:** separate **6-month and 12-month** recommendations and price targets, each with recommendation confidence, target confidence, assumptions, risks, and conditions that would change the view.
+- **Recommendation and target integrity:** separate confidence scores reflect evidence strength. Targets identify whether they are sourced levels or model estimates, with an explicit method and assumptions. Invalid target output can receive one bounded repair while preserving the valid recommendation. See [recommendation and target confidence](docs/recommendation-target-confidence.md).
+- **Competitors, suppliers, and customers:** source-backed direct-competitor comparisons, dated relationship disclosures, and relevant counterparty news feed the analysts and decision makers. Comparisons retain company identity, reporting period, currency, and data limitations; possible supply or demand effects remain conditional unless established by evidence.
+- **Extended-hours context:** timestamped premarket and after-hours reactions inform decisions when verified data is available. Regular-session closes anchor daily indicators and targets. Extended-hours information does not add a standalone slide or an unavailable-data slide.
+- **Consolidated reports:** concise, source-linked summaries retain the decision, outlooks, business drivers, competitor and counterparty developments, and material qualifications without clipping sentences.
+- **Request recovery:** OpenAI-compatible clients use a **300-second network timeout and one SDK retry** by default. Set `TRADINGAGENTS_LLM_REQUEST_TIMEOUT_SECONDS` and `TRADINGAGENTS_LLM_MAX_RETRIES` to override them. An exhausted timeout is reported for that ticker while completed reports are preserved.
+- **Research workspace:** saved ticker research, multi-ticker runs, investor/full/consolidated report links, and a verified momentum watchlist. The screenshot above uses anonymized stock and company labels.
+
+Confidence scores are uncalibrated measures of evidence strength. Forecasts are scenarios with stated assumptions; missing or invalid evidence is reported explicitly.
+
+## Upstream news
+
+These release notes describe the source project. The [integration ledger](docs/upstream-v0.7.1-integration.md) records which features this fork adopts.
+
+<!-- news:start -->
+- [2026-10] **TradingAgents v0.7.1** released with decisions scored only on final closes and settled across long market holidays, a fix for model dates that could read filings made after the run date, and fixes to portfolios, prices, SEC statements and reports.
+- [2026-10] **TradingAgents v0.7.0** released with runs on your own ChatGPT Plus or Pro plan, backtests scored from the first close after each decision, a note at start-up when a newer release is out, and a wheel attached to each GitHub release.
+
+<details>
+<summary>Earlier news</summary>
+
+- [2026-10] **TradingAgents v0.6.0** released with reports saved as one HTML page, a provider per model tier so the managers and analysts can run on different models, past decisions settled for every ticker while the analysts work, and company news read from Yahoo search while Yahoo's news feed is down.
+- [2026-09] **TradingAgents v0.5.2** released with parallel analysts for a faster analysis, a CLI that runs without prompts from flags such as `--ticker` and `--date`, the run's settings recorded in every report, and backtests that see only data published by each analysis date.
+- [2026-09] **TradingAgents v0.5.1** released with a package layout organised by what each module holds (import paths moved), optional Jev screening of social posts, GPT-6 Sol and Luna as the default models, and fixes to run isolation and SEC EDGAR statements.
+- [2026-09] **TradingAgents v0.5.0** released with point-in-time integrity across every dated path, SEC EDGAR fundamentals served as filed, backtesting over a ticker and date grid, portfolio-aware runs, and current model lineups across every provider.
+- [2026-08] **TradingAgents v0.4.0** released with look-ahead / point-in-time fixes across FRED macro, social sentiment, and the decision-log memory; clearer decision signals; working CLI checkpoint resume; Trader price grounding; and the GPT-5.6 and GLM-5.3 models.
+- [2026-07] **TradingAgents v0.3.1** released with correctness and stability fixes: Alpha Vantage look-ahead filtering, graph-router crash-safety, graph-shape-aware checkpoint resume, working crypto sentiment sources, a configurable LLM retry budget, Bedrock API-key auth, and Claude Sonnet 5 / Fable 5 support.
 - [2026-06] **TradingAgents v0.3.0** released with a verified data-access contract, an expanded provider registry (NVIDIA, Kimi, Groq, Mistral, Bedrock, and any OpenAI-compatible endpoint), FRED and Polymarket data vendors, a current-generation model catalog, and a CI gate.
 - [2026-05] **TradingAgents v0.2.5** released with the grounded Sentiment Analyst, GPT-5.5 etc. model coverage, Qwen/GLM/MiniMax dual-region support, `TRADINGAGENTS_*` env-var configurability with API-key auto-detection, remote Ollama support, non-US alpha benchmarks, and ticker path-traversal hardening.
 - [2026-04] **TradingAgents v0.2.4** released with structured-output agents (Research Manager, Trader, Portfolio Manager), LangGraph checkpoint resume, persistent decision log, DeepSeek/Qwen/GLM/Azure provider support, Docker, and a Windows UTF-8 encoding fix.
 - [2026-03] **TradingAgents v0.2.3** released with multi-language support, GPT-5.4 family models, unified model catalog, backtesting date fidelity, and proxy support.
 - [2026-03] **TradingAgents v0.2.2** released with GPT-5.4/Gemini 3.1/Claude 4.6 model coverage, five-tier rating scale, OpenAI Responses API, Anthropic effort control, and cross-platform stability.
-- [2026-03] Added a full **web app** with a multi-pane dashboard, multi-ticker batch analysis, per-ticker report actions, a bottom market-chatter ticker tape, ticker detail modal, cache-safe asset versioning, and file-based web server logging.
 - [2026-02] **TradingAgents v0.2.0** released with multi-provider LLM support (GPT-5.x, Gemini 3.x, Claude 4.x, Grok 4.x) and improved system architecture.
-- [2026-01] **Trading-R1** [Technical Report](https://arxiv.org/abs/2509.11420) released, with [Terminal](https://github.com/TauricResearch/Trading-R1) expected to land soon.
+
+</details>
+<!-- news:end -->
 
 <div align="center">
 
@@ -69,6 +89,8 @@ Our framework decomposes complex trading tasks into specialized roles.
 - Sentiment Analyst: Aggregates news headlines, StockTwits, and Reddit chatter into a single sentiment read to gauge short-term market mood.
 - News Analyst: Monitors global news and macroeconomic indicators, interpreting the impact of events on market conditions.
 - Technical Analyst: Utilizes technical indicators (like MACD and RSI) to detect trading patterns and forecast price movements.
+
+In this fork, concurrent analysts are opt-in with `TRADINGAGENTS_PARALLEL_ANALYSTS=true`. Each analyst uses its own tool history, and the research debate starts after the selected analysts finish.
 
 <p align="center">
   <img src="assets/analyst.png" width="100%" style="display: inline-block; margin: 0 2%;">
@@ -102,7 +124,7 @@ Our framework decomposes complex trading tasks into specialized roles.
 
 Clone TradingAgents:
 ```bash
-git clone https://github.com/TauricResearch/TradingAgents.git
+git clone https://github.com/slavag/TradingAgents.git
 cd TradingAgents
 ```
 
@@ -418,7 +440,7 @@ Every new Portfolio Manager result carries an explicit decision status:
 structured output; binding, invocation, or schema failures become `Unavailable`
 instead of being retried as unchecked prose or silently interpreted as Hold.
 
-The displayed model confidence is an uncalibrated evidence-strength score, not a statistical probability. It is emitted only with a complete evidence-grounded target bundle: target, horizon, rationale, and a verbatim supporting quote containing the exact price level. Primary and fallback targets use the same deterministic provenance and direction checks. Rejected targets are removed together with their dependent metrics while the valid five-tier rating remains available.
+Recommendation confidence and target confidence are separate uncalibrated evidence-strength scores, not statistical probabilities. Sourced targets require admissible price levels; model-estimated targets require a verified reference close, method, assumptions, horizon, rationale, and risks. Deterministic provenance and direction checks apply before publication. If target repair still fails, the valid recommendation and its independent confidence remain available with an explicit target error. See [recommendation and target confidence](docs/recommendation-target-confidence.md).
 
 ## Reproducibility
 
